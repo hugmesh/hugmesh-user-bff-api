@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <!-- 3.5.5 matches snapdragon-admin-bff-api / snapdragon-federation-api
+         (proven WebFlux + Casdoor reactive JWT resource server + GraalVM native
+         on Java 21). -->
+    <version>3.5.5</version>
+    <relativePath/>
+  </parent>
+  <groupId>systems.snapdragon</groupId>
+  <!-- NO -api suffix in the artifactId (mirrors admin-bff): -api is only in the
+       repo/service/image name. -->
+  <artifactId>user-bff</artifactId>
+  <version>0.1.0</version>
+  <properties>
+    <java.version>21</java.version>
+    <!-- 2024.0.x is the spring-cloud train aligned to the Spring Boot 3.5.x line
+         (Eureka client only; off by default — kept for symmetry with admin-bff). -->
+    <spring-cloud.version>2024.0.1</spring-cloud.version>
+  </properties>
+  <dependencies>
+    <!-- Reactive web (WebFlux) — replaces spring-boot-starter-web (servlet). -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webflux</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-oauth2-resource-server</artifactId></dependency>
+    <!-- Eureka client; opt-in via the `eureka` profile, off by default (symmetry
+         with admin-bff). -->
+    <dependency><groupId>org.springframework.cloud</groupId><artifactId>spring-cloud-starter-netflix-eureka-client</artifactId></dependency>
+
+    <!-- SpringDoc — generates the OpenAPI 3 spec at /v3/api-docs (+ Swagger UI at
+         /swagger-ui.html). This is the source the platform ng-openapi-gen typed
+         clients (the paired snapdragon-user-ui) + the docs pipeline consume.
+         WEBFLUX variant to match the reactive stack. Version 2.7.0 is the same pin
+         admin-bff / federation-api use (the 2.7.x line targets the Spring Boot
+         3.5.x baseline this BFF runs on). -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+      <version>2.7.0</version>
+    </dependency>
+
+    <!-- Reactive data access: R2DBC for all runtime reads/writes (user_profile,
+         user_preference, user_block). -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-r2dbc</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>r2dbc-postgresql</artifactId><scope>runtime</scope></dependency>
+
+    <!-- Liquibase owns schema migrations. Liquibase has no R2DBC runner, so a
+         plain JDBC datasource (org.postgresql) is kept ONLY for Liquibase, while
+         all runtime data access goes through R2DBC. -->
+    <dependency><groupId>org.liquibase</groupId><artifactId>liquibase-core</artifactId></dependency>
+    <dependency><groupId>org.springframework</groupId><artifactId>spring-jdbc</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
+
+    <!-- test -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.projectreactor</groupId><artifactId>reactor-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
+    <!-- R2DBC H2 (runtime data access in @DataR2dbcTest) + JDBC H2 (Liquibase
+         applies the changelog over the same in-mem DB for the slice tests). -->
+    <dependency><groupId>io.r2dbc</groupId><artifactId>r2dbc-h2</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>org.springframework.cloud</groupId><artifactId>spring-cloud-dependencies</artifactId>
+      <version>${spring-cloud.version}</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <build><plugins>
+    <plugin>
+      <groupId>org.graalvm.buildtools</groupId>
+      <artifactId>native-maven-plugin</artifactId>
+    </plugin>
+    <plugin>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-maven-plugin</artifactId>
+    </plugin>
+    <!-- Byte Buddy (via Mockito) only officially supports up to JDK 23; this
+         enables it to run on newer JDKs (the build host runs Temurin 25). A
+         no-op on JDK <=23, so it is safe for the Java 21 target too. -->
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-surefire-plugin</artifactId>
+      <configuration>
+        <argLine>-Dnet.bytebuddy.experimental=true</argLine>
+      </configuration>
+    </plugin>
+  </plugins></build>
+  <profiles>
+    <!-- Native build: `./mvnw -Pnative native:compile` produces a GraalVM
+         binary. The `native` profile (process-aot + reachability metadata) is
+         defined by spring-boot-starter-parent; this thin local profile mirrors
+         admin-bff so the same `-Pnative` invocation works. -->
+    <profile>
+      <id>native</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
