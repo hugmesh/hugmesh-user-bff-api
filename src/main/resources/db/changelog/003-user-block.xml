@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- user_block: the caller's OWN self-blocks. user_id is the Casdoor JWT
+         subject (owner); target is the blocked identity; platform is a small fixed
+         vocabulary {matrix|mastodon|internal} kept as portable text. id is
+         app-generated (UUID) so the INSERT is portable (Postgres + H2) and the new
+         row's id can be returned. A self-block additionally pushes the external
+         mute/block to Matrix(tuwunel)/Mastodon(akkoma) — that external call is
+         STUBBED (documented). -->
+    <changeSet id="003-user-block" author="snapdragon">
+        <createTable tableName="user_block">
+            <column name="id" type="varchar(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="platform" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ts" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+</databaseChangeLog>

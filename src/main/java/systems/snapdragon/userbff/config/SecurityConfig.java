@@ -31,8 +31,8 @@ import java.util.Map;
  * <p>This BFF's floor is {@code ROLE_USER}: the converter adds {@code ROLE_USER}
  * to every authenticated principal, so the entire {@code /bff/user/**} surface is
  * gated to "any authenticated caller" (i.e. ROLE_USER). Owner-enforcement
- * (owner = JWT subject) is applied IN the controllers — the security layer only
- * proves authentication, the controllers prove ownership.
+ * (owner = JWT subject) is applied IN the controllers/services — the security
+ * layer only proves authentication, the service layer proves ownership.
  */
 @Configuration
 @EnableWebFluxSecurity
@@ -64,7 +64,7 @@ public class SecurityConfig {
         // every authenticated principal, so .authenticated() == the ROLE_USER floor.
         // No pre-auth /login or /register: this BFF is JWT-only (post-login); the
         // admin-bff owns registration. Owner-enforcement (owner = JWT subject) is in
-        // the controllers.
+        // the services.
         ex.pathMatchers("/bff/user/**").authenticated();
     }
 

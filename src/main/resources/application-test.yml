@@ -1,0 +1,31 @@
+# Test profile overrides. Slice tests provide their own H2-PG-compat DataSource +
+# R2DBC ConnectionFactory + Liquibase via TestDatabaseConfig (mirroring admin-bff /
+# federation-api), so the production Postgres R2DBC + Liquibase auto-config is
+# disabled here. The context-load test runs a JWT-decoder mock so no live Casdoor
+# is needed. External Matrix/Mastodon + Casdoor account writes stay STUBBED.
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.r2dbc.R2dbcAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.r2dbc.R2dbcDataAutoConfiguration
+      - org.springframework.boot.autoconfigure.r2dbc.R2dbcTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration
+  liquibase:
+    enabled: false
+  cloud:
+    compatibility-verifier:
+      enabled: false
+
+eureka:
+  client:
+    enabled: false
+
+casdoor:
+  account:
+    enabled: false
+
+block:
+  matrix:
+    enabled: false
+  mastodon:
+    enabled: false

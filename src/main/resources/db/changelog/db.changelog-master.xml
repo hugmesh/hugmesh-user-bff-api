@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      User BFF schema. Liquibase runs over a JDBC datasource (Liquibase has no
+      R2DBC runner); all runtime data access goes through R2DBC. Every table is
+      owner-keyed by the Casdoor JWT subject (user_id) — a user only ever touches
+      their own rows (owner-enforcement lives in the service layer too).
+
+        001 — user_profile     (own profile: gender/pronouns/tz/displayName/visibility/vanity)
+        002 — user_preference  (own per-key preferences incl. home-guide-dismissed)
+        003 — user_block       (own self-blocks pushed to Matrix/Mastodon/internal)
+    -->
+
+    <include file="db/changelog/001-user-profile.xml"/>
+    <include file="db/changelog/002-user-preference.xml"/>
+    <include file="db/changelog/003-user-block.xml"/>
+</databaseChangeLog>

@@ -1,0 +1,98 @@
+spring:
+  application:
+    name: snapdragon-user-bff-api
+  cloud:
+    # spring-cloud 2024.0.x declares strict compatibility with Boot 3.4.x; this BFF
+    # runs Boot 3.5.5 (matching admin-bff / federation-api) and only uses the Eureka
+    # client (off by default). The compatibility verifier is advisory — disable it
+    # so boot does not fail the strict version cross-check.
+    compatibility-verifier:
+      enabled: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: "${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}"
+
+  # Runtime data access is REACTIVE (R2DBC) over the config datastore: the owner-
+  # keyed user_profile / user_preference / user_block tables.
+  r2dbc:
+    url: "${SPRING_R2DBC_URL:r2dbc:postgresql://snapdragon-pg.snapdragon-backend.svc.cluster.local:5432/snapdragon}"
+    username: "${SPRING_R2DBC_USERNAME:snapdragon}"
+    password: "${SPRING_R2DBC_PASSWORD:}"
+
+  # Liquibase owns schema migrations. It has NO R2DBC runner, so it uses a plain
+  # JDBC datasource — the ONLY JDBC use in the app; all runtime access is R2DBC.
+  liquibase:
+    enabled: true
+    change-log: "classpath:db/changelog/db.changelog-master.xml"
+    url: "${SPRING_LIQUIBASE_URL:jdbc:postgresql://snapdragon-pg.snapdragon-backend.svc.cluster.local:5432/snapdragon}"
+    user: "${SPRING_LIQUIBASE_USER:snapdragon}"
+    password: "${SPRING_LIQUIBASE_PASSWORD:}"
+
+# Eureka registration is opt-in via the `eureka` profile. Off by default so a local
+# / CI run does not try to register (symmetry with admin-bff).
+eureka:
+  client:
+    enabled: "${EUREKA_CLIENT_ENABLED:false}"
+    service-url:
+      defaultZone: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://eureka:8761/eureka}"
+
+# Reactive WebClient to snapdragon-federation-api (the cards + recommend-instance-
+# block backend). The caller's Casdoor JWT is forwarded per request so federation-
+# api scopes everything to the same subject (owner-enforcement end-to-end).
+federation:
+  api:
+    base-url: "${FEDERATION_API_BASE_URL:http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080}"
+
+casdoor:
+  # Self-service password/email changes go to the Casdoor IdP. STUBBED by default
+  # (account.enabled=false) — the reactive flow is wired but no live write runs
+  # until the payload + per-user auth are validated against the deployed Casdoor.
+  gateway-base: "${PKI_GATEWAY_BASE:http://snapdragon-pki-gateway.snapdragon-pki.svc.cluster.local:8080}"
+  organization: "${CASDOOR_ORG:snapdragon}"
+  account:
+    enabled: "${CASDOOR_ACCOUNT_ENABLED:false}"
+    base-url: "${CASDOOR_ACCOUNT_BASE_URL:http://casdoor.snapdragon-pki.svc.cluster.local:8000}"
+    client-id: "${CASDOOR_ACCOUNT_CLIENT_ID:user-bff}"
+    client-secret: "${CASDOOR_ACCOUNT_CLIENT_SECRET:}"
+
+# External self-block push targets. Base URLs grounded in the snapdragon-generator
+# manifests (tuwunel = Matrix :8008, akkoma = Mastodon-API :4000). STUBBED by
+# default (enabled=false) — the durable user_block row is the source of truth; the
+# external push needs per-user token brokering before going live (see README).
+block:
+  matrix:
+    enabled: "${BLOCK_MATRIX_ENABLED:false}"
+    base-url: "${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}"
+  mastodon:
+    enabled: "${BLOCK_MASTODON_ENABLED:false}"
+    base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
+
+# SpringDoc OpenAPI. The spec at /v3/api-docs is the source the platform
+# ng-openapi-gen typed client (the paired snapdragon-user-ui) + the docs pipeline
+# consume. Spec + UI are gated by SecurityConfig: permitAll under dev/test (so
+# `gen:fetch` can curl the spec without a token) and ROLE_ADMIN otherwise (prod).
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+  # Restrict the component scan to this BFF's own controllers so the spec stays the
+  # user-BFF surface only (no stray springframework/actuator paths leak in).
+  packages-to-scan: systems.snapdragon.userbff
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+server:
+  port: 8080
