@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- user_profile: the caller's OWN profile. user_id is the Casdoor JWT subject
+         and the PRIMARY KEY (one row per user). visibility is a small fixed
+         vocabulary {public|internal} kept as a portable text column (default
+         'internal') so the same DDL runs on Postgres and the H2 test DB. -->
+    <changeSet id="001-user-profile" author="snapdragon">
+        <createTable tableName="user_profile">
+            <column name="user_id" type="varchar(255)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="gender" type="varchar(64)"/>
+            <column name="pronouns" type="varchar(64)"/>
+            <column name="timezone" type="varchar(64)"/>
+            <column name="display_name" type="varchar(255)"/>
+            <column name="visibility" type="varchar(16)" defaultValue="internal">
+                <constraints nullable="false"/>
+            </column>
+            <column name="vanity_subdomain_enabled" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+</databaseChangeLog>

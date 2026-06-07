@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- user_preference: small per-user key/value store. The home/getting-started
+         guide dismissal is one preference per guide key
+         (e.g. pref_key='home-guide-dismissed:user-home'); the role home views read
+         it to show the welcome guide only on first visit. Composite PK (user_id,
+         pref_key) keeps it owner-keyed AND one row per (user, key). pref_value is a
+         portable text column ('true'/'false' for the guide flags; free text for any
+         future preference). -->
+    <changeSet id="002-user-preference" author="snapdragon">
+        <createTable tableName="user_preference">
+            <column name="user_id" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pref_key" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pref_value" type="varchar(1024)"/>
+            <column name="updated_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="user_preference" columnNames="user_id, pref_key"
+                       constraintName="pk_user_preference"/>
+    </changeSet>
+</databaseChangeLog>
