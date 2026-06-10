@@ -45,6 +45,27 @@ federation:
   api:
     base-url: "${FEDERATION_API_BASE_URL:http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080}"
 
+# ── API-to-API mTLS (CLIENT side / OUTBOUND) ─────────────────────────────────
+# The OTHER half of the server.ssl.* enforcement below: when federation-api flips
+# its server-side client-auth=need, THIS BFF must present a client cert that chains
+# to the cluster CA on its outbound federation-api calls. FederationHttpClientSsl
+# builds a reactor-netty connector that presents this BFF's PKI client identity
+# (keystore.p12) and trusts the cluster CA (truststore.p12). It REUSES the same
+# SSL_* env the server-side stores use — one mounted /stores layout serves both
+# directions. DEFAULT OFF: local/dev/CI (plain http, no stores) is unaffected; the
+# in-cluster deployment sets SNAPDRAGON_MTLS_CLIENT_ENABLED=true alongside the
+# server-side SSL_CLIENT_AUTH=need.
+snapdragon:
+  mtls:
+    client:
+      enabled: "${SNAPDRAGON_MTLS_CLIENT_ENABLED:false}"
+      key-store: "${SSL_KEY_STORE:/stores/keystore.p12}"
+      key-store-type: "${SSL_KEY_STORE_TYPE:PKCS12}"
+      key-store-password: "${SSL_KEY_STORE_PASSWORD:}"
+      trust-store: "${SSL_TRUST_STORE:/stores/truststore.p12}"
+      trust-store-type: "${SSL_TRUST_STORE_TYPE:PKCS12}"
+      trust-store-password: "${SSL_TRUST_STORE_PASSWORD:}"
+
 casdoor:
   # Self-service password/email changes go to the Casdoor IdP. STUBBED by default
   # (account.enabled=false) — the reactive flow is wired but no live write runs

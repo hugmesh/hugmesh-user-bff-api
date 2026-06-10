@@ -1,9 +1,11 @@
 package systems.snapdragon.userbff.federation;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -11,6 +13,7 @@ import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
 
 /**
  * Wires the reactive {@link WebClient} the {@link FederationApiClient} uses to call
@@ -25,15 +28,24 @@ import reactor.core.publisher.Mono;
  *
  * <p>Base URL defaults to the in-cluster DNS (env-overridable via
  * {@code FEDERATION_API_BASE_URL}).
+ *
+ * <p>When {@code snapdragon.mtls.client.enabled=true} (default OFF), the WebClient is
+ * given a reactor-netty connector that presents this BFF's PKI client identity and
+ * trusts the cluster CA, so federation-api's {@code client-auth=need} handshake
+ * succeeds. See {@link FederationHttpClientSsl}.
  */
 @Configuration
+@EnableConfigurationProperties(FederationHttpClientSsl.class)
 public class FederationWebClientConfig {
 
     @Bean
     public FederationApiClient federationApiClient(
+            FederationHttpClientSsl mtls,
             @Value("${federation.api.base-url:http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080}") String baseUrl) {
+        HttpClient httpClient = mtls.customize(HttpClient.create());
         WebClient web = WebClient.builder()
                 .baseUrl(baseUrl)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .filter(bearerTokenForwardingFilter())
                 .build();
         return new FederationApiClient(web);
