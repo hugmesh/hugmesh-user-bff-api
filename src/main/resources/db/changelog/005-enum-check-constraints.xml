@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        ENUM / DOMAIN CHECK constraints — DB-level parity for the values the API
+        already restricts in code (the security-hardening API<->DB parity audit).
+
+        Two columns carried a small fixed VOCABULARY enforced ONLY in the service
+        layer:
+          • user_profile.visibility — {public|internal}, normalized in
+            UserProfile.withOwner / ProfileService but never DB-constrained;
+          • user_block.platform     — {matrix|mastodon|internal}, validated by
+            UserBlock.validPlatform / BlockService.block but never DB-constrained.
+
+        A direct DB write (a future writer, a migration, a manual fix) could insert
+        an out-of-vocabulary value the read paths never expect. These CHECKs make
+        the DB reject the same values the API rejects, so the invariant holds no
+        matter which path writes the row. Bean Validation (@Pattern on the typed
+        request DTOs + @Validated params) was added so the user still gets a clean
+        400 BEFORE the DB CHECK fires — the CHECK is the backstop, not the first
+        line.
+
+        Portability: plain ANSI `col IN (...)` — runs identically on production
+        Postgres AND the H2 PostgreSQL-compat slice DB (TestDatabaseConfig). Mirrors
+        the 004 reserved-username CHECK style. Each constraint has an explicit
+        rollback.
+
+        Changeset numbers (005) are ABOVE max(main=004, feat/reserved-usernames=004)
+        so they never collide with the reserved-usernames branch when it merges.
+    -->
+
+    <changeSet id="005-1-user-profile-visibility-check" author="snapdragon">
+        <sql>
+            ALTER TABLE user_profile
+                ADD CONSTRAINT ck_user_profile_visibility
+                CHECK (visibility IN ('public', 'internal'))
+        </sql>
+        <rollback>
+            ALTER TABLE user_profile DROP CONSTRAINT ck_user_profile_visibility
+        </rollback>
+    </changeSet>
+
+    <changeSet id="005-2-user-block-platform-check" author="snapdragon">
+        <sql>
+            ALTER TABLE user_block
+                ADD CONSTRAINT ck_user_block_platform
+                CHECK (platform IN ('matrix', 'mastodon', 'internal'))
+        </sql>
+        <rollback>
+            ALTER TABLE user_block DROP CONSTRAINT ck_user_block_platform
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

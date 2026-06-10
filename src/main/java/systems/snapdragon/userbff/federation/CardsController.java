@@ -2,13 +2,17 @@ package systems.snapdragon.userbff.federation;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.web.ValidationPatterns;
 
 /**
  * Owner-scoped "cards" = the caller's OWN federation bundles ({@code user_modules}
@@ -24,6 +28,7 @@ import reactor.core.publisher.Mono;
 @RestController
 @RequestMapping("/bff/user/cards")
 @PreAuthorize("hasRole('USER')")
+@Validated
 public class CardsController {
 
     private final FederationApiClient federation;
@@ -42,7 +47,9 @@ public class CardsController {
 
     @Operation(summary = "List versions of one of my cards by slug.")
     @GetMapping("/{slug}")
-    public Flux<UserModuleCard> bySlug(@AuthenticationPrincipal Jwt jwt, @PathVariable String slug) {
+    public Flux<UserModuleCard> bySlug(@AuthenticationPrincipal Jwt jwt,
+                                       @PathVariable @Pattern(regexp = ValidationPatterns.SLUG,
+                                               message = "invalid slug") String slug) {
         return federation.listBySlug(slug);
     }
 
@@ -52,7 +59,9 @@ public class CardsController {
                     + "RE-READ a card's current source to edit it. Owner-enforced upstream via the forwarded "
                     + "JWT (a non-owner gets 404 from federation-api). Returns the raw entry-file bytes.")
     @GetMapping(value = "/{slug}/body", produces = MediaType.APPLICATION_OCTET_STREAM_VALUE)
-    public Mono<byte[]> body(@AuthenticationPrincipal Jwt jwt, @PathVariable String slug) {
+    public Mono<byte[]> body(@AuthenticationPrincipal Jwt jwt,
+                             @PathVariable @Pattern(regexp = ValidationPatterns.SLUG,
+                                     message = "invalid slug") String slug) {
         return federation.readBody(slug);
     }
 
@@ -63,7 +72,9 @@ public class CardsController {
                     + "Owner-enforced upstream via the forwarded JWT (a non-owner gets 404 from federation-api).")
     @DeleteMapping("/{slug}")
     @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
-    public Mono<Void> delete(@AuthenticationPrincipal Jwt jwt, @PathVariable String slug) {
+    public Mono<Void> delete(@AuthenticationPrincipal Jwt jwt,
+                             @PathVariable @Pattern(regexp = ValidationPatterns.SLUG,
+                                     message = "invalid slug") String slug) {
         return federation.delete(slug);
     }
 
@@ -73,9 +84,13 @@ public class CardsController {
                     + "records a user_modules row under ME (forwarded JWT), and supersedes the prior version.")
     @PutMapping(value = "/{slug}", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
     public Mono<UserModuleCard> put(@AuthenticationPrincipal Jwt jwt,
-                                    @PathVariable String slug,
-                                    @RequestParam(value = "entryFile", required = false) String entryFile,
-                                    @RequestParam(value = "visibility", required = false) String visibility,
+                                    @PathVariable @Pattern(regexp = ValidationPatterns.SLUG,
+                                            message = "invalid slug") String slug,
+                                    @RequestParam(value = "entryFile", required = false)
+                                    @Size(max = 512, message = "entryFile must be at most 512 chars") String entryFile,
+                                    @RequestParam(value = "visibility", required = false)
+                                    @Pattern(regexp = ValidationPatterns.VISIBILITY,
+                                            message = "visibility must be public|internal") String visibility,
                                     @RequestParam(value = "manifest", required = false) String manifestJson,
                                     @RequestBody(required = false) byte[] body) {
         return federation.put(slug, entryFile, visibility, manifestJson, body);

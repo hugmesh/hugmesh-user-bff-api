@@ -2,11 +2,14 @@ package systems.snapdragon.userbff.preference;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.web.ValidationPatterns;
 
 import java.util.Map;
 
@@ -21,6 +24,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/bff/user/home-guide")
 @PreAuthorize("hasRole('USER')")
+@Validated
 public class HomeGuideController {
 
     private final HomeGuideService guides;
@@ -32,7 +36,9 @@ public class HomeGuideController {
     @Operation(summary = "Is the named guide dismissed for me? (default guide = 'home')")
     @GetMapping
     public Mono<Map<String, Object>> status(@AuthenticationPrincipal Jwt jwt,
-                                            @RequestParam(value = "guide", required = false) String guide) {
+                                            @RequestParam(value = "guide", required = false)
+                                            @Pattern(regexp = ValidationPatterns.PREF_KEY_SEGMENT,
+                                                    message = "guide must be an alnum/hyphen token") String guide) {
         String g = (guide == null || guide.isBlank()) ? HomeGuideService.DEFAULT_GUIDE : guide;
         return guides.isDismissed(jwt.getSubject(), g)
                 .map(dismissed -> Map.of("guide", g, "dismissed", dismissed));
@@ -41,7 +47,9 @@ public class HomeGuideController {
     @Operation(summary = "Dismiss the named guide for me (idempotent).")
     @PostMapping("/dismiss")
     public Mono<Map<String, Object>> dismiss(@AuthenticationPrincipal Jwt jwt,
-                                             @RequestParam(value = "guide", required = false) String guide) {
+                                             @RequestParam(value = "guide", required = false)
+                                            @Pattern(regexp = ValidationPatterns.PREF_KEY_SEGMENT,
+                                                    message = "guide must be an alnum/hyphen token") String guide) {
         String g = (guide == null || guide.isBlank()) ? HomeGuideService.DEFAULT_GUIDE : guide;
         return guides.dismiss(jwt.getSubject(), g)
                 .thenReturn(Map.of("guide", g, "dismissed", true));
@@ -50,7 +58,9 @@ public class HomeGuideController {
     @Operation(summary = "Dismiss the named guide for me (PUT alias of /dismiss).")
     @PutMapping("/dismiss")
     public Mono<Map<String, Object>> dismissPut(@AuthenticationPrincipal Jwt jwt,
-                                                @RequestParam(value = "guide", required = false) String guide) {
+                                                @RequestParam(value = "guide", required = false)
+                                            @Pattern(regexp = ValidationPatterns.PREF_KEY_SEGMENT,
+                                                    message = "guide must be an alnum/hyphen token") String guide) {
         return dismiss(jwt, guide);
     }
 

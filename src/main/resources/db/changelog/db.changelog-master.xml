@@ -15,10 +15,13 @@
         002 — user_preference  (own per-key preferences incl. home-guide-dismissed)
         003 — user_block       (own self-blocks pushed to Matrix/Mastodon/internal)
         004 — user_profile.vanity_username + reserved-name CHECK (vanity collision guard)
+        005 — enum/domain CHECK constraints (DB parity for the API-enforced
+              user_profile.visibility + user_block.platform vocabularies)
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
     <include file="db/changelog/002-user-preference.xml"/>
     <include file="db/changelog/003-user-block.xml"/>
     <include file="db/changelog/004-vanity-username-reserved.xml"/>
+    <include file="db/changelog/005-enum-check-constraints.xml"/>
 </databaseChangeLog>
