@@ -96,3 +96,28 @@ management:
 
 server:
   port: 8080
+  # ── API-to-API mTLS enforcement (server side) ──────────────────────────────
+  # When the in-cluster keystore initContainer is mounted (the gateway-chart
+  # build-keystore equivalent: PKCS12 keystore.p12 = this service's Vault-PKI
+  # identity + truststore.p12 = the cluster CA), the deployment flips these on so
+  # the TLS handshake REQUIRES a client cert that chains to the cluster CA. A
+  # caller that was NOT deployed+signed by our Vault/ESO PKI process holds no such
+  # cert, so its handshake is rejected — it cannot read or call this API at all.
+  #
+  # Defaults keep local/dev/CI working: ssl.enabled=false (plaintext) and
+  # client-auth=none, so the truststore is never opened and existing tests are
+  # unaffected. In-cluster, the deployment sets SSL_ENABLED=true,
+  # SSL_CLIENT_AUTH=need and points the key-store/trust-store at the mounted
+  # PKCS12 stores (default paths below match the gateway chart's /stores layout).
+  # The store passwords are generated in-pod and injected via env (never in git).
+  ssl:
+    enabled: "${SSL_ENABLED:false}"
+    client-auth: "${SSL_CLIENT_AUTH:none}"
+    key-store: "${SSL_KEY_STORE:/stores/keystore.p12}"
+    key-store-type: "${SSL_KEY_STORE_TYPE:PKCS12}"
+    key-store-password: "${SSL_KEY_STORE_PASSWORD:}"
+    trust-store: "${SSL_TRUST_STORE:/stores/truststore.p12}"
+    trust-store-type: "${SSL_TRUST_STORE_TYPE:PKCS12}"
+    trust-store-password: "${SSL_TRUST_STORE_PASSWORD:}"
+    # TLSv1.3 floor (forward-secret, AEAD-only) — matches the gateway chart.
+    enabled-protocols: "${SSL_ENABLED_PROTOCOLS:TLSv1.3}"
