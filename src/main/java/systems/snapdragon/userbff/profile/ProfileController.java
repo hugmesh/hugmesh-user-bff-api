@@ -38,10 +38,32 @@ public class ProfileController {
         return profiles.get(jwt.getSubject());
     }
 
-    @Operation(summary = "Create/update my profile. The body's userId is ignored — the owner is the JWT subject.")
+    @Operation(summary = "Create/update my profile. The body's userId is ignored — the owner is the JWT subject; the vanity username is derived from the token.")
     @PutMapping
     public Mono<UserProfile> upsert(@AuthenticationPrincipal Jwt jwt, @RequestBody UserProfile body) {
-        return profiles.save(jwt.getSubject(), body);
+        // owner = JWT SUBJECT (the row key); username = the vanity DNS label, derived
+        // from the token (NOT the body) so the reserved-username guard can't be
+        // bypassed by spoofing the body.
+        return profiles.save(jwt.getSubject(), usernameOf(jwt), body);
+    }
+
+    /**
+     * The caller's USERNAME for vanity purposes, derived from the JWT. Casdoor mints
+     * the {@code preferred_username} claim = the user's login name (the DNS label
+     * behind {@code <username>.snapdragon.systems}); we fall back to {@code name},
+     * then to the subject only if neither claim is present. This is the documented
+     * single home for "how the username is obtained from the token".
+     */
+    static String usernameOf(Jwt jwt) {
+        String preferred = jwt.getClaimAsString("preferred_username");
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred;
+        }
+        String name = jwt.getClaimAsString("name");
+        if (name != null && !name.isBlank()) {
+            return name;
+        }
+        return jwt.getSubject();
     }
 
     @Operation(summary = "Delete my profile.")

@@ -30,13 +30,14 @@ public class UserProfileRepository {
                 row.get("timezone", String.class),
                 row.get("display_name", String.class),
                 row.get("visibility", String.class),
-                Boolean.TRUE.equals(row.get("vanity_subdomain_enabled", Boolean.class)));
+                Boolean.TRUE.equals(row.get("vanity_subdomain_enabled", Boolean.class)),
+                row.get("vanity_username", String.class));
     }
 
     /** The owner's profile, or empty if they have never created one. */
     public Mono<UserProfile> find(String userId) {
         return db.sql("SELECT user_id, gender, pronouns, timezone, display_name, "
-                        + "visibility, vanity_subdomain_enabled "
+                        + "visibility, vanity_subdomain_enabled, vanity_username "
                         + "FROM user_profile WHERE user_id = :uid")
                 .bind("uid", userId)
                 .map(UserProfileRepository::map).first();
@@ -48,33 +49,44 @@ public class UserProfileRepository {
      * subject (set by the service), so this can never touch another user's row.
      */
     public Mono<UserProfile> save(UserProfile p) {
-        return db.sql("UPDATE user_profile SET gender = :g, pronouns = :pr, timezone = :tz, "
+        var spec = db.sql("UPDATE user_profile SET gender = :g, pronouns = :pr, timezone = :tz, "
                         + "display_name = :dn, visibility = :vis, vanity_subdomain_enabled = :vse, "
-                        + "updated_at = now() WHERE user_id = :uid")
+                        + "vanity_username = :vu, updated_at = now() WHERE user_id = :uid")
                 .bind("uid", p.userId())
                 .bind("vis", p.visibility())
                 .bind("vse", p.vanitySubdomainEnabled())
                 .bind("g", nz(p.gender()))
                 .bind("pr", nz(p.pronouns()))
                 .bind("tz", nz(p.timezone()))
-                .bind("dn", nz(p.displayName()))
-                .fetch().rowsUpdated()
+                .bind("dn", nz(p.displayName()));
+        spec = bindVanityUsername(spec, p);
+        return spec.fetch().rowsUpdated()
                 .flatMap(updated -> updated > 0 ? Mono.just(p) : insert(p));
     }
 
     private Mono<UserProfile> insert(UserProfile p) {
-        return db.sql("INSERT INTO user_profile (user_id, gender, pronouns, timezone, display_name, "
-                        + "visibility, vanity_subdomain_enabled, updated_at) "
-                        + "VALUES (:uid, :g, :pr, :tz, :dn, :vis, :vse, now())")
+        var spec = db.sql("INSERT INTO user_profile (user_id, gender, pronouns, timezone, display_name, "
+                        + "visibility, vanity_subdomain_enabled, vanity_username, updated_at) "
+                        + "VALUES (:uid, :g, :pr, :tz, :dn, :vis, :vse, :vu, now())")
                 .bind("uid", p.userId())
                 .bind("vis", p.visibility())
                 .bind("vse", p.vanitySubdomainEnabled())
                 .bind("g", nz(p.gender()))
                 .bind("pr", nz(p.pronouns()))
                 .bind("tz", nz(p.timezone()))
-                .bind("dn", nz(p.displayName()))
-                .fetch().rowsUpdated()
+                .bind("dn", nz(p.displayName()));
+        spec = bindVanityUsername(spec, p);
+        return spec.fetch().rowsUpdated()
                 .thenReturn(p);
+    }
+
+    /** Bind the nullable {@code vanity_username} — a real NULL (not "") so the
+     *  reserved-name CHECK's {@code IS NULL} branch fires when vanity is disabled. */
+    private static DatabaseClient.GenericExecuteSpec bindVanityUsername(
+            DatabaseClient.GenericExecuteSpec spec, UserProfile p) {
+        return p.vanityUsername() == null
+                ? spec.bindNull("vu", String.class)
+                : spec.bind("vu", p.vanityUsername());
     }
 
     /** Delete the owner's profile (own data only). */
