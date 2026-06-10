@@ -1,6 +1,9 @@
 package systems.snapdragon.userbff.profile;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+import systems.snapdragon.userbff.web.ValidationPatterns;
 
 /**
  * The caller's OWN profile (table {@code user_profile}). {@code userId} is the
@@ -23,10 +26,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public record UserProfile(
         @JsonProperty("userId") String userId,
-        String gender,
-        String pronouns,
-        String timezone,
-        String displayName,
+        @Size(max = 64, message = "gender must be at most 64 chars") String gender,
+        @Size(max = 64, message = "pronouns must be at most 64 chars") String pronouns,
+        @Size(max = 64, message = "timezone must be at most 64 chars") String timezone,
+        @Size(max = 255, message = "displayName must be at most 255 chars") String displayName,
+        // Null is allowed (the service defaults/normalizes it); a NON-null value
+        // must be the public|internal vocabulary (mirrors the 005
+        // ck_user_profile_visibility CHECK), so a clearly-wrong value is a 400
+        // instead of being silently coerced.
+        @Pattern(regexp = ValidationPatterns.VISIBILITY, message = "visibility must be public|internal")
         String visibility,
         boolean vanitySubdomainEnabled,
         @JsonProperty(access = JsonProperty.Access.READ_ONLY) String vanityUsername) {

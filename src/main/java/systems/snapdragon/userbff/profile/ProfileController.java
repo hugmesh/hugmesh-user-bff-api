@@ -2,10 +2,15 @@ package systems.snapdragon.userbff.profile;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
@@ -24,6 +29,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/bff/user/profile")
 @PreAuthorize("hasRole('USER')")
+@Validated
 public class ProfileController {
 
     private final ProfileService profiles;
@@ -31,6 +37,19 @@ public class ProfileController {
     public ProfileController(ProfileService profiles) {
         this.profiles = profiles;
     }
+
+    /** Change-password body (typed + validated; was an untyped Map). The IdP
+     *  enforces the password policy; we only require non-blank fields here. */
+    public record PasswordChangeRequest(
+            String oldPassword,
+            @NotBlank(message = "newPassword is required")
+            @Size(min = 1, max = 256, message = "newPassword must be 1-256 chars") String newPassword) {}
+
+    /** Change-email body (typed + validated; was an untyped Map). */
+    public record EmailChangeRequest(
+            @NotBlank(message = "email is required")
+            @Email(message = "email must be a valid address")
+            @Size(max = 320, message = "email must be at most 320 chars") String email) {}
 
     @Operation(summary = "Get my profile (owner = JWT subject).")
     @GetMapping
@@ -40,7 +59,7 @@ public class ProfileController {
 
     @Operation(summary = "Create/update my profile. The body's userId is ignored — the owner is the JWT subject; the vanity username is derived from the token.")
     @PutMapping
-    public Mono<UserProfile> upsert(@AuthenticationPrincipal Jwt jwt, @RequestBody UserProfile body) {
+    public Mono<UserProfile> upsert(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody UserProfile body) {
         // owner = JWT SUBJECT (the row key); username = the vanity DNS label, derived
         // from the token (NOT the body) so the reserved-username guard can't be
         // bypassed by spoofing the body.
@@ -75,16 +94,16 @@ public class ProfileController {
     @Operation(summary = "Change my Casdoor password (goes to the IdP, not the profile table).")
     @PostMapping("/password")
     public Mono<Map<String, Object>> changePassword(@AuthenticationPrincipal Jwt jwt,
-                                                    @RequestBody Map<String, String> body) {
-        return profiles.changePassword(jwt.getSubject(), body.get("oldPassword"), body.get("newPassword"))
+                                                    @Valid @RequestBody PasswordChangeRequest body) {
+        return profiles.changePassword(jwt.getSubject(), body.oldPassword(), body.newPassword())
                 .thenReturn(ack("password-change", profiles.casdoorEnabled()));
     }
 
     @Operation(summary = "Change my Casdoor email (goes to the IdP, not the profile table).")
     @PostMapping("/email")
     public Mono<Map<String, Object>> changeEmail(@AuthenticationPrincipal Jwt jwt,
-                                                 @RequestBody Map<String, String> body) {
-        return profiles.changeEmail(jwt.getSubject(), body.get("email"))
+                                                 @Valid @RequestBody EmailChangeRequest body) {
+        return profiles.changeEmail(jwt.getSubject(), body.email())
                 .thenReturn(ack("email-change", profiles.casdoorEnabled()));
     }
 
