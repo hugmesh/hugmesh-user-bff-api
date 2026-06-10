@@ -31,6 +31,14 @@ class FederationApiClientTest {
         public Mono<ClientResponse> exchange(ClientRequest request) {
             requests.add(request);
             String path = request.url().getPath();
+            if (path.endsWith("/body")) { // read-my-card-body -> raw source bytes
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .body("<h1>my card</h1>").build());
+            }
+            if (request.method() == HttpMethod.DELETE) { // delete -> 204 No Content
+                return Mono.just(ClientResponse.create(HttpStatus.NO_CONTENT).build());
+            }
             String body;
             if (path.endsWith("/bundles/mine") || path.contains("/bundles/slug/")) {
                 body = "[{\"id\":1,\"ownerUserId\":\"alice\",\"slug\":\"my-card\","
@@ -72,6 +80,26 @@ class FederationApiClientTest {
         assertThat(rec.last().url().getPath()).endsWith("/api/federation/bundles/my-card");
         assertThat(rec.last().url().getQuery()).contains("entryFile=index.html").contains("visibility=internal");
         assertThat(saved.contentHash()).isEqualTo("def");
+    }
+
+    @Test
+    void readBody_getsBundleSlugBody_returnsRawSource() {
+        Recorder rec = new Recorder();
+        byte[] source = clientFor(rec).readBody("my-card").block();
+        assertThat(rec.last().method()).isEqualTo(HttpMethod.GET);
+        // hits the federation owner-scoped read-my-card-body endpoint EXACTLY.
+        assertThat(rec.last().url().getPath()).endsWith("/api/federation/bundles/slug/my-card/body");
+        assertThat(new String(source)).isEqualTo("<h1>my card</h1>");
+    }
+
+    @Test
+    void delete_deletesBundleSlug() {
+        Recorder rec = new Recorder();
+        clientFor(rec).delete("my-card").block();
+        assertThat(rec.last().method()).isEqualTo(HttpMethod.DELETE);
+        // hits the federation owner-scoped delete endpoint EXACTLY (no /slug/ prefix,
+        // matching DELETE /bundles/{slug}).
+        assertThat(rec.last().url().getPath()).endsWith("/api/federation/bundles/my-card");
     }
 
     @Test
