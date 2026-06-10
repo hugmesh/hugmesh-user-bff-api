@@ -26,8 +26,12 @@ import java.util.Map;
  * <ul>
  *   <li>GET  {@code /api/federation/bundles/mine} — the caller's own cards;</li>
  *   <li>GET  {@code /api/federation/bundles/slug/{slug}} — versions for a slug;</li>
+ *   <li>GET  {@code /api/federation/bundles/slug/{slug}/body} — the caller's own
+ *       current card body bytes (read-my-card-body, for Edit pre-fill);</li>
  *   <li>PUT  {@code /api/federation/bundles/{slug}} — publish a bundle (octet-stream
  *       body + entryFile/visibility/manifest query params);</li>
+ *   <li>DELETE {@code /api/federation/bundles/{slug}} — delete the caller's own
+ *       current bundle for a slug;</li>
  *   <li>POST {@code /api/federation/moderation} — submit a moderation request
  *       (kind=instance-block; status is set to 'recommended' server-side).</li>
  * </ul>
@@ -54,6 +58,33 @@ public class FederationApiClient {
                 .uri(uri -> uri.path("/api/federation/bundles/slug/{slug}").build(slug))
                 .retrieve()
                 .bodyToFlux(UserModuleCard.class);
+    }
+
+    /**
+     * READ the caller's OWN current card body (source bytes) for a slug — proxies
+     * federation-api's owner-scoped {@code GET /bundles/slug/{slug}/body}. The
+     * forwarded JWT makes federation-api return ONLY the caller's own card (a
+     * non-owner gets 404 upstream), so the WYSIWYG editor can pre-fill for Edit.
+     * Returns the raw entry-file bytes (the card source), not JSON.
+     */
+    public Mono<byte[]> readBody(String slug) {
+        return http.get()
+                .uri(uri -> uri.path("/api/federation/bundles/slug/{slug}/body").build(slug))
+                .retrieve()
+                .bodyToMono(byte[].class);
+    }
+
+    /**
+     * DELETE the caller's OWN current bundle for a slug — proxies federation-api's
+     * owner-scoped {@code DELETE /bundles/{slug}}. The forwarded JWT makes
+     * federation-api delete ONLY the caller's own card (a non-owner gets 404
+     * upstream); federation-api removes the storage version + supersedes the row.
+     */
+    public Mono<Void> delete(String slug) {
+        return http.delete()
+                .uri(uri -> uri.path("/api/federation/bundles/{slug}").build(slug))
+                .retrieve()
+                .bodyToMono(Void.class);
     }
 
     /**

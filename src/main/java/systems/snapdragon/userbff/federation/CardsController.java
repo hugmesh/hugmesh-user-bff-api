@@ -47,6 +47,27 @@ public class CardsController {
     }
 
     @Operation(
+            summary = "Read my card's current body (source) by slug — for Edit pre-fill.",
+            description = "Proxies federation-api's owner-scoped read-my-card-body so the WYSIWYG editor can "
+                    + "RE-READ a card's current source to edit it. Owner-enforced upstream via the forwarded "
+                    + "JWT (a non-owner gets 404 from federation-api). Returns the raw entry-file bytes.")
+    @GetMapping(value = "/{slug}/body", produces = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public Mono<byte[]> body(@AuthenticationPrincipal Jwt jwt, @PathVariable String slug) {
+        return federation.readBody(slug);
+    }
+
+    @Operation(
+            summary = "Delete one of my cards by slug.",
+            description = "Proxies federation-api's owner-scoped DELETE: removes the caller's OWN current bundle "
+                    + "for the slug (federation-api removes the storage version + supersedes the row). "
+                    + "Owner-enforced upstream via the forwarded JWT (a non-owner gets 404 from federation-api).")
+    @DeleteMapping("/{slug}")
+    @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public Mono<Void> delete(@AuthenticationPrincipal Jwt jwt, @PathVariable String slug) {
+        return federation.delete(slug);
+    }
+
+    @Operation(
             summary = "Publish (create/update) a card bundle for a slug.",
             description = "Body is the single entry file (octet-stream). federation-api content-hashes it, "
                     + "records a user_modules row under ME (forwarded JWT), and supersedes the prior version.")
