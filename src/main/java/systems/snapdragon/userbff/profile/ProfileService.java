@@ -41,10 +41,42 @@ public class ProfileService {
     /**
      * Create/update the OWNER's profile. The owner is forced onto the row so the
      * request body's {@code userId} can never redirect the write to another user.
+     *
+     * <p>Back-compat overload — used where no username is threaded through (the
+     * vanity guard then only applies if the body itself opts into a public/vanity
+     * profile with a username that can't be derived, which it can't, so this never
+     * sets a vanity_username). Prefer {@link #save(String, String, UserProfile)}.
      */
     public Mono<UserProfile> save(String owner, UserProfile body) {
+        return save(owner, null, body);
+    }
+
+    /**
+     * Create/update the OWNER's profile, threading the caller's USERNAME (the
+     * Casdoor {@code preferred_username} claim, derived by the controller from the
+     * JWT — see {@link ProfileController}). {@code owner} is the JWT SUBJECT (the
+     * row key); {@code username} is the vanity DNS label.
+     *
+     * <p>RESERVED-USERNAME GUARD: enabling the vanity subdomain (or making the
+     * profile public) is REJECTED with 400 when the caller's username is a reserved
+     * label ({@link ReservedNames}), because {@code <username>.snapdragon.systems}
+     * would collide with a dedicated app route. When allowed + vanity-enabled, the
+     * normalized username is mirrored into {@code vanity_username} (DB-CHECK-backed).
+     */
+    public Mono<UserProfile> save(String owner, String username, UserProfile body) {
         requireOwner(owner);
-        UserProfile owned = (body == null ? UserProfile.empty(owner) : body).withOwner(owner);
+        UserProfile owned = (body == null ? UserProfile.empty(owner) : body)
+                .withOwner(owner)
+                .withVanityUsername(username);
+
+        boolean wantsVanity = owned.vanitySubdomainEnabled();
+        boolean wantsPublic = "public".equals(owned.visibility());
+        if ((wantsVanity || wantsPublic) && ReservedNames.isReserved(username)) {
+            return Mono.error(ApiException.badRequest(
+                    "username '" + username + "' is a reserved platform name and cannot be "
+                            + "used as a vanity subdomain or public profile (it would collide "
+                            + "with a dedicated app route)"));
+        }
         return repo.save(owned);
     }
 
