@@ -59,7 +59,7 @@ public final class ReservedNames {
             // --- be-gateway route prefixes ---
             "api", "_matrix", "oauth",
             // --- reserved subdomains (snapdragon.systems) ---
-            "id", "matrix", "mastodon", "scale", "headscale", "www",
+            "id", "matrix", "mastodon", "pleroma", "scale", "headscale", "www",
             // --- snapdragon.GAMES app route prefixes (derived: nginx /_remotes/<slug>/
             //     + location prefixes + <service>.snapdragon.games subdomains) ---
             "games", "play", "wasm", "producer", "publisher", "banned",

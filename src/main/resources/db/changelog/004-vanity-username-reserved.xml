@@ -53,7 +53,7 @@
                         'games-rpg-maker', 'games-three-wizards', 'games-vn-maker', 'gitlab',
                         'gm', 'headscale', 'health', 'healthz', 'help', 'id', 'login',
                         'logout', 'mastodon', 'matrix', 'metrics', 'mod', 'oauth', 'oauth2',
-                        'pki', 'play', 'producer', 'producer-registration', 'public',
+                        'pki', 'play', 'pleroma', 'producer', 'producer-registration', 'public',
                         'publisher', 'registration', 'registry', 'robots', 'root', 'scale',
                         'sitemap', 'social', 'static', 'status', 'support', 'user', 'users',
                         'vault', 'wasm', 'wasm-fragment', 'well-known', 'www'
