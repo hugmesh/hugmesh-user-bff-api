@@ -17,6 +17,8 @@
         004 — user_profile.vanity_username + reserved-name CHECK (vanity collision guard)
         005 — enum/domain CHECK constraints (DB parity for the API-enforced
               user_profile.visibility + user_block.platform vocabularies)
+        006 — self_silence (self-service visibility hide; NOT a ban — zero Casdoor
+              roles / access_suspension / revocation keys; @Scheduled auto-clear)
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -24,4 +26,5 @@
     <include file="db/changelog/003-user-block.xml"/>
     <include file="db/changelog/004-vanity-username-reserved.xml"/>
     <include file="db/changelog/005-enum-check-constraints.xml"/>
+    <include file="db/changelog/006-self-silence.xml"/>
 </databaseChangeLog>

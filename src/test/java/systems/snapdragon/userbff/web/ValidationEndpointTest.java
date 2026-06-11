@@ -60,6 +60,16 @@ class ValidationEndpointTest {
         return web.mutateWith(mockJwt().authorities(new SimpleGrantedAuthority("ROLE_USER")));
     }
 
+    /** A principal that also holds the homeserver platform roles, so the
+     *  BlockController platform-role @PreAuthorize gate passes and the assertion under
+     *  test is the VALIDATION outcome (not a 403 from the role gate). */
+    private WebTestClient platformUser() {
+        return web.mutateWith(mockJwt().authorities(
+                new SimpleGrantedAuthority("ROLE_USER"),
+                new SimpleGrantedAuthority("ROLE_MATRIX"),
+                new SimpleGrantedAuthority("ROLE_MASTODON")));
+    }
+
     // ------------------------------------------------------------------
     // Block — @Valid BlockRequest (target required, platform enum) + {id} UUID
     // ------------------------------------------------------------------
@@ -74,7 +84,7 @@ class ValidationEndpointTest {
                 .expectBody()
                 .jsonPath("$.error").isEqualTo("validation failed")
                 .jsonPath("$.fields.target").exists();
-        verify(blockService, never()).block(any(), any(), any());
+        verify(blockService, never()).block(any(), any(), any(), any());
     }
 
     @Test
@@ -85,19 +95,20 @@ class ValidationEndpointTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.platform").exists();
-        verify(blockService, never()).block(any(), any(), any());
+        verify(blockService, never()).block(any(), any(), any(), any());
     }
 
     @Test
     void createBlock_valid_is2xx() {
-        when(blockService.block(any(), anyString(), any()))
+        when(blockService.block(any(), anyString(), any(), any()))
                 .thenReturn(Mono.just(Map.of("ok", true)));
-        user().post().uri("/bff/user/blocks")
+        // matrix platform -> the @PreAuthorize gate needs ROLE_MATRIX (platformUser()).
+        platformUser().post().uri("/bff/user/blocks")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"target\":\"@evil:host\",\"platform\":\"matrix\"}")
                 .exchange()
                 .expectStatus().is2xxSuccessful();
-        verify(blockService).block(any(), anyString(), any());
+        verify(blockService).block(any(), anyString(), any(), any());
     }
 
     @Test
@@ -110,13 +121,15 @@ class ValidationEndpointTest {
 
     @Test
     void recommendInstanceBlock_missingInstance_is400() {
-        user().post().uri("/bff/user/recommend-instance-block")
+        // platformUser() so the method-level platform-role @PreAuthorize passes and the
+        // assertion is the @Valid (missing instance) outcome, not a 403 from the gate.
+        platformUser().post().uri("/bff/user/recommend-instance-block")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"reason\":\"spam\"}")
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.instance").exists();
-        verify(blockService, never()).recommendInstanceBlock(any(), any(), any());
+        verify(blockService, never()).recommendInstanceBlock(any(), any(), any(), any());
     }
 
     // ------------------------------------------------------------------

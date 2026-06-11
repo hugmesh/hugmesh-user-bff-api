@@ -75,6 +75,31 @@ block:
     enabled: "${BLOCK_MASTODON_ENABLED:false}"
     base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
 
+# USER SELF-SILENCE (self-service visibility hide; NOT a ban). The durable
+# self_silence row is the source of truth; expires_at is authoritative and a
+# @Scheduled wake (SelfSilenceExpiryAction) auto-clears at expiry.
+#
+# All three hide legs are GATED stub-seams that NEVER hard-fail (scope-guard):
+#   • self-silence.federation.enabled — the federation user-scope hide-profile
+#     apply/clear leg (the federation-api endpoint ships in a later phase; OFF here);
+#   • external.matrix.enabled / external.mastodon.enabled — the homeserver
+#     directory/discovery hide seams (tuwunel exclude-from-directory via the
+#     admin-room bot; akkoma discoverable=false) — the real admin verbs are pinned
+#     against the deployed servers later. Default OFF: the row stands regardless.
+self-silence:
+  federation:
+    enabled: "${SELF_SILENCE_FEDERATION_ENABLED:false}"
+  check-interval-ms: "${SELF_SILENCE_CHECK_INTERVAL_MS:60000}"
+  initial-delay-ms: "${SELF_SILENCE_INITIAL_DELAY_MS:30000}"
+
+external:
+  matrix:
+    enabled: "${EXTERNAL_MATRIX_ENABLED:false}"
+    base-url: "${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}"
+  mastodon:
+    enabled: "${EXTERNAL_MASTODON_ENABLED:false}"
+    base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
+
 # SpringDoc OpenAPI. The spec at /v3/api-docs is the source the platform
 # ng-openapi-gen typed client (the paired snapdragon-user-ui) + the docs pipeline
 # consume. Spec + UI are gated by SecurityConfig: permitAll under dev/test (so

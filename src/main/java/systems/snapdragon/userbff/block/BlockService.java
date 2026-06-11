@@ -10,6 +10,7 @@ import systems.snapdragon.userbff.web.ApiException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Owner-enforced self-block operations. EVERY method takes the owner (the JWT
@@ -17,16 +18,23 @@ import java.util.Map;
  *
  * <ul>
  *   <li>{@link #list(String)} returns only the owner's own blocks;</li>
- *   <li>{@link #block(String, String, String)} records a durable {@code user_block}
- *       row under the owner, THEN best-effort pushes the external mute/block to the
- *       matching platform client (Matrix/Mastodon; STUBBED by default) — the row is
- *       the source of truth even if the external push is stubbed/fails;</li>
+ *   <li>{@link #block(String, String, String, Set)} records a durable
+ *       {@code user_block} row under the owner, THEN best-effort pushes the external
+ *       mute/block to the matching platform client (Matrix/Mastodon; STUBBED by
+ *       default) — the row is the source of truth even if the external push is
+ *       stubbed/fails. PLATFORM-ROLE GATED (service leg / defence-in-depth): a
+ *       {@code matrix} target requires {@code ROLE_MATRIX}, a {@code mastodon}
+ *       target requires {@code ROLE_MASTODON}; the caller's authorities are passed
+ *       in and re-checked here (the method-level {@code @PreAuthorize} on the
+ *       controller is the API leg);</li>
  *   <li>{@link #unblock(String, String)} deletes only the owner's block (scoped by
  *       owner AND id);</li>
- *   <li>{@link #recommendInstanceBlock(String, String)} starts the recommend-
+ *   <li>{@link #recommendInstanceBlock(String, String, Set)} starts the recommend-
  *       instance-block chain by POSTing to federation-api (kind=instance-block,
  *       status set to 'recommended' server-side) — this is a RECOMMENDATION, not a
- *       self-block, and is gated to the caller's own forwarded JWT.</li>
+ *       self-block, and is gated to the caller's own forwarded JWT. Requires a
+ *       homeserver platform role ({@code ROLE_MATRIX} OR {@code ROLE_MASTODON}),
+ *       re-checked here.</li>
  * </ul>
  */
 @Service
@@ -57,8 +65,14 @@ public class BlockService {
      * owner), then the external push is best-effort (never fails the call). Returns
      * the persisted block with a {@code pushed} flag (whether a LIVE external call
      * ran vs. a documented stub).
+     *
+     * <p>PLATFORM-ROLE GATE (service leg): {@code matrix} needs {@code ROLE_MATRIX},
+     * {@code mastodon} needs {@code ROLE_MASTODON} — re-checked from the caller's
+     * forwarded authorities so the rule holds independently of the controller's
+     * method-level {@code @PreAuthorize}. {@code internal} (the default) needs only
+     * the ROLE_USER floor. A missing platform role is a 403.
      */
-    public Mono<Map<String, Object>> block(String owner, String target, String platform) {
+    public Mono<Map<String, Object>> block(String owner, String target, String platform, Set<String> callerRoles) {
         requireOwner(owner);
         if (target == null || target.isBlank()) {
             return Mono.error(ApiException.badRequest("target required"));
@@ -67,9 +81,35 @@ public class BlockService {
         if (!UserBlock.validPlatform(p)) {
             return Mono.error(ApiException.badRequest("platform must be matrix|mastodon|internal"));
         }
+        ApiException forbidden = platformRoleForbidden(p, callerRoles);
+        if (forbidden != null) {
+            return Mono.error(forbidden);
+        }
         return repo.add(owner, target.trim(), p)
                 .flatMap(saved -> pushExternal(owner, saved)
                         .map(pushed -> result(saved, pushed)));
+    }
+
+    /**
+     * Service-leg platform-role guard (defence-in-depth, mirrors the controller's
+     * method-level {@code @PreAuthorize}). Returns a 403 {@link ApiException} when
+     * the caller lacks the access role required to act on the platform's homeserver,
+     * else {@code null}:
+     * <ul>
+     *   <li>{@code matrix}   -> requires {@code ROLE_MATRIX};</li>
+     *   <li>{@code mastodon} -> requires {@code ROLE_MASTODON};</li>
+     *   <li>{@code internal} (and any non-homeserver value) -> no platform role.</li>
+     * </ul>
+     */
+    private static ApiException platformRoleForbidden(String platform, Set<String> callerRoles) {
+        Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
+        if ("matrix".equals(platform) && !roles.contains("ROLE_MATRIX")) {
+            return ApiException.forbidden("ROLE_MATRIX required to block on matrix");
+        }
+        if ("mastodon".equals(platform) && !roles.contains("ROLE_MASTODON")) {
+            return ApiException.forbidden("ROLE_MASTODON required to block on mastodon");
+        }
+        return null;
     }
 
     private Mono<Boolean> pushExternal(String owner, UserBlock saved) {
@@ -94,9 +134,20 @@ public class BlockService {
      * Start the recommend-instance-block chain via federation-api. The caller's JWT
      * is forwarded by the federation WebClient filter, so federation-api records the
      * recommendation under the caller as requester.
+     *
+     * <p>Requires a homeserver platform role ({@code ROLE_MATRIX} OR
+     * {@code ROLE_MASTODON}) — re-checked here (service leg) as defence-in-depth on
+     * top of the controller's method-level {@code @PreAuthorize}. Only a platform
+     * participant recommends an instance block.
      */
-    public Mono<Map<String, Object>> recommendInstanceBlock(String owner, String instance, String reason) {
+    public Mono<Map<String, Object>> recommendInstanceBlock(String owner, String instance, String reason,
+                                                            Set<String> callerRoles) {
         requireOwner(owner);
+        Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
+        if (!roles.contains("ROLE_MATRIX") && !roles.contains("ROLE_MASTODON")) {
+            return Mono.error(ApiException.forbidden(
+                    "a platform role (ROLE_MATRIX or ROLE_MASTODON) is required to recommend an instance block"));
+        }
         if (instance == null || instance.isBlank()) {
             return Mono.error(ApiException.badRequest("instance required"));
         }
