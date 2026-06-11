@@ -15,6 +15,7 @@ import systems.snapdragon.userbff.web.ApiException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,6 +58,11 @@ class BlockServiceOwnerEnforcementTest {
     @Autowired BlockService service;
     @Autowired UserBlockRepository repo;
 
+    /** A caller holding both homeserver platform roles (so the platform-role gate
+     *  passes and these owner-enforcement assertions exercise the row logic). */
+    private static final Set<String> BOTH_PLATFORM_ROLES =
+            Set.of("ROLE_USER", "ROLE_MATRIX", "ROLE_MASTODON");
+
     // NOTE: @DataR2dbcTest reuses one H2 store across the methods of this class, so
     // assertions are scoped by a per-test unique target/owner rather than absolute
     // counts (which would be coupled across methods).
@@ -64,7 +70,7 @@ class BlockServiceOwnerEnforcementTest {
     @Test
     void block_recordedUnderCaller_pushIsBestEffortStub() {
         String target = "@spammer-bre1:evil";
-        Map<String, Object> out = service.block("alice", target, "matrix").block();
+        Map<String, Object> out = service.block("alice", target, "matrix", BOTH_PLATFORM_ROLES).block();
         assertThat(out).containsEntry("pushed", false).containsEntry("external", "stubbed");
         UserBlock b = (UserBlock) out.get("block");
         assertThat(b.userId()).isEqualTo("alice");
@@ -77,13 +83,15 @@ class BlockServiceOwnerEnforcementTest {
 
     @Test
     void internalPlatform_noExternalPush() {
-        Map<String, Object> out = service.block("alice", "someone-int", "internal").block();
+        // internal needs only the ROLE_USER floor — no platform role required.
+        Map<String, Object> out = service.block("alice", "someone-int", "internal", Set.of("ROLE_USER")).block();
         assertThat(out).containsEntry("pushed", false).containsEntry("external", "n/a");
     }
 
     @Test
     void unblock_isOwnerAndIdScoped() {
-        UserBlock aliceBlock = (UserBlock) service.block("alice", "@x-unb:evil", "matrix").block().get("block");
+        UserBlock aliceBlock = (UserBlock) service.block("alice", "@x-unb:evil", "matrix", BOTH_PLATFORM_ROLES)
+                .block().get("block");
         // bob cannot delete alice's block (owner+id scoped)
         assertThatThrownBy(() -> service.unblock("bob", aliceBlock.id()).block())
                 .isInstanceOf(ApiException.class);
@@ -97,13 +105,50 @@ class BlockServiceOwnerEnforcementTest {
 
     @Test
     void block_rejectsBadPlatform() {
-        assertThatThrownBy(() -> service.block("alice", "x", "telegram").block())
+        assertThatThrownBy(() -> service.block("alice", "x", "telegram", BOTH_PLATFORM_ROLES).block())
                 .isInstanceOf(ApiException.class);
+    }
+
+    // ── platform-role gate (service leg / defence-in-depth) ──────────────────
+
+    @Test
+    void block_matrixWithoutRoleMatrix_isForbidden() {
+        // A caller with only the ROLE_USER floor (no ROLE_MATRIX) cannot matrix-block.
+        ApiException ex = catchApiException(() -> service.block("alice", "@x:evil", "matrix", Set.of("ROLE_USER")).block());
+        assertThat(ex.status().value()).isEqualTo(403);
+    }
+
+    @Test
+    void block_mastodonWithoutRoleMastodon_isForbidden() {
+        ApiException ex = catchApiException(() -> service.block("alice", "@x@evil", "mastodon", Set.of("ROLE_USER")).block());
+        assertThat(ex.status().value()).isEqualTo(403);
+    }
+
+    @Test
+    void block_matrixWithRoleMatrix_isAllowed() {
+        Map<String, Object> out = service.block("alice", "@ok:host", "matrix", Set.of("ROLE_USER", "ROLE_MATRIX")).block();
+        assertThat(((UserBlock) out.get("block")).platform()).isEqualTo("matrix");
     }
 
     @Test
     void recommendInstanceBlock_delegatesToFederation() {
-        Map<String, Object> out = service.recommendInstanceBlock("alice", "evil.example", "spam").block();
+        Map<String, Object> out = service.recommendInstanceBlock("alice", "evil.example", "spam", BOTH_PLATFORM_ROLES).block();
         assertThat(out).containsEntry("recommended", true).containsEntry("instance", "evil.example");
+    }
+
+    @Test
+    void recommendInstanceBlock_withoutAnyPlatformRole_isForbidden() {
+        ApiException ex = catchApiException(
+                () -> service.recommendInstanceBlock("alice", "evil.example", "spam", Set.of("ROLE_USER")).block());
+        assertThat(ex.status().value()).isEqualTo(403);
+    }
+
+    private static ApiException catchApiException(Runnable r) {
+        try {
+            r.run();
+        } catch (ApiException e) {
+            return e;
+        }
+        throw new AssertionError("expected an ApiException to be thrown");
     }
 }

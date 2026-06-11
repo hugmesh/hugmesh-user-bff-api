@@ -9,6 +9,7 @@ import systems.snapdragon.userbff.block.UserBlock;
 import systems.snapdragon.userbff.federation.FederationModerationModels;
 import systems.snapdragon.userbff.federation.UserModuleCard;
 import systems.snapdragon.userbff.profile.UserProfile;
+import systems.snapdragon.userbff.silence.SelfSilence;
 
 /**
  * GraalVM native-image / AOT reachability hints for the bits the static analyzer
@@ -51,7 +52,8 @@ public class NativeHintsConfig {
                     .registerType(UserProfile.class, dtoCategories())
                     .registerType(UserBlock.class, dtoCategories())
                     .registerType(UserModuleCard.class, dtoCategories())
-                    .registerType(FederationModerationModels.SubmitRequest.class, dtoCategories());
+                    .registerType(FederationModerationModels.SubmitRequest.class, dtoCategories())
+                    .registerType(SelfSilence.class, dtoCategories());
 
             // Swagger UI static assets shipped inside the springdoc webflux-ui
             // starter's webjar. native-image drops classpath resources unless

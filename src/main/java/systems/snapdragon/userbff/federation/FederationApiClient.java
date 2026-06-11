@@ -128,6 +128,66 @@ public class FederationApiClient {
                 .bodyToMono(MAP_TYPE);
     }
 
+    /**
+     * SELF-SILENCE leg 1 — hide the caller's own public federation profile so the
+     * public vanity resolve returns 404 while they are self-silenced. This is a
+     * SELF-hide (it must NOT hide the user from THEMSELVES — their own profile is an
+     * authenticated route that does not consult the public vanity resolve), and it is
+     * DISTINCT from an admin ban override (a different scope/marker), so an expiry
+     * un-hide never re-arms an unrelated admin kill.
+     *
+     * <p>CONTRACT (the federation-api user-scope hide-profile apply path is a LATER
+     * phase): {@code POST /api/federation/self-silence/hide-profile} with the caller's
+     * forwarded JWT — federation-api records a {@code scope=user, action=hide-profile}
+     * override keyed to the JWT subject, with NO module-existence requirement (so a
+     * user with no published profile can still self-silence). Until that endpoint
+     * ships, the caller (SelfSilenceService) keeps this leg GATED + fail-CLOSED so a
+     * not-yet-deployed federation leg never hard-fails activation — the durable
+     * {@code self_silence} row is the source of truth and the seam converges later.
+     */
+    public Mono<Void> applyHideProfile() {
+        return http.post()
+                .uri("/api/federation/self-silence/hide-profile")
+                .retrieve()
+                .toBodilessEntity()
+                .then();
+    }
+
+    /**
+     * SELF-SILENCE un-hide (leg 1 reverse) — clear the caller's own hide-profile
+     * self-silence override so the public profile resolves again. Clears ONLY the
+     * self-silence-scoped marker (never an admin ban override). Mirrors
+     * {@link #applyHideProfile()}; same forwarded-JWT, same gated/fail-closed contract.
+     * Endpoint: {@code DELETE /api/federation/self-silence/hide-profile}.
+     */
+    public Mono<Void> clearHideProfile() {
+        return http.delete()
+                .uri("/api/federation/self-silence/hide-profile")
+                .retrieve()
+                .toBodilessEntity()
+                .then();
+    }
+
+    /**
+     * SELF-SILENCE early-reactivate — request a moderator/admin reactivation by
+     * writing a {@code kind='self-silence-appeal'} moderation request (the row IS the
+     * queue mods already watch; NOT literal SMTP). The forwarded JWT records it under
+     * the caller; {@code target} is the caller's own subject, {@code reason} their note.
+     * Reuses the existing {@code POST /api/federation/moderation} surface; federation-
+     * api sets the status server-side. The {@code self-silence-appeal} kind itself is
+     * added to federation-api's moderation vocabulary in a paired later phase — until
+     * then this is the documented transport for the email-mod seam.
+     */
+    public Mono<Map<String, Object>> requestSelfSilenceReactivation(String subject, String reason) {
+        SubmitRequest req = new SubmitRequest("self-silence-appeal", subject, reason);
+        return http.post()
+                .uri("/api/federation/moderation")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(req)
+                .retrieve()
+                .bodyToMono(MAP_TYPE);
+    }
+
     @SuppressWarnings("unchecked")
     private static final Class<Map<String, Object>> MAP_TYPE = (Class<Map<String, Object>>) (Class<?>) Map.class;
 

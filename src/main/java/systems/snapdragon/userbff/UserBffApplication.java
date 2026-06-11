@@ -2,6 +2,7 @@ package systems.snapdragon.userbff;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * User BFF — the ROLE_USER-floor backend paired with the future
@@ -22,9 +23,16 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  *   <li>RECOMMEND-INSTANCE-BLOCK — POST federation-api /moderation kind=
  *       instance-block (status set to recommended server-side) — the chain start
  *       of USER -&gt; MOD -&gt; ADMIN instance blocking.</li>
+ *   <li>SELF-SILENCE — own R2DBC {@code self_silence}: a self-service visibility
+ *       hide (profile 404 + homeserver discovery hide) that is DISTINCT from a ban
+ *       (no role/suspension/revocation write); a {@code @Scheduled} wake auto-clears
+ *       it at {@code expires_at}.</li>
  * </ul>
+ *
+ * <p>{@code @EnableScheduling} powers the {@code SelfSilenceExpiryAction} wake.
  */
 @SpringBootApplication
+@EnableScheduling
 public class UserBffApplication {
     public static void main(String[] args) { SpringApplication.run(UserBffApplication.class, args); }
 }

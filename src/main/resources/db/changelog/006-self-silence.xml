@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        self_silence — USER SELF-SILENCE (self-service visibility hide; NOT a ban).
+
+        A user can make THEMSELVES invisible to others for a bounded window: their
+        public federation profile resolves 404 and their homeserver directory entry
+        is hidden, WHILE they keep their session and full access to the service. This
+        is structurally DISTINCT from a moderator ban:
+
+          • it writes ZERO Casdoor roles, ZERO access_suspension rows, ZERO
+            revocation keys (the SelfSilenceService is not even injected with a
+            revocation client — see the service javadoc);
+          • login/home is UNCHANGED — the row never gates the user's own access;
+          • the ROW is the source of truth and expires_at is authoritative: a
+            @Scheduled wake re-selects overdue rows (including on boot) and auto-
+            clears the hide at expires_at.
+
+        Columns (owner-keyed, one active silence per user):
+          • user_id    — Casdoor JWT subject (owner); PK so a user has at most one row.
+          • started_at — when the silence began.
+          • expires_at — NOT NULL: the authoritative wake time (no permanent silence;
+                         a self-silence is always bounded — the user re-shows
+                         automatically). A 'permanent' hide is a moderator action, not
+                         self-service.
+          • cleared_at — stamped when the silence is cancelled or auto-expires
+                         (NULL = active). Soft-clear (kept for audit) rather than a
+                         DELETE so the history of a user's self-silences is durable.
+          • reason     — optional free text the user supplied.
+          • updated_at — last mutation.
+
+        The active index idx_self_silence_active makes the expiry scan
+        (SELECT ... WHERE cleared_at IS NULL AND expires_at <= now) cheap. On
+        production Postgres it is a PARTIAL index (WHERE cleared_at IS NULL) that
+        indexes only the small set of currently-active silences; on the H2
+        PostgreSQL-compat slice DB (TestDatabaseConfig) — which does NOT support
+        partial-index predicates — it is a plain (expires_at, cleared_at) index that
+        the same query uses. The two are split by Liquibase `dbms` so each engine gets
+        the form it supports while the query plan is covered on both. Changeset id 006
+        follows 005.
+    -->
+
+    <changeSet id="006-1-self-silence" author="snapdragon">
+        <createTable tableName="self_silence">
+            <column name="user_id" type="varchar(255)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="started_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expires_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+            <column name="cleared_at" type="timestamp"/>
+            <column name="reason" type="varchar(2048)"/>
+            <column name="updated_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- Production Postgres: a PARTIAL index over only the active (uncleared) rows. -->
+    <changeSet id="006-2-self-silence-active-index-pg" author="snapdragon" dbms="postgresql">
+        <sql>
+            CREATE INDEX idx_self_silence_active
+                ON self_silence (expires_at)
+                WHERE cleared_at IS NULL
+        </sql>
+        <rollback>
+            DROP INDEX idx_self_silence_active
+        </rollback>
+    </changeSet>
+
+    <!-- H2 slice DB (no partial-index predicate support): a plain composite index the
+         same expiry scan (cleared_at IS NULL AND expires_at <= now) can use. -->
+    <changeSet id="006-2-self-silence-active-index-h2" author="snapdragon" dbms="h2">
+        <createIndex tableName="self_silence" indexName="idx_self_silence_active">
+            <column name="cleared_at"/>
+            <column name="expires_at"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="self_silence" indexName="idx_self_silence_active"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
