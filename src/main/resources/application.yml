@@ -1,13 +1,6 @@
 spring:
   application:
     name: snapdragon-user-bff-api
-  cloud:
-    # spring-cloud 2024.0.x declares strict compatibility with Boot 3.4.x; this BFF
-    # runs Boot 3.5.5 (matching admin-bff / federation-api) and only uses the Eureka
-    # client (off by default). The compatibility verifier is advisory — disable it
-    # so boot does not fail the strict version cross-check.
-    compatibility-verifier:
-      enabled: false
   security:
     oauth2:
       resourceserver:
@@ -29,14 +22,6 @@ spring:
     url: "${SPRING_LIQUIBASE_URL:jdbc:postgresql://snapdragon-pg.snapdragon-backend.svc.cluster.local:5432/snapdragon}"
     user: "${SPRING_LIQUIBASE_USER:snapdragon}"
     password: "${SPRING_LIQUIBASE_PASSWORD:}"
-
-# Eureka registration is opt-in via the `eureka` profile. Off by default so a local
-# / CI run does not try to register (symmetry with admin-bff).
-eureka:
-  client:
-    enabled: "${EUREKA_CLIENT_ENABLED:false}"
-    service-url:
-      defaultZone: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://eureka:8761/eureka}"
 
 # Reactive WebClient to snapdragon-federation-api (the cards + recommend-instance-
 # block backend). The caller's Casdoor JWT is forwarded per request so federation-
