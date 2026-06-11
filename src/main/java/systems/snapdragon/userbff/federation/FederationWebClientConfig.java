@@ -57,8 +57,13 @@ public class FederationWebClientConfig {
      * a non-request-scoped call) the request goes out unauthenticated and
      * federation-api will reject it — by design, the BFF never substitutes a
      * broader-scoped credential.
+     *
+     * <p>Public + reusable: the media-proxy ({@code MediaWebClientConfig}) reuses this
+     * exact filter so the caller's bearer is forwarded only as far as the BFF on the
+     * real homeserver upload too — one bearer-forward implementation, no service
+     * credential anywhere.
      */
-    static ExchangeFilterFunction bearerTokenForwardingFilter() {
+    public static ExchangeFilterFunction bearerTokenForwardingFilter() {
         return (request, next) -> ReactiveSecurityContextHolder.getContext()
                 .map(ctx -> ctx.getAuthentication())
                 .filter(auth -> auth instanceof JwtAuthenticationToken)

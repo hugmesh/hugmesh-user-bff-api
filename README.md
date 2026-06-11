@@ -66,6 +66,52 @@ ts`).
   (`kind=instance-block`; federation sets `status=recommended` server-side). This
   is a *recommendation*, not a self-block.
 
+### AI-cloak media proxy — `MediaPoisonController` (`/bff/user/media`)
+The **poison-before-ingest** seam. The UIs route uploads through this BFF endpoint
+**instead of POSTing media directly to the homeserver**, so the AI-cloak
+(Glaze-style cloak / Nightshade-style poison) happens *before* any homeserver sees
+the bytes, owns **every served size**, and the decision is recorded **server-side**
+(`media_poison_decision` = audit + badge + repost source of truth). The prior
+direct-to-homeserver path could do none of those — async-after-ingest is placebo
+(re-encode strips perturbation, server thumbnails regenerate clean, federation wins
+the race).
+
+- `POST /bff/user/media/upload` — multipart (`file` + `platform {matrix|mastodon}` +
+  `mode {glaze|nightshade|light|none}` + `roomId`/`description`). **Flow:** sniff the
+  bytes (magic-byte, never the client `Content-Type`) → for an image with `mode!=none`
+  and a **present** worker, call the poisoner **sync within a latency budget** to cloak
+  the **original + every pinned served size** (akkoma `small`; Matrix `240x240`) → do
+  the **real homeserver upload of the POISONED bytes** via the mTLS proxy → run the
+  **round-trip survival gate** → return the homeserver `media_id`/`mxc` **exactly as
+  the homeserver would** (UI compose logic untouched) plus a `cloak` block
+  (`status/mode/backend/mediaRef`). Non-image / `mode=none` / feature-off → forwarded
+  **through unchanged** (`status=none`).
+- `GET /bff/user/media/capability` — worker backend (`cuda|rocm|cpu|none`) + offered
+  modes + ETA, so the composer renders an **honest** shield state up front (incl.
+  `Unavailable` when the heavy tier is absent).
+- `GET /bff/user/media/status/{ref}` — my decision for a media ref (badge polling),
+  owner-scoped.
+
+**Round-trip survival gate (the badge never lies):** after the upload the service
+re-fetches the served original + thumbnails and runs a perturbation-presence check;
+it persists `protected` **only if it survived**, else `degraded`. **Honest copy:**
+*"AI-cloak applied"*, never *"protected"* unless the gate passes — best-effort
+training-set hygiene (removable by re-encode/downscale), not a guarantee.
+**Uncloseable (stated honestly):** already-federated copies + native-client
+(Element/Tusky) uploads that skip this BFF entirely.
+
+**Lean fallback (k8s protocol-probe, no heavy tier):** the worker is the **optional**
+x86/GPU `snapdragon-media-poisoner`. On a Pi5-only cluster its pod stays `Pending`,
+its Service has no Ready endpoints, the `/health` probe reports `backend=none`, and
+`app.media.poisoning.fallback-mode` decides: `skip` (default — forward **uncloaked**
+with `status=skipped` + a documented signal so the UI warns *"not cloaked"*), `light`
+(reduced-strength CPU if offered), or `queue` (placeholder-then-replace). Posting is
+never *forced* to block.
+
+The server-owned opt-out: the `mode` is read **on the upload request** and persisted,
+so absence of a follow-up call can never silently lose the choice — default-on is
+auditable, not a UI-only convention.
+
 ## Where data lives (the routing rule)
 
 | Concern | Destination |
