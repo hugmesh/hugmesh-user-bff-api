@@ -19,6 +19,8 @@
               user_profile.visibility + user_block.platform vocabularies)
         006 — self_silence (self-service visibility hide; NOT a ban — zero Casdoor
               roles / access_suspension / revocation keys; @Scheduled auto-clear)
+        007 — media_poison_decision (server-owned AI-cloak decision + outcome for
+              the BFF media-proxy: audit + badge + repost source of truth)
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -27,4 +29,5 @@
     <include file="db/changelog/004-vanity-username-reserved.xml"/>
     <include file="db/changelog/005-enum-check-constraints.xml"/>
     <include file="db/changelog/006-self-silence.xml"/>
+    <include file="db/changelog/007-media-poison-decision.xml"/>
 </databaseChangeLog>

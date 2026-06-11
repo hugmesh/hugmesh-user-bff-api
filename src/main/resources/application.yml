@@ -100,6 +100,64 @@ external:
     enabled: "${EXTERNAL_MASTODON_ENABLED:false}"
     base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
 
+# ── BFF MEDIA-PROXY / AI-CLOAK (poison-before-ingest) ────────────────────────
+# The server-owned media-proxy the UIs route uploads through INSTEAD of POSTing
+# media directly to the homeserver. By owning the upload, the AI-cloak happens
+# before any homeserver sees the bytes, owns every served size, and the decision is
+# recorded SERVER-SIDE (the media_poison_decision table = audit + badge + repost
+# source of truth).
+#
+# Ships DARK: poisoning.enabled=false ⇒ the controller is mounted but every upload
+# is forwarded-through with status=none until the round-trip survival gate is
+# verified on a real GPU cluster (the merge-sequencing gate). HONEST framing —
+# best-effort training-set hygiene, never a guarantee: the UI says "AI-cloak
+# applied", never "protected", and the badge says 'protected' ONLY when the
+# perturbation survived the homeserver re-encode.
+app:
+  media:
+    poisoning:
+      enabled: "${MEDIA_POISONING_ENABLED:false}"
+      # default cloak for an opted-in image (UI shows this as default-ON).
+      default-mode: "${MEDIA_POISONING_DEFAULT_MODE:glaze}"
+      # behaviour when the OPTIONAL heavy-tier worker is ABSENT (Pi5-only cluster):
+      # skip (forward UNCLOAKED + status=skipped so the UI warns 'not cloaked') |
+      # light (reduced-strength CPU, if the worker offers it) | queue (placeholder).
+      fallback-mode: "${MEDIA_POISONING_FALLBACK_MODE:skip}"
+      # the served thumbnail sizes to ALSO poison so no clean derivative exists
+      # (akkoma 'small'; Matrix 240x240 — enumerated + pinned). Comma list -> List.
+      thumbnail-sizes: "${MEDIA_POISONING_THUMBNAIL_SIZES:small,240x240}"
+      # hard per-job latency budget (ms) for the worker poison/survival calls.
+      timeout-ms: "${MEDIA_POISONING_TIMEOUT_MS:120000}"
+      # short /health probe timeout (ms) so capability queries never hang.
+      health-timeout-ms: "${MEDIA_POISONING_HEALTH_TIMEOUT_MS:2000}"
+      # max accepted upload size (bytes); a larger part is a clean 400.
+      max-upload-bytes: "${MEDIA_POISONING_MAX_UPLOAD_BYTES:20971520}"
+      # the OPTIONAL snapdragon-media-poisoner worker (x86/GPU heavy tier). BLANK ⇒
+      # no worker wired ⇒ capability reports backend=none ⇒ lean fallback. k8s
+      # protocol-probe of the Service /health, NO Eureka/Config/Task.
+      worker-url: "${MEDIA_POISONING_WORKER_URL:}"
+    # The REAL homeserver upload + served-byte re-fetch goes through the EXISTING
+    # mTLS proxies (akkoma-proxy:4443 / tuwunel-proxy:4443, ssl_verify_client on) —
+    # NEVER by mounting the RWO media PVCs. The BFF presents its cluster-CA client
+    # identity (the same SNAPDRAGON_MTLS_CLIENT_* stores as federation) and forwards
+    # the caller bearer only as far as the BFF. Default-OFF per platform so
+    # local/dev/CI (no proxy/stores) wires null clients ⇒ forward-through.
+    proxy:
+      mastodon:
+        enabled: "${MEDIA_PROXY_MASTODON_ENABLED:false}"
+        base-url: "${MEDIA_PROXY_MASTODON_BASE_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"
+      matrix:
+        enabled: "${MEDIA_PROXY_MATRIX_ENABLED:false}"
+        base-url: "${MEDIA_PROXY_MATRIX_BASE_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
+
+# Multipart limits for the media-proxy /upload (bounded in-memory hold of the bytes
+# the BFF cloaks-then-forwards). Aligned with app.media.poisoning.max-upload-bytes.
+spring.http.codecs.max-in-memory-size: "${MEDIA_POISONING_MAX_UPLOAD_BYTES:20971520}"
+spring.webflux.multipart:
+  max-in-memory-size: "${MEDIA_MULTIPART_MAX_IN_MEMORY:262144}"
+  max-disk-usage-per-part: "${MEDIA_POISONING_MAX_UPLOAD_BYTES:20971520}"
+  max-parts: 16
+
 # SpringDoc OpenAPI. The spec at /v3/api-docs is the source the platform
 # ng-openapi-gen typed client (the paired snapdragon-user-ui) + the docs pipeline
 # consume. Spec + UI are gated by SecurityConfig: permitAll under dev/test (so
