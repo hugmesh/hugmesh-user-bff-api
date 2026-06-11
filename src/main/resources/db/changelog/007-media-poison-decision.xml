@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        media_poison_decision — the SERVER-OWNED source of truth for an upload's
+        AI-cloak decision + outcome. Written by the BFF media-proxy on every
+        /bff/user/media/upload, owner-keyed by the Casdoor JWT subject.
+
+        WHY server-owned (not UI-only): the default-on-unless-opted-out claim must
+        be auditable and the badge/repost must not be able to lie. The UI sends a
+        `mode`; the BFF reads + PERSISTS it on the upload request so the absence of a
+        later call can never silently lose the decision, and a boost re-serves the
+        already-cloaked bytes recorded here. This row is the audit trail, the badge
+        source, and the repost source of truth.
+
+        HONEST status vocabulary (the badge never says 'protected' unless it survived
+        the homeserver round-trip):
+          • protected — the perturbation SURVIVED the post-ingest round-trip check
+                         (re-fetched served original + thumbnails still carry it);
+          • degraded  — cloak was applied but washed out by the homeserver
+                         re-encode/downscale (best-effort failed the survival gate);
+          • skipped   — the poisoner worker was ABSENT (heavy tier not present) and
+                        the fallback forwarded the bytes through UNCLOAKED (UI warns
+                        'not cloaked');
+          • none      — the user opted out (mode=none) or the media is non-image, so
+                        no cloak was ever attempted — forwarded through unchanged;
+          • pending / failed — transient states (job submitted / worker errored).
+
+        Columns (owner-keyed, one row per decision):
+          • id         — app-generated UUID (portable INSERT across Postgres + H2).
+          • user_id    — Casdoor JWT subject (owner); never from the request body.
+          • platform   — {matrix|mastodon} (the homeserver the upload targets).
+          • media_ref  — the homeserver media id / mxc the upload produced (the badge
+                         + repost key). NULL only on a pre-upload failure.
+          • mode       — the chosen cloak {glaze|nightshade|light|none}.
+          • status     — the outcome (vocabulary above).
+          • backend    — the worker backend that ran {cuda|rocm|cpu|none} (honesty:
+                         a weaker backend is shown 'light', never bare 'protected').
+          • created_at — when the decision was recorded.
+
+        CHECK constraints give DB-level parity with the API-enforced vocabularies
+        (same pattern as 005): plain ANSI `col IN (...)` runs identically on
+        production Postgres AND the H2 PostgreSQL-compat slice DB. Changeset id 007
+        follows 006.
+    -->
+
+    <changeSet id="007-1-media-poison-decision" author="snapdragon">
+        <createTable tableName="media_poison_decision">
+            <column name="id" type="varchar(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="platform" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="media_ref" type="varchar(512)"/>
+            <column name="mode" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="varchar(24)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="backend" type="varchar(16)"/>
+            <column name="created_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- Owner + media_ref lookup index for the status/badge + already-cloaked
+         repost-guard reads (find my decision for a media_ref). -->
+    <changeSet id="007-2-media-poison-decision-index" author="snapdragon">
+        <createIndex tableName="media_poison_decision" indexName="idx_media_poison_owner_ref">
+            <column name="user_id"/>
+            <column name="media_ref"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="media_poison_decision" indexName="idx_media_poison_owner_ref"/>
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced platform vocabulary {matrix|mastodon}. -->
+    <changeSet id="007-3-media-poison-platform-check" author="snapdragon">
+        <sql>
+            ALTER TABLE media_poison_decision
+                ADD CONSTRAINT ck_media_poison_platform
+                CHECK (platform IN ('matrix', 'mastodon'))
+        </sql>
+        <rollback>
+            ALTER TABLE media_poison_decision DROP CONSTRAINT ck_media_poison_platform
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced mode vocabulary {glaze|nightshade|light|none}. -->
+    <changeSet id="007-4-media-poison-mode-check" author="snapdragon">
+        <sql>
+            ALTER TABLE media_poison_decision
+                ADD CONSTRAINT ck_media_poison_mode
+                CHECK (mode IN ('glaze', 'nightshade', 'light', 'none'))
+        </sql>
+        <rollback>
+            ALTER TABLE media_poison_decision DROP CONSTRAINT ck_media_poison_mode
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the honest status vocabulary. -->
+    <changeSet id="007-5-media-poison-status-check" author="snapdragon">
+        <sql>
+            ALTER TABLE media_poison_decision
+                ADD CONSTRAINT ck_media_poison_status
+                CHECK (status IN ('protected', 'degraded', 'skipped', 'none', 'pending', 'failed'))
+        </sql>
+        <rollback>
+            ALTER TABLE media_poison_decision DROP CONSTRAINT ck_media_poison_status
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
