@@ -20,7 +20,7 @@ a write to another user.
 ### Profile — `ProfileController` (`/bff/user/profile`)
 Own R2DBC `user_profile` table (one row per user; `user_id` = JWT subject = PK).
 Fields: `gender, pronouns, timezone, displayName, visibility {public|internal}
-(default internal), vanitySubdomainEnabled`.
+(default internal), vanitySubdomainEnabled, screenReaderName`.
 
 - `GET /bff/user/profile` — my profile (an empty default if none yet).
 - `PUT /bff/user/profile` — create/update my profile (body `userId` ignored).
@@ -30,6 +30,18 @@ Fields: `gender, pronouns, timezone, displayName, visibility {public|internal}
 
 Password + email are owned by the **Casdoor IdP**, not this BFF — they go through
 a reactive `CasdoorUserClient` (the BFF never stores credentials). See deferrals.
+
+**`displayName` guard** — charset/confusable-checked on every save (zero-width / bidi
+/ reserved-confusable rejected with 400; `@SafeDisplayName`).
+
+**`screenReaderName` (a11y)** — the ASCII-only aria-label / spoken name a screen reader
+announces (`@SafeScreenReaderName` + the `ScreenReaderNames` engine; 008
+`screen_reader_name` column). When `displayName` is pure **ASCII** the screen-reader
+name **defaults** to it (no prompt); when `displayName` is **non-ASCII** an ASCII
+screen-reader name is **required** — a save without one is a **422** the
+registration/profile-save flow uses to prompt. A present non-ASCII screen-reader name
+is a 400. (The aria-label UI consumption is a later UI-wave task — this carries the
+field + validation + default/prompt logic.)
 
 ### Home-guide preference — `HomeGuideController` (`/bff/user/home-guide`)
 Per-user "getting-started guide dismissed" flag, keyed per guide, stored in the
@@ -66,14 +78,40 @@ ts`).
   (`kind=instance-block`; federation sets `status=recommended` server-side). This
   is a *recommendation*, not a self-block.
 
+### Connected apps & devices — `ConnectedClientsController` (`/bff/user/connected-clients`)
+The caller's native OAuth apps (Element / Tusky / Ivory) + device sessions registered
+against the homeservers (akkoma / Matrix) **through the gateway passthrough**. Own
+R2DBC `connected_client_audit` table (`owner, platform {matrix|mastodon}, client_kind
+{oauth-app|device}, external_ref, label, created_at, revoked_at`; 009). The live
+homeserver sessions are listed/revoked via the homeserver client API **through the
+mTLS proxy** (a GATED stub-seam, never hard-fail); the audit row is the BFF-owned
+durable record.
+
+**EXTERNAL-CLIENT-ROLE GATE** — this surface requires an external-client role
+(`ROLE_MATRIX_EXTERNAL_CLIENT` / `ROLE_MASTODON_EXTERNAL_CLIENT`), which is **separate**
+from the base `ROLE_MATRIX` / `ROLE_MASTODON` our-UI access: the external-client role
+gates whether a user may register/use a **native** client. Class-level `@PreAuthorize`
+(API leg) + a per-platform service re-check (service leg). The roles map automatically
+via the Casdoor authorities converter — no converter change.
+
+- `GET /bff/user/connected-clients` — my connected apps + device sessions.
+- `DELETE /bff/user/connected-clients/{id}` — revoke one of mine: write the
+  **per-credential** gateway revocation key `hs:<platform>:<localpart>:<appId|deviceId>`
+  first (`RevocationWriter`), best-effort homeserver delete, then stamp `revoked_at`.
+
+Removing the external-client role → `ConnectedClientsService.reconcilePersonalClient
+Revocation` writes `external-client:<localpart>:<platform>` (the gateway filter checks
+it only for `kind=personal` tokens, so base our-UI access is unaffected).
+
 ## Where data lives (the routing rule)
 
 | Concern | Destination |
 | --- | --- |
-| Profile fields, home-guide prefs, self-block rows | **own R2DBC tables** (`user_profile`, `user_preference`, `user_block`) |
+| Profile fields (incl. screenReaderName), home-guide prefs, self-block rows, connected-client audit | **own R2DBC tables** (`user_profile`, `user_preference`, `user_block`, `connected_client_audit`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
-| External mute/block push | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients (STUBBED) |
+| External mute/block push, connected-client list/revoke | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients via the mTLS proxy (STUBBED/gated) |
+| Homeserver-token revocation keys | **gateway revocation list** (`RevocationWriter`, gated stub-seam until the gateway write endpoint ships) |
 
 ## Clients
 

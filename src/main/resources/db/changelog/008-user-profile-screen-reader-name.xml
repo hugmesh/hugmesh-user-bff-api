@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        user_profile.screen_reader_name — the a11y SCREEN-READER NAME (the aria-label
+        a screen reader announces for the user). It exists ALONGSIDE display_name:
+        a display_name may legitimately carry non-ASCII (emoji, scripts a screen
+        reader mispronounces / drops), so the screen-reader name is the ASCII-safe
+        spoken form.
+
+        Rules (mirrored in code — @SafeScreenReaderName + ProfileService):
+          • ASCII-ONLY, no special/zero-width/bidi/control characters (so a screen
+            reader announces a clean, pronounceable name and a homograph can't be
+            smuggled into the aria-label);
+          • when the display_name is itself pure ASCII the screen-reader name DEFAULTS
+            to it (no prompt); when the display_name is NON-ASCII the user is PROMPTED
+            for a screen-reader name (a 422 on the profile-save flow until one is set).
+
+        Nullable text (an absent screen-reader name is valid — the read side falls back
+        to the display_name when both are ASCII). Owner-keyed via the table PK; no new
+        CHECK is added because the allowed charset is open-ended ASCII-printable rather
+        than a small fixed vocabulary — the API-layer validator owns it (same posture
+        as display_name, which is @SafeDisplayName-guarded with no DB CHECK). Changeset
+        id 008 follows the current max (006 on main).
+    -->
+
+    <changeSet id="008-user-profile-screen-reader-name" author="snapdragon">
+        <addColumn tableName="user_profile">
+            <!-- ASCII-only spoken/aria-label name; NULL when not yet set (the read
+                 side defaults from display_name when that is ASCII). -->
+            <column name="screen_reader_name" type="varchar(255)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

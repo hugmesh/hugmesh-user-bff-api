@@ -76,10 +76,16 @@ class ProfileServiceConfusableGuardTest {
 
     @Test
     void displayName_normal_isAllowed() {
-        UserProfile body = new UserProfile("sub-ok", null, null, null, "Anna Müller", "internal", false);
+        // "Anna Müller" is non-ASCII (the ü), so the a11y flow now requires an ASCII
+        // screen-reader name (a 422 prompt otherwise — covered by
+        // ProfileServiceScreenReaderNameTest). Supply one so THIS test isolates the
+        // displayName confusable guard: a normal display name is not rejected by it.
+        UserProfile body = new UserProfile("sub-ok", null, null, null, "Anna Müller",
+                "internal", false, null, "Anna Mueller");
         UserProfile saved = profiles.save("sub-ok", body).block();
         assertThat(saved.displayName()).isEqualTo("Anna Müller");
         assertThat(repo.find("sub-ok").block().displayName()).isEqualTo("Anna Müller");
+        assertThat(saved.screenReaderName()).isEqualTo("Anna Mueller");
     }
 
     // ---- GAP 1: the save(owner, body) overload now applies the guard ----

@@ -3,6 +3,7 @@ package systems.snapdragon.userbff.profile;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.userbff.web.ScreenReaderNames;
 
 /**
  * Owner-enforced profile operations. EVERY method takes the caller's id
@@ -73,16 +74,30 @@ public class ProfileService {
      * overloads converge here) — a zero-width / bidi / format code point or a
      * reserved-confusable display name ({@code admin}, Cyrillic {@code аdmin}) is
      * rejected with 400. See {@link #guardDisplayName(String)}.
+     *
+     * <p>SCREEN-READER NAME (a11y): the spoken/aria-label name is DEFAULTED from the
+     * display name when the display name is pure ASCII (no prompt). When the display
+     * name is NON-ASCII and no usable ASCII screen-reader name was supplied, the save
+     * is REJECTED with 422 so the registration/profile-save flow prompts for one (see
+     * {@link ScreenReaderNames}). Its ASCII charset is also re-checked here (service
+     * leg) alongside the {@code @SafeScreenReaderName} API-leg constraint.
      */
     public Mono<UserProfile> save(String owner, String username, UserProfile body) {
         requireOwner(owner);
         UserProfile owned = (body == null ? UserProfile.empty(owner) : body)
                 .withOwner(owner)
-                .withVanityUsername(username);
+                .withVanityUsername(username)
+                .withDefaultedScreenReaderName();
 
         ApiException displayNameViolation = guardDisplayName(owned.displayName());
         if (displayNameViolation != null) {
             return Mono.error(displayNameViolation);
+        }
+
+        ApiException screenReaderViolation = guardScreenReaderName(
+                owned.displayName(), owned.screenReaderName());
+        if (screenReaderViolation != null) {
+            return Mono.error(screenReaderViolation);
         }
 
         boolean wantsVanity = owned.vanitySubdomainEnabled();
@@ -140,6 +155,36 @@ public class ProfileService {
                     "displayName '" + displayName + "' is confusable with a reserved platform "
                             + "name and cannot be used (it would impersonate a platform service "
                             + "or role)");
+        }
+        return null;
+    }
+
+    /**
+     * The screen-reader-name guard (the a11y default/prompt floor). After the service
+     * defaults the screen-reader name from an ASCII display name
+     * ({@link UserProfile#withDefaultedScreenReaderName()}), this enforces:
+     * <ul>
+     *   <li>a PRESENT screen-reader name must be ASCII-only + free of invisibles (400)
+     *       — defence-in-depth alongside the {@code @SafeScreenReaderName} API leg;</li>
+     *   <li>a NON-ASCII display name with NO usable screen-reader name is a 422 PROMPT
+     *       (the registration/profile-save flow must collect an ASCII spoken name).</li>
+     * </ul>
+     *
+     * @return a 400/422 {@link ApiException} to fail with, or {@code null} when the
+     *         screen-reader name is acceptable (defaulted, supplied-and-valid, or not
+     *         required).
+     */
+    static ApiException guardScreenReaderName(String displayName, String screenReaderName) {
+        if (screenReaderName != null && !screenReaderName.isBlank()
+                && !ScreenReaderNames.isSafeScreenReaderName(screenReaderName)) {
+            return ApiException.badRequest(
+                    "screenReaderName must be ASCII-only with no special, invisible, or "
+                            + "control characters (it is the name a screen reader announces)");
+        }
+        if (ScreenReaderNames.requiresScreenReaderName(displayName, screenReaderName)) {
+            return ApiException.unprocessable(
+                    "displayName '" + displayName + "' is not plain ASCII, so a screenReaderName "
+                            + "(an ASCII spoken/aria-label name) is required");
         }
         return null;
     }
