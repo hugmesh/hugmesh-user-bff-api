@@ -21,6 +21,11 @@
               roles / access_suspension / revocation keys; @Scheduled auto-clear)
         007 — media_poison_decision (server-owned AI-cloak decision + outcome for
               the BFF media-proxy: audit + badge + repost source of truth)
+        008 — user_profile.screen_reader_name (ASCII-only a11y aria-label name;
+              defaults from an ASCII display_name, prompted when display_name is
+              non-ASCII)
+        009 — connected_client_audit (owner-scoped record of the user's OAuth apps /
+              device sessions on the homeservers + revoke audit)
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -30,4 +35,6 @@
     <include file="db/changelog/005-enum-check-constraints.xml"/>
     <include file="db/changelog/006-self-silence.xml"/>
     <include file="db/changelog/007-media-poison-decision.xml"/>
+    <include file="db/changelog/008-user-profile-screen-reader-name.xml"/>
+    <include file="db/changelog/009-connected-client-audit.xml"/>
 </databaseChangeLog>

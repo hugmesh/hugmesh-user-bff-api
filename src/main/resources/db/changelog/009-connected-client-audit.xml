@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        connected_client_audit — owner-scoped AUDIT of the user's CONNECTED APPS &
+        DEVICES: the native OAuth apps (Element / Tusky / Ivory …) + device sessions
+        the user has registered against the homeservers (akkoma / Matrix) THROUGH the
+        gateway passthrough, plus the record of a revoke.
+
+        The homeservers remain the live source of truth for the actual sessions (the
+        BFF lists/revokes them via the homeserver client API through the mTLS proxy —
+        a GATED stub-seam, never hard-fail). This table is the BFF-OWNED audit row: it
+        records what was seen/registered + when a credential was revoked, so a revoke
+        is durable + auditable independent of the (eventually-consistent, ~5s) gateway
+        revocation-list propagation.
+
+        Columns (owner-keyed):
+          • id          — app-generated UUID PK (portable INSERT on Postgres + H2).
+          • owner       — Casdoor JWT subject (the user); every read/write is scoped
+                          to it so a caller only ever sees/revokes their OWN clients.
+          • platform    — matrix|mastodon (the homeserver the credential lives on).
+          • client_kind — oauth-app|device (an OAuth application grant vs a login
+                          device session).
+          • external_ref— the homeserver-side id (appId / deviceId) the revoke targets
+                          + the per-credential revocation key is keyed by.
+          • label       — human-friendly name (client app name / device display name).
+          • created_at  — when this audit row was first recorded.
+          • revoked_at  — stamped when the user revoked the credential (NULL = active).
+
+        CHECK vocabularies (platform, client_kind) are plain ANSI `col IN (...)` so the
+        same DDL runs on production Postgres AND the H2 PostgreSQL-compat slice DB. Each
+        constraint has an explicit rollback. Changeset id 009 follows 008.
+    -->
+
+    <changeSet id="009-1-connected-client-audit" author="snapdragon">
+        <createTable tableName="connected_client_audit">
+            <column name="id" type="varchar(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="owner" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="platform" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="client_kind" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="external_ref" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="label" type="varchar(512)"/>
+            <column name="created_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="revoked_at" type="timestamp"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="009-2-connected-client-audit-platform-check" author="snapdragon">
+        <sql>
+            ALTER TABLE connected_client_audit
+                ADD CONSTRAINT ck_connected_client_platform
+                CHECK (platform IN ('matrix', 'mastodon'))
+        </sql>
+        <rollback>
+            ALTER TABLE connected_client_audit DROP CONSTRAINT ck_connected_client_platform
+        </rollback>
+    </changeSet>
+
+    <changeSet id="009-3-connected-client-audit-kind-check" author="snapdragon">
+        <sql>
+            ALTER TABLE connected_client_audit
+                ADD CONSTRAINT ck_connected_client_kind
+                CHECK (client_kind IN ('oauth-app', 'device'))
+        </sql>
+        <rollback>
+            ALTER TABLE connected_client_audit DROP CONSTRAINT ck_connected_client_kind
+        </rollback>
+    </changeSet>
+
+    <!-- The owner+active scan (list a user's not-yet-revoked clients) is the hot path. -->
+    <changeSet id="009-4-connected-client-audit-owner-index" author="snapdragon">
+        <createIndex tableName="connected_client_audit" indexName="idx_connected_client_owner">
+            <column name="owner"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="connected_client_audit" indexName="idx_connected_client_owner"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

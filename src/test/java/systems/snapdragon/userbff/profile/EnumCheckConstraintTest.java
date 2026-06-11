@@ -15,7 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * DB-LEVEL enum/domain CHECK slice test over H2 (PostgreSQL-compat) with the REAL
  * Liquibase changelog applied (TestDatabaseConfig → changeset 005's CHECK
- * constraints {@code ck_user_profile_visibility} + {@code ck_user_block_platform}).
+ * constraints {@code ck_user_profile_visibility} + {@code ck_user_block_platform}, and
+ * changeset 009's {@code ck_connected_client_platform} + {@code ck_connected_client_kind}).
  * Proves the DB rejects the SAME out-of-vocabulary values the API rejects with a
  * 400 — the parity backstop. Raw {@link DatabaseClient} INSERTs so the assertion is
  * the constraint itself, not any application-layer filter.
@@ -77,6 +78,62 @@ class EnumCheckConstraintTest {
                     .fetch().rowsUpdated().block();
         }
         assertThat(count("user_block", "user_id = 'u1'")).isEqualTo(3L);
+    }
+
+    // ---- connected_client_audit.platform (009) ----
+
+    @ParameterizedTest
+    @ValueSource(strings = {"internal", "MATRIX", "telegram", "", "irc"})
+    void badConnectedClientPlatform_isRejectedByCheckConstraint(String platform) {
+        StepVerifier.create(
+                        db.sql("INSERT INTO connected_client_audit "
+                                        + "(id, owner, platform, client_kind, external_ref, created_at) "
+                                        + "VALUES (:id, 'u1', :p, 'device', 'ref', now())")
+                                .bind("id", "cc-p-" + platform.hashCode())
+                                .bind("p", platform)
+                                .fetch().rowsUpdated())
+                .expectError()
+                .verify();
+    }
+
+    @Test
+    void validConnectedClientPlatform_isAccepted() {
+        for (String p : new String[] {"matrix", "mastodon"}) {
+            db.sql("INSERT INTO connected_client_audit "
+                            + "(id, owner, platform, client_kind, external_ref, created_at) "
+                            + "VALUES (:id, 'cc-u', :p, 'device', 'ref', now())")
+                    .bind("id", "cc-ok-" + p).bind("p", p)
+                    .fetch().rowsUpdated().block();
+        }
+        assertThat(count("connected_client_audit", "owner = 'cc-u'")).isEqualTo(2L);
+    }
+
+    // ---- connected_client_audit.client_kind (009) ----
+
+    @ParameterizedTest
+    @ValueSource(strings = {"app", "OAUTH-APP", "session", "", "token"})
+    void badConnectedClientKind_isRejectedByCheckConstraint(String kind) {
+        StepVerifier.create(
+                        db.sql("INSERT INTO connected_client_audit "
+                                        + "(id, owner, platform, client_kind, external_ref, created_at) "
+                                        + "VALUES (:id, 'u1', 'matrix', :k, 'ref', now())")
+                                .bind("id", "cc-k-" + kind.hashCode())
+                                .bind("k", kind)
+                                .fetch().rowsUpdated())
+                .expectError()
+                .verify();
+    }
+
+    @Test
+    void validConnectedClientKind_isAccepted() {
+        for (String k : new String[] {"oauth-app", "device"}) {
+            db.sql("INSERT INTO connected_client_audit "
+                            + "(id, owner, platform, client_kind, external_ref, created_at) "
+                            + "VALUES (:id, 'cc-k-u', 'mastodon', :k, 'ref', now())")
+                    .bind("id", "cc-kok-" + k).bind("k", k)
+                    .fetch().rowsUpdated().block();
+        }
+        assertThat(count("connected_client_audit", "owner = 'cc-k-u'")).isEqualTo(2L);
     }
 
     private Long count(String table, String where) {

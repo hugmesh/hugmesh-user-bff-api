@@ -24,4 +24,11 @@ public class ApiException extends RuntimeException {
     public static ApiException notFound(String msg)     { return new ApiException(HttpStatus.NOT_FOUND, msg); }
     public static ApiException badRequest(String msg)   { return new ApiException(HttpStatus.BAD_REQUEST, msg); }
     public static ApiException badGateway(String msg)   { return new ApiException(HttpStatus.BAD_GATEWAY, msg); }
+
+    /** 422 UNPROCESSABLE ENTITY — the request is syntactically valid but the flow
+     *  cannot proceed as-is and needs more input (used to PROMPT for a screen-reader
+     *  name when a non-ASCII display name has no ASCII spoken counterpart). */
+    public static ApiException unprocessable(String msg) {
+        return new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, msg);
+    }
 }

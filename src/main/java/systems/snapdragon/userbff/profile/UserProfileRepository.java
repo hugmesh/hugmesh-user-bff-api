@@ -31,13 +31,14 @@ public class UserProfileRepository {
                 row.get("display_name", String.class),
                 row.get("visibility", String.class),
                 Boolean.TRUE.equals(row.get("vanity_subdomain_enabled", Boolean.class)),
-                row.get("vanity_username", String.class));
+                row.get("vanity_username", String.class),
+                row.get("screen_reader_name", String.class));
     }
 
     /** The owner's profile, or empty if they have never created one. */
     public Mono<UserProfile> find(String userId) {
         return db.sql("SELECT user_id, gender, pronouns, timezone, display_name, "
-                        + "visibility, vanity_subdomain_enabled, vanity_username "
+                        + "visibility, vanity_subdomain_enabled, vanity_username, screen_reader_name "
                         + "FROM user_profile WHERE user_id = :uid")
                 .bind("uid", userId)
                 .map(UserProfileRepository::map).first();
@@ -51,14 +52,16 @@ public class UserProfileRepository {
     public Mono<UserProfile> save(UserProfile p) {
         var spec = db.sql("UPDATE user_profile SET gender = :g, pronouns = :pr, timezone = :tz, "
                         + "display_name = :dn, visibility = :vis, vanity_subdomain_enabled = :vse, "
-                        + "vanity_username = :vu, updated_at = now() WHERE user_id = :uid")
+                        + "vanity_username = :vu, screen_reader_name = :srn, updated_at = now() "
+                        + "WHERE user_id = :uid")
                 .bind("uid", p.userId())
                 .bind("vis", p.visibility())
                 .bind("vse", p.vanitySubdomainEnabled())
                 .bind("g", nz(p.gender()))
                 .bind("pr", nz(p.pronouns()))
                 .bind("tz", nz(p.timezone()))
-                .bind("dn", nz(p.displayName()));
+                .bind("dn", nz(p.displayName()))
+                .bind("srn", nz(p.screenReaderName()));
         spec = bindVanityUsername(spec, p);
         return spec.fetch().rowsUpdated()
                 .flatMap(updated -> updated > 0 ? Mono.just(p) : insert(p));
@@ -66,15 +69,16 @@ public class UserProfileRepository {
 
     private Mono<UserProfile> insert(UserProfile p) {
         var spec = db.sql("INSERT INTO user_profile (user_id, gender, pronouns, timezone, display_name, "
-                        + "visibility, vanity_subdomain_enabled, vanity_username, updated_at) "
-                        + "VALUES (:uid, :g, :pr, :tz, :dn, :vis, :vse, :vu, now())")
+                        + "visibility, vanity_subdomain_enabled, vanity_username, screen_reader_name, updated_at) "
+                        + "VALUES (:uid, :g, :pr, :tz, :dn, :vis, :vse, :vu, :srn, now())")
                 .bind("uid", p.userId())
                 .bind("vis", p.visibility())
                 .bind("vse", p.vanitySubdomainEnabled())
                 .bind("g", nz(p.gender()))
                 .bind("pr", nz(p.pronouns()))
                 .bind("tz", nz(p.timezone()))
-                .bind("dn", nz(p.displayName()));
+                .bind("dn", nz(p.displayName()))
+                .bind("srn", nz(p.screenReaderName()));
         spec = bindVanityUsername(spec, p);
         return spec.fetch().rowsUpdated()
                 .thenReturn(p);
