@@ -47,6 +47,27 @@
       <version>2.7.0</version>
     </dependency>
 
+    <!-- ICU4J — Unicode confusable/skeleton folding (SpoofChecker.getSkeleton +
+         RESTRICTION_LEVEL/CONFUSABLE) for the username/displayName impersonation
+         guard. PINNED to an EXACT version: ICU confusable skeletons are NOT stable
+         across releases, so the version is a deliberate, audited pin — never let it
+         float. The skeleton produced here is a RECOMPUTABLE CACHE used only for
+         defence-in-depth rejection at this layer; it is NEVER a unique DB identity
+         (the exact-username UNIQUE + the 004 vanity_username CHECK remain the real
+         DB backstop). Same pin used by the federation/actions/admin-bff copies. -->
+    <dependency>
+      <groupId>com.ibm.icu</groupId>
+      <artifactId>icu4j</artifactId>
+      <version>77.1</version>
+    </dependency>
+    <!-- commons-text — Damerau/Levenshtein edit-distance for the (reserved-set only)
+         typo-squat tier of the confusable guard. -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-text</artifactId>
+      <version>1.13.0</version>
+    </dependency>
+
     <!-- Reactive data access: R2DBC for all runtime reads/writes (user_profile,
          user_preference, user_block). -->
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-r2dbc</artifactId></dependency>

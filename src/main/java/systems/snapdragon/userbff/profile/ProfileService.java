@@ -42,10 +42,13 @@ public class ProfileService {
      * Create/update the OWNER's profile. The owner is forced onto the row so the
      * request body's {@code userId} can never redirect the write to another user.
      *
-     * <p>Back-compat overload — used where no username is threaded through (the
-     * vanity guard then only applies if the body itself opts into a public/vanity
-     * profile with a username that can't be derived, which it can't, so this never
-     * sets a vanity_username). Prefer {@link #save(String, String, UserProfile)}.
+     * <p>Back-compat overload — no username is threaded through, so the vanity
+     * RESERVED-USERNAME guard cannot fire (there is no DNS label to reserve). It does
+     * NOT skip the {@code displayName} charset/confusable guard, which runs on EVERY
+     * path so an impersonation displayName ({@code admin}, a zero-width / Cyrillic
+     * look-alike) cannot be smuggled in via this overload. Prefer
+     * {@link #save(String, String, UserProfile)} which ALSO applies the reserved
+     * username guard. (See {@code save(owner, username, body)}.)
      */
     public Mono<UserProfile> save(String owner, UserProfile body) {
         return save(owner, null, body);
@@ -59,9 +62,17 @@ public class ProfileService {
      *
      * <p>RESERVED-USERNAME GUARD: enabling the vanity subdomain (or making the
      * profile public) is REJECTED with 400 when the caller's username is a reserved
-     * label ({@link ReservedNames}), because {@code <username>.snapdragon.systems}
-     * would collide with a dedicated app route. When allowed + vanity-enabled, the
-     * normalized username is mirrored into {@code vanity_username} (DB-CHECK-backed).
+     * label ({@link ReservedNames}) OR a CONFUSABLE of one ({@code 4dmin~admin},
+     * {@code akk0ma~akkoma} — {@link UsernameSkeleton#isReservedConfusable}), because
+     * {@code <username>.snapdragon.systems} would collide with (or impersonate) a
+     * dedicated app route. When allowed + vanity-enabled, the normalized username is
+     * mirrored into {@code vanity_username} (DB-CHECK-backed).
+     *
+     * <p>DISPLAYNAME GUARD: {@code displayName} is free text but is the human-visible
+     * impersonation surface, so it is charset/confusable-checked on EVERY save (both
+     * overloads converge here) — a zero-width / bidi / format code point or a
+     * reserved-confusable display name ({@code admin}, Cyrillic {@code аdmin}) is
+     * rejected with 400. See {@link #guardDisplayName(String)}.
      */
     public Mono<UserProfile> save(String owner, String username, UserProfile body) {
         requireOwner(owner);
@@ -69,15 +80,68 @@ public class ProfileService {
                 .withOwner(owner)
                 .withVanityUsername(username);
 
+        ApiException displayNameViolation = guardDisplayName(owned.displayName());
+        if (displayNameViolation != null) {
+            return Mono.error(displayNameViolation);
+        }
+
         boolean wantsVanity = owned.vanitySubdomainEnabled();
         boolean wantsPublic = "public".equals(owned.visibility());
-        if ((wantsVanity || wantsPublic) && ReservedNames.isReserved(username)) {
-            return Mono.error(ApiException.badRequest(
-                    "username '" + username + "' is a reserved platform name and cannot be "
-                            + "used as a vanity subdomain or public profile (it would collide "
-                            + "with a dedicated app route)"));
+        if (wantsVanity || wantsPublic) {
+            if (ReservedNames.isReserved(username)) {
+                return Mono.error(ApiException.badRequest(
+                        "username '" + username + "' is a reserved platform name and cannot be "
+                                + "used as a vanity subdomain or public profile (it would collide "
+                                + "with a dedicated app route)"));
+            }
+            // Reserved-CONFUSABLE: a look-alike of a reserved label (4dmin, akk0ma,
+            // ad-min, Cyrillic admin) is rejected too — fail CLOSED, never weakening
+            // the exact reserved rule above, only widening it.
+            if (UsernameSkeleton.isReservedConfusable(username)) {
+                return Mono.error(ApiException.badRequest(
+                        "username '" + username + "' is confusable with a reserved platform name "
+                                + "and cannot be used as a vanity subdomain or public profile"));
+            }
         }
         return repo.save(owned);
+    }
+
+    /**
+     * The displayName charset + confusable guard (GAP 2 of the impersonation design).
+     * {@code displayName} is {@code @Size(max=255)} free text in {@link UserProfile}
+     * with no other constraint, yet it is the actual human-visible impersonation
+     * vector, so it is guarded on every save:
+     * <ul>
+     *   <li>REJECT any zero-width / bidi-control / format (Cf) / default-ignorable
+     *       code point — these have no place in a visible name and are a classic
+     *       homograph-smuggling vector;</li>
+     *   <li>REJECT a value that is CONFUSABLE with a reserved platform label (so a
+     *       user cannot set their display name to {@code admin}, {@code 4dmin}, or a
+     *       Cyrillic look-alike to impersonate the platform / staff).</li>
+     * </ul>
+     * User-vs-user displayName collisions are NOT hard-rejected here (the design
+     * leaves those to a soft flag-for-review); this guard is the hard charset +
+     * reserved-impersonation floor.
+     *
+     * @return a 400 {@link ApiException} to fail with, or {@code null} when the
+     *         displayName is acceptable (or absent).
+     */
+    static ApiException guardDisplayName(String displayName) {
+        if (displayName == null || displayName.isBlank()) {
+            return null;
+        }
+        if (UsernameSkeleton.hasForbiddenInvisible(displayName)) {
+            return ApiException.badRequest(
+                    "displayName must not contain zero-width, bidirectional, or format "
+                            + "control characters");
+        }
+        if (UsernameSkeleton.isReservedConfusable(displayName)) {
+            return ApiException.badRequest(
+                    "displayName '" + displayName + "' is confusable with a reserved platform "
+                            + "name and cannot be used (it would impersonate a platform service "
+                            + "or role)");
+        }
+        return null;
     }
 
     public Mono<Void> delete(String owner) {
