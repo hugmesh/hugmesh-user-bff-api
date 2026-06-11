@@ -23,9 +23,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  *       instance-block (status set to recommended server-side) — the chain start
  *       of USER -&gt; MOD -&gt; ADMIN instance blocking.</li>
  * </ul>
- *
- * <p>(Eureka client auto-activates from spring-cloud-starter-netflix-eureka-client
- * on the classpath but is off by default — opt-in via the {@code eureka} profile.)
  */
 @SpringBootApplication
 public class UserBffApplication {

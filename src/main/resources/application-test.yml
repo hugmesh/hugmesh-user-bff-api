@@ -12,13 +12,6 @@ spring:
       - org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration
   liquibase:
     enabled: false
-  cloud:
-    compatibility-verifier:
-      enabled: false
-
-eureka:
-  client:
-    enabled: false
 
 casdoor:
   account:
