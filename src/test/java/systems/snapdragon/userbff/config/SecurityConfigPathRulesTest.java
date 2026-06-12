@@ -11,6 +11,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import systems.snapdragon.userbff.security.DomainRegistry;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -49,7 +50,7 @@ class Probes {
  * </ul>
  */
 @WebFluxTest(controllers = Probes.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, DomainRegistry.class})
 class SecurityConfigPathRulesTest {
 
     @Autowired WebTestClient client;
@@ -92,6 +93,14 @@ class SecurityConfigPathRulesTest {
     @Test
     void apiDocs_allowedForAdmin_inProd() {
         client.mutateWith(mockJwt().authorities(authorities("ROLE_USER", "ROLE_ADMIN")))
+                .get().uri("/v3/api-docs").exchange().expectStatus().isOk();
+    }
+
+    @Test
+    void apiDocs_allowedForSuperadmin_inProd() {
+        // SUPERADMIN (the cross-domain infra super-role) also reaches the admin-gated
+        // spec surface — the spec gate is hasAnyRole(ADMIN, SUPERADMIN).
+        client.mutateWith(mockJwt().authorities(authorities("ROLE_USER", "ROLE_SUPERADMIN")))
                 .get().uri("/v3/api-docs").exchange().expectStatus().isOk();
     }
 

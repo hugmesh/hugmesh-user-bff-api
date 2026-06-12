@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import reactor.core.publisher.Flux;
+import systems.snapdragon.userbff.security.CasdoorAuthorities;
+import systems.snapdragon.userbff.security.DomainRegistry;
 
 import java.time.Instant;
 import java.util.List;
@@ -12,14 +14,23 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit test for the Casdoor JWT → authority converter (same logic as
- * snapdragon-admin-bff-api / snapdragon-gateway): ROLE_USER floor; roles (string or
- * {name}) → ROLE_<UPPER>; permissions verbatim; isAdmin → ROLE_ADMIN.
+ * Unit test for the Casdoor JWT → authority converter (the canonical
+ * {@link CasdoorAuthorities}, COPIED from snapdragon-gateway): ROLE_USER floor;
+ * roles (string or {name}) → ROLE_&lt;UPPER&gt;; permissions verbatim MINUS the
+ * reserved-prefix injection guard; isAdmin → ROLE_ADMIN; plus exactly one
+ * issuer-derived DOMAIN_&lt;x&gt; authority.
+ *
+ * <p>USER-SITUATIONAL: a single token's claim → authority mapping. The CROSS-USER
+ * authority-injection regressions (forged {@code permissions:["DOMAIN_other"]} /
+ * {@code ["ROLE_SUPERADMIN"]}) live in {@code CasdoorAuthoritiesInjectionTest}.
  */
 class SecurityConfigConverterTest {
 
+    /** Single-issuer registry (no config): every token → DOMAIN_default. */
+    private static final DomainRegistry SINGLE = new DomainRegistry("", "");
+
     private List<String> authorities(Jwt jwt) {
-        return SecurityConfig.casdoorAuthoritiesConverter()
+        return CasdoorAuthorities.converter(SINGLE)
                 .convert(jwt)
                 .map(GrantedAuthority::getAuthority)
                 .collectList()
@@ -33,14 +44,15 @@ class SecurityConfigConverterTest {
     }
 
     @Test
-    void floorIsRoleUser() {
-        assertThat(authorities(base().build())).containsExactly("ROLE_USER");
+    void floorIsRoleUserPlusDomain() {
+        assertThat(authorities(base().build()))
+                .containsExactlyInAnyOrder("ROLE_USER", "DOMAIN_default");
     }
 
     @Test
     void stringRolesBecomeRolePrefixedUppercase() {
         Jwt jwt = base().claim("roles", List.of("admin", "mod")).build();
-        assertThat(authorities(jwt)).contains("ROLE_USER", "ROLE_ADMIN", "ROLE_MOD");
+        assertThat(authorities(jwt)).contains("ROLE_USER", "ROLE_ADMIN", "ROLE_MOD", "DOMAIN_default");
     }
 
     @Test
@@ -63,7 +75,7 @@ class SecurityConfigConverterTest {
 
     @Test
     void converterReturnsFlux() {
-        Flux<GrantedAuthority> flux = SecurityConfig.casdoorAuthoritiesConverter().convert(base().build());
+        Flux<GrantedAuthority> flux = CasdoorAuthorities.converter(SINGLE).convert(base().build());
         assertThat(flux.collectList().block()).isNotEmpty();
     }
 }
