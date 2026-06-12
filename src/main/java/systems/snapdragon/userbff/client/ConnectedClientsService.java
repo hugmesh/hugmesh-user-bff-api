@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.web.ApiException;
 
 import java.util.List;
@@ -68,10 +69,17 @@ public class ConnectedClientsService {
      * with NO external-client role gets only their durable audit rows (no live read) —
      * they cannot drive a homeserver client-API read they're not entitled to.
      */
-    public Flux<ConnectedClient> list(String owner, String localpart, String bearer, Set<String> callerRoles) {
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    public Flux<ConnectedClient> list(String owner, String localpart, String bearer,
+                                      Set<String> callerRoles) {
+        return list(owner, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    }
+
+    public Flux<ConnectedClient> list(String owner, String localpart, String bearer, String domain,
+                                      Set<String> callerRoles) {
         requireOwner(owner);
         Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
-        Flux<ConnectedClient> audited = repo.listForOwner(owner);
+        Flux<ConnectedClient> audited = repo.listForOwner(owner, domain);
         Flux<ConnectedClient> live = Flux.fromIterable(clientsByPlatform.values())
                 .filter(c -> roles.contains(externalClientRoleFor(c.platform())))
                 .flatMap(c -> c.list(localpart, bearer)
@@ -91,11 +99,17 @@ public class ConnectedClientsService {
      * platform is required (service leg). Owner-AND-id scoped (a 404 for a non-owner /
      * unknown / already-revoked id).
      */
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
                                             Set<String> callerRoles) {
+        return revoke(owner, id, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    }
+
+    public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
+                                            String domain, Set<String> callerRoles) {
         requireOwner(owner);
         Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
-        return repo.find(owner, id)
+        return repo.find(owner, id, domain)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no such connected client for this user")))
                 .flatMap(client -> {
                     if (!client.active()) {
@@ -107,7 +121,7 @@ public class ConnectedClientsService {
                     }
                     return revocations.revokeConnectedClient(client.platform(), localpart, client.externalRef())
                             .flatMap(keyWritten -> revokeUpstream(localpart, bearer, client)
-                                    .flatMap(upstream -> repo.revoke(owner, id)
+                                    .flatMap(upstream -> repo.revoke(owner, id, domain)
                                             .map(stamped -> result(client, keyWritten, upstream, stamped))));
                 });
     }

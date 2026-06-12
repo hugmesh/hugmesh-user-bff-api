@@ -11,6 +11,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.web.ApiException;
 
 import java.util.LinkedHashMap;
@@ -48,10 +49,13 @@ public class MediaPoisonController {
 
     private final MediaPoisonService service;
     private final MediaPoisoningProperties props;
+    private final PrincipalDomain principalDomain;
 
-    public MediaPoisonController(MediaPoisonService service, MediaPoisoningProperties props) {
+    public MediaPoisonController(MediaPoisonService service, MediaPoisoningProperties props,
+                                 PrincipalDomain principalDomain) {
         this.service = service;
         this.props = props;
+        this.principalDomain = principalDomain;
     }
 
     @Operation(summary = "Upload media through the cloak proxy (poison-then-forward).",
@@ -68,12 +72,13 @@ public class MediaPoisonController {
             @RequestPart(value = "description", required = false) String description) {
 
         String owner = jwt.getSubject();
+        String domain = principalDomain.forScope(jwt);
         String filename = file.filename();
         MediaType partType = file.headers().getContentType();
         String declaredType = partType == null ? null : partType.toString();
 
         return readBounded(file, props.getMaxUploadBytes())
-                .flatMap(bytes -> service.upload(owner, platform, mode, bytes, filename, declaredType))
+                .flatMap(bytes -> service.upload(owner, platform, mode, bytes, filename, declaredType, domain))
                 .map(outcome -> {
                     // Return the homeserver body EXACTLY as the homeserver would (UI compose
                     // logic untouched) + a server-owned cloak block the badge reads from.
@@ -109,7 +114,7 @@ public class MediaPoisonController {
     @GetMapping("/status/{ref}")
     public Mono<MediaPoisonDecision> status(@AuthenticationPrincipal Jwt jwt,
                                             @PathVariable String ref) {
-        return service.status(jwt.getSubject(), ref);
+        return service.status(jwt.getSubject(), ref, principalDomain.forScope(jwt));
     }
 
     /**

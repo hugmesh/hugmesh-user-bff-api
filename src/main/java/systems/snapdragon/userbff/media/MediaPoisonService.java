@@ -9,6 +9,7 @@ import systems.snapdragon.userbff.media.MediaPoisoningProperties.FallbackMode;
 import systems.snapdragon.userbff.media.PoisonModels.Backend;
 import systems.snapdragon.userbff.media.PoisonModels.Health;
 import systems.snapdragon.userbff.media.PoisonModels.PoisonResult;
+import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.web.ApiException;
 
 import java.util.List;
@@ -74,8 +75,16 @@ public class MediaPoisonService {
      * subject (never a body field). {@code requestedMode} is the UI's choice; the
      * service resolves the effective mode + honest status server-side.
      */
+    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
     public Mono<UploadOutcome> upload(String owner, String platform, String requestedMode,
                                       byte[] bytes, String filename, String declaredContentType) {
+        return upload(owner, platform, requestedMode, bytes, filename, declaredContentType,
+                DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    public Mono<UploadOutcome> upload(String owner, String platform, String requestedMode,
+                                      byte[] bytes, String filename, String declaredContentType,
+                                      String domain) {
         requireOwner(owner);
         if (!MediaPoisonDecision.validPlatform(platform)) {
             return Mono.error(ApiException.badRequest("platform must be matrix|mastodon"));
@@ -102,16 +111,16 @@ public class MediaPoisonService {
         if ("none".equals(mode) || !props.isEnabled() || !isImage) {
             String why = !isImage ? "non-image" : ("none".equals(mode) ? "opt-out" : "feature-off");
             log.info("[media] forward-through ({}) platform={} owner={}", why, platform, owner);
-            return forwardThrough(owner, platform, mode, "none", null, bytes, filename, contentType);
+            return forwardThrough(owner, platform, mode, "none", null, bytes, filename, contentType, domain);
         }
 
         // Probe the worker once: ABSENT ⇒ lean fallback; PRESENT ⇒ cloak.
         return worker.capability().flatMap(health -> {
             Backend backend = Backend.parse(health.backend());
             if (!backend.present()) {
-                return leanFallback(owner, platform, mode, bytes, filename, contentType);
+                return leanFallback(owner, platform, mode, bytes, filename, contentType, domain);
             }
-            return cloakThenForward(owner, platform, mode, backend, bytes, filename, contentType);
+            return cloakThenForward(owner, platform, mode, backend, bytes, filename, contentType, domain);
         });
     }
 
@@ -123,12 +132,13 @@ public class MediaPoisonService {
      * recorded so telemetry distinguishes the gap.
      */
     private Mono<UploadOutcome> leanFallback(String owner, String platform, String mode,
-                                             byte[] bytes, String filename, String contentType) {
+                                             byte[] bytes, String filename, String contentType,
+                                             String domain) {
         FallbackMode fb = props.fallback();
         log.warn("[media] heavy tier ABSENT — fallback={} ⇒ forward UNCLOAKED platform={} owner={}",
                 fb, platform, owner);
         return forwardThrough(owner, platform, mode, "skipped", Backend.NONE.wire(),
-                bytes, filename, contentType);
+                bytes, filename, contentType, domain);
     }
 
     /**
@@ -138,13 +148,13 @@ public class MediaPoisonService {
      */
     private Mono<UploadOutcome> cloakThenForward(String owner, String platform, String mode,
                                                  Backend probed, byte[] bytes, String filename,
-                                                 String contentType) {
+                                                 String contentType, String domain) {
         return worker.poison(bytes, mode, filename, contentType, props.getThumbnailSizes())
                 .flatMap(result -> {
                     if (result == null || !result.ok() || result.poisonedOriginal() == null) {
                         log.warn("[media] worker poison failed/empty ⇒ forward original, status=failed");
                         return forwardThrough(owner, platform, mode, "failed",
-                                backendOf(result, probed), bytes, filename, contentType);
+                                backendOf(result, probed), bytes, filename, contentType, domain);
                     }
                     Backend ran = Backend.parse(result.backend());
                     Backend backend = ran.present() ? ran : probed;
@@ -152,14 +162,14 @@ public class MediaPoisonService {
                     return homeserver.upload(platform, poisoned, filename, contentType)
                             .flatMap(hs -> survivalGate(platform, mode, poisoned, result, hs)
                                     .flatMap(survived -> record(owner, platform, mediaRef(platform, hs),
-                                            mode, survived ? "protected" : "degraded", backend.wire())
+                                            mode, survived ? "protected" : "degraded", backend.wire(), domain)
                                             .map(dec -> new UploadOutcome(hs, dec))));
                 })
                 // poison() emitted empty (no worker wired despite a present probe) ⇒ skip
                 // honestly. DEFERRED so the forward-through upload only runs on the empty
                 // path (not eagerly at assembly time).
                 .switchIfEmpty(Mono.defer(() -> forwardThrough(owner, platform, mode, "skipped",
-                        probed.wire(), bytes, filename, contentType)));
+                        probed.wire(), bytes, filename, contentType, domain)));
     }
 
     /**
@@ -193,15 +203,15 @@ public class MediaPoisonService {
     /** Record-only forward-through: upload the bytes unchanged, record the decision. */
     private Mono<UploadOutcome> forwardThrough(String owner, String platform, String mode,
                                                String status, String backend, byte[] bytes,
-                                               String filename, String contentType) {
+                                               String filename, String contentType, String domain) {
         return homeserver.upload(platform, bytes, filename, contentType)
-                .flatMap(hs -> record(owner, platform, mediaRef(platform, hs), mode, status, backend)
+                .flatMap(hs -> record(owner, platform, mediaRef(platform, hs), mode, status, backend, domain)
                         .map(dec -> new UploadOutcome(hs, dec)));
     }
 
     private Mono<MediaPoisonDecision> record(String owner, String platform, String mediaRef,
-                                             String mode, String status, String backend) {
-        return repo.record(owner, platform, mediaRef, mode, status, backend)
+                                             String mode, String status, String backend, String domain) {
+        return repo.record(owner, platform, mediaRef, mode, status, backend, domain)
                 .doOnSuccess(d -> log.info("[media] decision recorded owner={} platform={} ref={} mode={} status={} backend={}",
                         owner, platform, mediaRef, mode, status, backend));
     }
@@ -211,10 +221,16 @@ public class MediaPoisonService {
         return worker.capability();
     }
 
-    /** The caller's most-recent decision for a media ref (badge poll), owner-scoped. */
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<MediaPoisonDecision> status(String owner, String mediaRef) {
+        return status(owner, mediaRef, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** The caller's most-recent decision for a media ref (badge poll), owner-AND-domain
+     *  scoped ({@code domain} null = SUPERADMIN cross-domain bypass). */
+    public Mono<MediaPoisonDecision> status(String owner, String mediaRef, String domain) {
         requireOwner(owner);
-        return repo.findByOwnerAndRef(owner, mediaRef)
+        return repo.findByOwnerAndRef(owner, mediaRef, domain)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no decision for this media")));
     }
 

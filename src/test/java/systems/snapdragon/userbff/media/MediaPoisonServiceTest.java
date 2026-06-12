@@ -67,7 +67,9 @@ class MediaPoisonServiceTest {
         service = new MediaPoisonService(repo, worker, homeserver, props);
 
         // the repository echoes a decision back (id + ts filled) so outcomes carry status.
-        when(repo.record(anyString(), anyString(), any(), anyString(), anyString(), any()))
+        // The 7th arg is the domain (server-derived); the upload back-compat overload
+        // used by these tests passes the platform 'default' domain.
+        when(repo.record(anyString(), anyString(), any(), anyString(), anyString(), any(), anyString()))
                 .thenAnswer(inv -> Mono.just(new MediaPoisonDecision(
                         "dec-id", inv.getArgument(0), inv.getArgument(1), inv.getArgument(2),
                         inv.getArgument(3), inv.getArgument(4), inv.getArgument(5), Instant.now())));
@@ -88,7 +90,7 @@ class MediaPoisonServiceTest {
         assertThat(out.homeserver()).containsEntry("id", "media-77");
         verify(worker, never()).capability();
         verify(worker, never()).poison(any(), any(), any(), any(), any());
-        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("none"), eq("none"), any());
+        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("none"), eq("none"), any(), eq("default"));
     }
 
     @Test
@@ -114,7 +116,7 @@ class MediaPoisonServiceTest {
         assertThat(out.decision().status()).isEqualTo("skipped");
         assertThat(out.decision().backend()).isEqualTo("none");
         verify(worker, never()).poison(any(), any(), any(), any(), any());
-        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("skipped"), eq("none"));
+        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("skipped"), eq("none"), eq("default"));
     }
 
     @Test
@@ -137,7 +139,7 @@ class MediaPoisonServiceTest {
         // the REAL homeserver upload used the POISONED bytes, not the original.
         verify(homeserver).upload(eq("mastodon"), uploaded.capture(), any(), any());
         assertThat(new String(uploaded.getValue())).isEqualTo("CLOAKED");
-        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("protected"), eq("cuda"));
+        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("protected"), eq("cuda"), eq("default"));
     }
 
     @Test
@@ -155,7 +157,7 @@ class MediaPoisonServiceTest {
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("degraded");
-        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("degraded"), eq("rocm"));
+        verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("degraded"), eq("rocm"), eq("default"));
     }
 
     @Test
@@ -200,7 +202,7 @@ class MediaPoisonServiceTest {
 
     @Test
     void status_ownerScoped_notFoundWhenAbsent() {
-        when(repo.findByOwnerAndRef(eq("alice"), eq("ref-x"))).thenReturn(Mono.empty());
+        when(repo.findByOwnerAndRef(eq("alice"), eq("ref-x"), eq("default"))).thenReturn(Mono.empty());
         assertThatThrownBy(() -> service.status("alice", "ref-x").block())
                 .isInstanceOf(ApiException.class);
     }

@@ -65,12 +65,12 @@ class BlockControllerPlatformRoleTest {
                 .bodyValue(Map.of("target", "@spammer:evil", "platform", "matrix"))
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(blocks, never()).block(anyString(), anyString(), anyString(), any());
+        verify(blocks, never()).block(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
     void matrixBlock_withRoleMatrix_reachesService() {
-        when(blocks.block(eq("alice"), eq("@ok:host"), eq("matrix"), any()))
+        when(blocks.block(eq("alice"), eq("@ok:host"), eq("matrix"), any(), any()))
                 .thenReturn(Mono.just(Map.of("pushed", false)));
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice"))
                         .authorities(authorities("ROLE_USER", "ROLE_MATRIX")))
@@ -91,12 +91,12 @@ class BlockControllerPlatformRoleTest {
                 .bodyValue(Map.of("target", "@spammer@evil", "platform", "mastodon"))
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(blocks, never()).block(anyString(), anyString(), anyString(), any());
+        verify(blocks, never()).block(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
     void mastodonBlock_withRoleMastodon_reachesService() {
-        when(blocks.block(eq("bob"), eq("@ok@host"), eq("mastodon"), any()))
+        when(blocks.block(eq("bob"), eq("@ok@host"), eq("mastodon"), any(), any()))
                 .thenReturn(Mono.just(Map.of("pushed", false)));
         client.mutateWith(mockJwt().jwt(j -> j.subject("bob"))
                         .authorities(authorities("ROLE_USER", "ROLE_MASTODON")))
@@ -111,7 +111,7 @@ class BlockControllerPlatformRoleTest {
 
     @Test
     void internalBlock_needsOnlyRoleUserFloor() {
-        when(blocks.block(eq("alice"), eq("someone"), eq("internal"), any()))
+        when(blocks.block(eq("alice"), eq("someone"), eq("internal"), any(), any()))
                 .thenReturn(Mono.just(Map.of("pushed", false)));
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                 .post().uri("/bff/user/blocks")

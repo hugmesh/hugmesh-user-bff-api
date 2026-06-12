@@ -95,6 +95,14 @@ class SecurityConfigPathRulesTest {
                 .get().uri("/v3/api-docs").exchange().expectStatus().isOk();
     }
 
+    @Test
+    void apiDocs_allowedForSuperadmin_inProd() {
+        // SUPERADMIN (the cross-domain infra super-role) also reaches the admin-gated
+        // spec surface — the spec gate is hasAnyRole(ADMIN, SUPERADMIN).
+        client.mutateWith(mockJwt().authorities(authorities("ROLE_USER", "ROLE_SUPERADMIN")))
+                .get().uri("/v3/api-docs").exchange().expectStatus().isOk();
+    }
+
     private static Collection<GrantedAuthority> authorities(String... names) {
         List<GrantedAuthority> out = new ArrayList<>();
         for (String n : names) out.add(new SimpleGrantedAuthority(n));

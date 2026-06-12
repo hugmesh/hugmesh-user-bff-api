@@ -84,7 +84,7 @@ class ValidationEndpointTest {
                 .expectBody()
                 .jsonPath("$.error").isEqualTo("validation failed")
                 .jsonPath("$.fields.target").exists();
-        verify(blockService, never()).block(any(), any(), any(), any());
+        verify(blockService, never()).block(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -95,12 +95,12 @@ class ValidationEndpointTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.platform").exists();
-        verify(blockService, never()).block(any(), any(), any(), any());
+        verify(blockService, never()).block(any(), any(), any(), any(), any());
     }
 
     @Test
     void createBlock_valid_is2xx() {
-        when(blockService.block(any(), anyString(), any(), any()))
+        when(blockService.block(any(), anyString(), any(), any(), any()))
                 .thenReturn(Mono.just(Map.of("ok", true)));
         // matrix platform -> the @PreAuthorize gate needs ROLE_MATRIX (platformUser()).
         platformUser().post().uri("/bff/user/blocks")
@@ -108,7 +108,7 @@ class ValidationEndpointTest {
                 .bodyValue("{\"target\":\"@evil:host\",\"platform\":\"matrix\"}")
                 .exchange()
                 .expectStatus().is2xxSuccessful();
-        verify(blockService).block(any(), anyString(), any(), any());
+        verify(blockService).block(any(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -144,19 +144,19 @@ class ValidationEndpointTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.visibility").exists();
-        verify(profileService, never()).save(anyString(), any(), any());
+        verify(profileService, never()).save(anyString(), any(), any(), any());
     }
 
     @Test
     void upsertProfile_validVisibility_is2xx() {
-        when(profileService.save(anyString(), any(), any()))
+        when(profileService.save(anyString(), any(), any(), any()))
                 .thenReturn(Mono.empty());
         user().put().uri("/bff/user/profile")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"visibility\":\"public\",\"vanitySubdomainEnabled\":false}")
                 .exchange()
                 .expectStatus().is2xxSuccessful();
-        verify(profileService).save(anyString(), any(), any());
+        verify(profileService).save(anyString(), any(), any(), any());
     }
 
     @Test

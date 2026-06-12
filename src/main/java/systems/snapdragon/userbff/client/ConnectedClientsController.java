@@ -12,6 +12,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.web.ValidationPatterns;
 
 import java.util.Map;
@@ -52,9 +53,11 @@ import java.util.stream.Collectors;
 public class ConnectedClientsController {
 
     private final ConnectedClientsService clients;
+    private final PrincipalDomain principalDomain;
 
-    public ConnectedClientsController(ConnectedClientsService clients) {
+    public ConnectedClientsController(ConnectedClientsService clients, PrincipalDomain principalDomain) {
         this.clients = clients;
+        this.principalDomain = principalDomain;
     }
 
     @Operation(summary = "List my connected apps + device sessions (owner = JWT subject). Requires an external-client role.")
@@ -62,8 +65,9 @@ public class ConnectedClientsController {
     public Flux<ConnectedClient> mine(@AuthenticationPrincipal Jwt jwt) {
         String localpart = localpart(jwt);
         String bearer = homeserverBearer(jwt);
+        String domain = principalDomain.forScope(jwt);
         return callerRoles().flatMapMany(roles ->
-                clients.list(jwt.getSubject(), localpart, bearer, roles));
+                clients.list(jwt.getSubject(), localpart, bearer, domain, roles));
     }
 
     @Operation(summary = "Revoke one of my connected clients (per-credential gateway key + best-effort homeserver delete + audit stamp).")
@@ -73,8 +77,9 @@ public class ConnectedClientsController {
             @PathVariable @Pattern(regexp = ValidationPatterns.BLOCK_ID, message = "id must be a UUID") String id) {
         String localpart = localpart(jwt);
         String bearer = homeserverBearer(jwt);
+        String domain = principalDomain.forScope(jwt);
         return callerRoles().flatMap(roles ->
-                        clients.revoke(jwt.getSubject(), id, localpart, bearer, roles))
+                        clients.revoke(jwt.getSubject(), id, localpart, bearer, domain, roles))
                 .map(ResponseEntity::ok);
     }
 

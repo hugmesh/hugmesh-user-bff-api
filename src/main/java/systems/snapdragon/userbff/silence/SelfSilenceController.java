@@ -13,6 +13,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 
 import java.time.Instant;
 import java.util.Map;
@@ -47,9 +48,11 @@ import java.util.Map;
 public class SelfSilenceController {
 
     private final SelfSilenceService silence;
+    private final PrincipalDomain principalDomain;
 
-    public SelfSilenceController(SelfSilenceService silence) {
+    public SelfSilenceController(SelfSilenceService silence, PrincipalDomain principalDomain) {
         this.silence = silence;
+        this.principalDomain = principalDomain;
     }
 
     /**
@@ -70,13 +73,14 @@ public class SelfSilenceController {
     @PostMapping("/self-silence/activate")
     public Mono<SelfSilence> activate(@AuthenticationPrincipal Jwt jwt,
                                       @Valid @RequestBody ActivateRequest body) {
-        return silence.activate(jwt.getSubject(), localpart(jwt), body.expiresAt(), body.reason());
+        return silence.activate(jwt.getSubject(), localpart(jwt), body.expiresAt(), body.reason(),
+                principalDomain.forScope(jwt));
     }
 
     @Operation(summary = "My self-silence status (active or cleared).")
     @GetMapping("/self-silence/status")
     public Mono<ResponseEntity<SelfSilence>> status(@AuthenticationPrincipal Jwt jwt) {
-        return silence.status(jwt.getSubject())
+        return silence.status(jwt.getSubject(), principalDomain.forScope(jwt))
                 .map(ResponseEntity::ok)
                 .defaultIfEmpty(ResponseEntity.noContent().build());
     }
@@ -84,7 +88,7 @@ public class SelfSilenceController {
     @Operation(summary = "Cancel my self-silence now (un-hide + clear).")
     @PostMapping("/self-silence/cancel")
     public Mono<ResponseEntity<Void>> cancel(@AuthenticationPrincipal Jwt jwt) {
-        return silence.cancel(jwt.getSubject(), localpart(jwt))
+        return silence.cancel(jwt.getSubject(), localpart(jwt), principalDomain.forScope(jwt))
                 .thenReturn(ResponseEntity.noContent().<Void>build());
     }
 
@@ -92,7 +96,8 @@ public class SelfSilenceController {
     @PostMapping("/self-silence/email-mod")
     public Mono<Map<String, Object>> emailMod(@AuthenticationPrincipal Jwt jwt,
                                               @Valid @RequestBody EmailModRequest body) {
-        return silence.requestEarlyReactivation(jwt.getSubject(), body.reason());
+        return silence.requestEarlyReactivation(jwt.getSubject(), body.reason(),
+                principalDomain.forScope(jwt));
     }
 
     /**

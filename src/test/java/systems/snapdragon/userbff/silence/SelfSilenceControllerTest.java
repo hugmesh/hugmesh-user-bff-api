@@ -22,6 +22,7 @@ import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -66,7 +67,7 @@ class SelfSilenceControllerTest {
 
     @Test
     void activate_ownerIsJwtSubject() {
-        when(silence.activate(anyString(), anyString(), any(), any()))
+        when(silence.activate(anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Mono.just(new SelfSilence("alice", Instant.now(), soon(), null, "x", Instant.now())));
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
                         .authorities(authorities("ROLE_USER")))
@@ -76,7 +77,7 @@ class SelfSilenceControllerTest {
                 .exchange()
                 .expectStatus().isOk();
         verify(silence).activate(org.mockito.ArgumentMatchers.eq("alice"),
-                org.mockito.ArgumentMatchers.eq("alice"), any(), any());
+                org.mockito.ArgumentMatchers.eq("alice"), any(), any(), any());
     }
 
     @Test
@@ -87,13 +88,13 @@ class SelfSilenceControllerTest {
                 .bodyValue(Map.of("expiresAt", Instant.now().minusSeconds(60).toString()))
                 .exchange()
                 .expectStatus().isBadRequest();
-        verify(silence, never()).activate(anyString(), anyString(), any(), any());
+        verify(silence, never()).activate(anyString(), anyString(), any(), any(), any());
     }
 
     @Test
     void status_silencedUser_stillReachesOwnEndpoint_accessUnchanged() {
         // A self-silenced principal is NOT gated from their own surface: status 200.
-        when(silence.status("alice"))
+        when(silence.status(eq("alice"), any()))
                 .thenReturn(Mono.just(new SelfSilence("alice", Instant.now(), soon(), null, "afk", Instant.now())));
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                 .get().uri("/bff/user/self-silence/status")
@@ -105,7 +106,7 @@ class SelfSilenceControllerTest {
 
     @Test
     void cancel_returnsNoContent() {
-        when(silence.cancel("alice", "alice")).thenReturn(Mono.empty());
+        when(silence.cancel(eq("alice"), eq("alice"), any())).thenReturn(Mono.empty());
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
                         .authorities(authorities("ROLE_USER")))
                 .post().uri("/bff/user/self-silence/cancel")
@@ -115,7 +116,7 @@ class SelfSilenceControllerTest {
 
     @Test
     void emailMod_writesReactivationRequest() {
-        when(silence.requestEarlyReactivation("alice", "please"))
+        when(silence.requestEarlyReactivation(eq("alice"), eq("please"), any()))
                 .thenReturn(Mono.just(Map.of("requested", true)));
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                 .post().uri("/bff/user/self-silence/email-mod")

@@ -15,6 +15,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.web.ValidationPatterns;
 
 import java.util.Map;
@@ -65,9 +66,11 @@ import java.util.stream.Collectors;
 public class BlockController {
 
     private final BlockService blocks;
+    private final PrincipalDomain principalDomain;
 
-    public BlockController(BlockService blocks) {
+    public BlockController(BlockService blocks, PrincipalDomain principalDomain) {
         this.blocks = blocks;
+        this.principalDomain = principalDomain;
     }
 
     /**
@@ -92,7 +95,7 @@ public class BlockController {
     @Operation(summary = "List my self-blocks.")
     @GetMapping("/blocks")
     public Flux<UserBlock> mine(@AuthenticationPrincipal Jwt jwt) {
-        return blocks.list(jwt.getSubject());
+        return blocks.list(jwt.getSubject(), principalDomain.forScope(jwt));
     }
 
     /**
@@ -111,7 +114,8 @@ public class BlockController {
     public Mono<Map<String, Object>> block(@AuthenticationPrincipal Jwt jwt,
                                            @Valid @RequestBody BlockRequest body) {
         return callerRoles().flatMap(roles ->
-                blocks.block(jwt.getSubject(), body.target(), body.platform(), roles));
+                blocks.block(jwt.getSubject(), body.target(), body.platform(),
+                        principalDomain.forScope(jwt), roles));
     }
 
     @Operation(summary = "Remove one of my self-blocks (scoped to me + id).")
@@ -119,7 +123,8 @@ public class BlockController {
     public Mono<ResponseEntity<Void>> unblock(@AuthenticationPrincipal Jwt jwt,
                                               @PathVariable @Pattern(regexp = ValidationPatterns.BLOCK_ID,
                                                       message = "id must be a UUID") String id) {
-        return blocks.unblock(jwt.getSubject(), id).thenReturn(ResponseEntity.noContent().build());
+        return blocks.unblock(jwt.getSubject(), id, principalDomain.forScope(jwt))
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     /**
