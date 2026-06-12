@@ -39,4 +39,10 @@ public final class ValidationPatterns {
     /** A guide name / pref-key segment: alnum + hyphen, 1-64 chars (no ':' so it
      *  can't smuggle a second key segment into the composite preference key). */
     public static final String PREF_KEY_SEGMENT = "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$";
+
+    /** A durable preferences-store key (the {@code user_preferences_store.pref_key}):
+     *  dotted/alnum/hyphen segments, e.g. {@code media.poison.default}. Bounded to
+     *  the varchar(128) column; starts/ends with an alnum so it can't be blank or a
+     *  bare separator, and carries no whitespace/quotes so it stays a safe key. */
+    public static final String PREF_STORE_KEY = "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$";
 }
