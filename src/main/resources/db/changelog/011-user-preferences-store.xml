@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        011 — user_preferences_store: the DURABLE per-user UI preferences store the
+        /bff/user/preferences endpoint reads/upserts.
+
+        DISTINCT from the legacy 002 user_preference (which is the internal home-guide
+        key/value store with a (user_id, pref_key) PK and a 'default'-backfilled domain
+        column added in 010). This NEW store is domain-FIRST: the brand the row belongs
+        to is part of the COMPOSITE PRIMARY KEY (user_id, pref_key, domain), derived
+        SERVER-SIDE from the validated token issuer (DOMAIN_<x>) — NEVER a request
+        field. So the SAME owner id (one person reachable across brands) keeps a
+        SEPARATE preference per brand and the owner+domain pair is unique-by-construction
+        (the upsert is a true PK upsert, not a "find-then-insert" race window).
+
+        WHY a new table (not reuse 002): 002's PK is (user_id, pref_key) — one row per
+        owner+key across ALL domains, so a multi-brand owner could only hold ONE value
+        platform-wide. The UI-wave preferences (the per-user media.poison.default the
+        mastodon/matrix compose toggle persists, future per-user UI prefs) MUST be
+        per-brand durable + owner-isolated, which needs domain in the PK.
+
+        Columns (owner+domain-keyed, one row per (owner, key, brand)):
+          • user_id    — Casdoor JWT subject (owner); never from the request body.
+          • pref_key   — the preference key (e.g. 'media.poison.default'). A bounded
+                         dotted/alnum token (API-validated to ValidationPatterns).
+          • pref_value — the preference value (portable text; e.g. a cloak mode).
+          • domain     — the brand/tenant (DOMAIN_<x>), DEFAULT 'default', NOT NULL.
+          • updated_at — last upsert time.
+
+        DEFAULT 'default' + NOT NULL + plain ANSI DDL runs identically on production
+        Postgres AND the H2 PostgreSQL-compat slice DB. Changeset id 011 follows 010.
+    -->
+
+    <changeSet id="011-1-user-preferences-store" author="snapdragon">
+        <createTable tableName="user_preferences_store">
+            <column name="user_id" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pref_key" type="varchar(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pref_value" type="varchar(1024)"/>
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <!-- owner+key+brand is unique by construction so the upsert is a real PK
+             upsert (one durable row per owner per key per brand). -->
+        <addPrimaryKey tableName="user_preferences_store"
+                       columnNames="user_id, pref_key, domain"
+                       constraintName="pk_user_preferences_store"/>
+    </changeSet>
+
+    <!-- The owner+domain list scan (GET /bff/user/preferences returns ALL of a
+         caller's prefs in their brand) is the hot read path. -->
+    <changeSet id="011-2-user-preferences-store-index" author="snapdragon">
+        <createIndex tableName="user_preferences_store"
+                     indexName="idx_user_prefs_store_owner_domain">
+            <column name="user_id"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="user_preferences_store"
+                       indexName="idx_user_prefs_store_owner_domain"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

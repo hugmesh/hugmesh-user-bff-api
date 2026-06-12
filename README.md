@@ -79,6 +79,28 @@ visit.
 - `POST /bff/user/home-guide/dismiss?guide=<g>` (and `PUT` alias) — dismiss.
 - `DELETE /bff/user/home-guide/dismiss?guide=<g>` — re-show (un-dismiss).
 
+### Durable user preferences — `UserPreferencesController` (`/bff/user/preferences`)
+DURABLE per-user UI preferences in the own R2DBC `user_preferences_store` table,
+keyed by the JWT subject **and** the brand (domain is part of the composite PK
+`(user_id, pref_key, domain)`), so a multi-brand owner keeps a separate,
+owner-isolated value per brand. The compose surfaces (the mastodon/matrix AI-poison
+toggle) and other UI-wave toggles read/persist here so a choice survives a reload /
+device change instead of living only in the browser. Owner = JWT subject;
+domain-scoped (SUPERADMIN unscoped); `@PreAuthorize("hasRole('USER')")`. `GET`
+returns the resolved view (every stored value **plus** the server default merged in
+for any unset known preference), `PUT` upserts one preference (key + value
+validated).
+
+- `GET /bff/user/preferences` — `{ "<key>": "<value>", ... }`. Carries
+  `media.poison.default` — the per-user durable AI-poison default whose fallback
+  **mirrors** the server `MediaPoisoningProperties.defaultMode`.
+- `PUT /bff/user/preferences` — body `{ "key": ..., "value": ... }`; upserts and
+  returns the resolved view. The AI-poison default must be a valid cloak mode
+  (`glaze|nightshade|light|none`).
+
+The read-only `GET /bff/user/media/capability` `defaultMode` (the *server* policy
+default) is unchanged — this endpoint layers the per-*user* durable override on top.
+
 ### Cards — `CardsController` (`/bff/user/cards`)
 CRUD over the caller's OWN federation bundles (`user_modules` in
 `snapdragon-federation-api`), via the reactive `FederationApiClient`. The caller's
@@ -214,7 +236,7 @@ until the survival gate is verified on a real GPU cluster.
 
 | Concern | Destination |
 | --- | --- |
-| Profile fields (incl. screenReaderName), home-guide prefs, self-block rows, self-silence rows, media-poison decisions, connected-client audit | **own R2DBC tables** (`user_profile`, `user_preference`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`) |
+| Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
 | External mute/block push, self-silence directory hide, connected-client list/revoke, media upload | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients via the gateway mTLS proxy (STUBBED/gated) |
