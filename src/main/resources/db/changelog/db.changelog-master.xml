@@ -26,6 +26,11 @@
               non-ASCII)
         009 — connected_client_audit (owner-scoped record of the user's OAuth apps /
               device sessions on the homeservers + revoke audit)
+        010 — domain scoping: a `domain` column (DEFAULT 'default', NOT NULL) on every
+              owner-keyed table = the brand/tenant the row belongs to, derived
+              server-side from the validated token issuer (DOMAIN_<x>). A principal
+              only sees/mutates rows in its own domain; SUPERADMIN is unscoped.
+              Back-compat: existing rows + single-issuer clusters are all 'default'.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -37,4 +42,5 @@
     <include file="db/changelog/007-media-poison-decision.xml"/>
     <include file="db/changelog/008-user-profile-screen-reader-name.xml"/>
     <include file="db/changelog/009-connected-client-audit.xml"/>
+    <include file="db/changelog/010-domain-scoping.xml"/>
 </databaseChangeLog>

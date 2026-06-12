@@ -2,6 +2,7 @@ package systems.snapdragon.userbff.profile;
 
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.web.ApiException;
 import systems.snapdragon.userbff.web.ScreenReaderNames;
 
@@ -33,10 +34,19 @@ public class ProfileService {
         this.casdoor = casdoor;
     }
 
-    /** The owner's own profile; an empty default if they have none yet. */
+    /** The owner's own profile; an empty default if they have none yet. Back-compat
+     *  overload — scopes to the platform {@code default} domain (single-tenant). */
     public Mono<UserProfile> get(String owner) {
+        return get(owner, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** The owner's own profile within their DOMAIN; an empty default if they have
+     *  none yet. {@code domain} is the caller's validated-issuer brand (or
+     *  {@code null} for the SUPERADMIN cross-domain bypass). Owner-enforcement is
+     *  UNWEAKENED — domain is an additional predicate. */
+    public Mono<UserProfile> get(String owner, String domain) {
         requireOwner(owner);
-        return repo.find(owner).defaultIfEmpty(UserProfile.empty(owner));
+        return repo.find(owner, domain).defaultIfEmpty(UserProfile.empty(owner));
     }
 
     /**
@@ -52,7 +62,13 @@ public class ProfileService {
      * username guard. (See {@code save(owner, username, body)}.)
      */
     public Mono<UserProfile> save(String owner, UserProfile body) {
-        return save(owner, null, body);
+        return save(owner, null, body, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** Back-compat overload (no explicit domain) — scopes to the platform
+     *  {@code default} domain (single-tenant). */
+    public Mono<UserProfile> save(String owner, String username, UserProfile body) {
+        return save(owner, username, body, DomainRegistry.DEFAULT_DOMAIN);
     }
 
     /**
@@ -82,7 +98,7 @@ public class ProfileService {
      * {@link ScreenReaderNames}). Its ASCII charset is also re-checked here (service
      * leg) alongside the {@code @SafeScreenReaderName} API-leg constraint.
      */
-    public Mono<UserProfile> save(String owner, String username, UserProfile body) {
+    public Mono<UserProfile> save(String owner, String username, UserProfile body, String domain) {
         requireOwner(owner);
         UserProfile owned = (body == null ? UserProfile.empty(owner) : body)
                 .withOwner(owner)
@@ -118,7 +134,7 @@ public class ProfileService {
                                 + "and cannot be used as a vanity subdomain or public profile"));
             }
         }
-        return repo.save(owned);
+        return repo.save(owned, domain);
     }
 
     /**
@@ -189,9 +205,16 @@ public class ProfileService {
         return null;
     }
 
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Void> delete(String owner) {
+        return delete(owner, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** Delete the owner's profile within their DOMAIN ({@code null} = SUPERADMIN
+     *  cross-domain bypass). */
+    public Mono<Void> delete(String owner, String domain) {
         requireOwner(owner);
-        return repo.delete(owner);
+        return repo.delete(owner, domain);
     }
 
     /**

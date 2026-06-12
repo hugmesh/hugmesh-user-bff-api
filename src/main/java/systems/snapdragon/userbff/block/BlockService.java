@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.federation.FederationApiClient;
+import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.web.ApiException;
 
 import java.util.List;
@@ -55,9 +56,18 @@ public class BlockService {
         for (ExternalBlockClient c : clients) this.clientsByPlatform.put(c.platform(), c);
     }
 
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Flux<UserBlock> list(String owner) {
+        return list(owner, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** The owner's blocks within their DOMAIN. {@code domain} is the caller's
+     *  validated-issuer brand (or {@code null} for the SUPERADMIN cross-domain
+     *  bypass, which then sees every brand's rows). Owner-enforcement is UNWEAKENED —
+     *  domain is an additional predicate. */
+    public Flux<UserBlock> list(String owner, String domain) {
         requireOwner(owner);
-        return repo.listForOwner(owner);
+        return repo.listForOwner(owner, domain);
     }
 
     /**
@@ -72,7 +82,14 @@ public class BlockService {
      * method-level {@code @PreAuthorize}. {@code internal} (the default) needs only
      * the ROLE_USER floor. A missing platform role is a 403.
      */
-    public Mono<Map<String, Object>> block(String owner, String target, String platform, Set<String> callerRoles) {
+    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
+    public Mono<Map<String, Object>> block(String owner, String target, String platform,
+                                            Set<String> callerRoles) {
+        return block(owner, target, platform, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    }
+
+    public Mono<Map<String, Object>> block(String owner, String target, String platform,
+                                            String domain, Set<String> callerRoles) {
         requireOwner(owner);
         if (target == null || target.isBlank()) {
             return Mono.error(ApiException.badRequest("target required"));
@@ -85,7 +102,9 @@ public class BlockService {
         if (forbidden != null) {
             return Mono.error(forbidden);
         }
-        return repo.add(owner, target.trim(), p)
+        // The row is stamped with the caller's DOMAIN (server-derived from the
+        // validated issuer), so the block lands in the caller's own brand.
+        return repo.add(owner, target.trim(), p, domain)
                 .flatMap(saved -> pushExternal(owner, saved)
                         .map(pushed -> result(saved, pushed)));
     }
@@ -123,9 +142,14 @@ public class BlockService {
                 });
     }
 
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Void> unblock(String owner, String id) {
+        return unblock(owner, id, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    public Mono<Void> unblock(String owner, String id, String domain) {
         requireOwner(owner);
-        return repo.delete(owner, id).flatMap(deleted -> deleted > 0
+        return repo.delete(owner, id, domain).flatMap(deleted -> deleted > 0
                 ? Mono.empty()
                 : Mono.error(ApiException.notFound("no such block for this user")));
     }

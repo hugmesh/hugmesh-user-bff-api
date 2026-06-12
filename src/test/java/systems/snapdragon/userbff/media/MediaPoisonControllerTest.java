@@ -86,14 +86,14 @@ class MediaPoisonControllerTest {
                 .bodyValue(multipart("mastodon", "glaze").build())
                 .exchange()
                 .expectStatus().isUnauthorized();
-        verify(service, never()).upload(any(), any(), any(), any(), any(), any());
+        verify(service, never()).upload(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void upload_authenticatedUser_returnsHomeserverBodyPlusCloakBlock() {
         MediaPoisonDecision dec = new MediaPoisonDecision("dec-1", "alice", "mastodon",
                 "media-77", "glaze", "protected", "cuda", Instant.now());
-        when(service.upload(eq("alice"), eq("mastodon"), eq("glaze"), any(), anyString(), any()))
+        when(service.upload(eq("alice"), eq("mastodon"), eq("glaze"), any(), anyString(), any(), any()))
                 .thenReturn(Mono.just(new UploadOutcome(
                         Map.of("id", "media-77", "url", "/media/orig.png"), dec)));
 
@@ -111,7 +111,7 @@ class MediaPoisonControllerTest {
                 .jsonPath("$.cloak.mode").isEqualTo("glaze")
                 .jsonPath("$.cloak.backend").isEqualTo("cuda");
 
-        verify(service).upload(eq("alice"), eq("mastodon"), eq("glaze"), any(), eq("a.png"), any());
+        verify(service).upload(eq("alice"), eq("mastodon"), eq("glaze"), any(), eq("a.png"), any(), any());
     }
 
     // ── capability ──────────────────────────────────────────
@@ -156,7 +156,7 @@ class MediaPoisonControllerTest {
     void status_authenticated_delegatesToOwnerScopedLookup() {
         MediaPoisonDecision dec = new MediaPoisonDecision("dec-1", "alice", "mastodon",
                 "media-77", "glaze", "protected", "cuda", Instant.now());
-        when(service.status(eq("alice"), eq("media-77"))).thenReturn(Mono.just(dec));
+        when(service.status(eq("alice"), eq("media-77"), any())).thenReturn(Mono.just(dec));
 
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                 .get().uri("/bff/user/media/status/media-77")
@@ -165,12 +165,12 @@ class MediaPoisonControllerTest {
                 .expectBody()
                 .jsonPath("$.status").isEqualTo("protected");
 
-        verify(service).status("alice", "media-77");
+        verify(service).status(eq("alice"), eq("media-77"), any());
     }
 
     @Test
     void status_anonymous_isUnauthorized() {
         client.get().uri("/bff/user/media/status/media-77").exchange().expectStatus().isUnauthorized();
-        verify(service, never()).status(anyString(), anyString());
+        verify(service, never()).status(anyString(), anyString(), any());
     }
 }

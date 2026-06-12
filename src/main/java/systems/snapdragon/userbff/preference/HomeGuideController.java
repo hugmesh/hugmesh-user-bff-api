@@ -9,6 +9,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.web.ValidationPatterns;
 
 import java.util.Map;
@@ -28,9 +29,11 @@ import java.util.Map;
 public class HomeGuideController {
 
     private final HomeGuideService guides;
+    private final PrincipalDomain principalDomain;
 
-    public HomeGuideController(HomeGuideService guides) {
+    public HomeGuideController(HomeGuideService guides, PrincipalDomain principalDomain) {
         this.guides = guides;
+        this.principalDomain = principalDomain;
     }
 
     @Operation(summary = "Is the named guide dismissed for me? (default guide = 'home')")
@@ -40,7 +43,7 @@ public class HomeGuideController {
                                             @Pattern(regexp = ValidationPatterns.PREF_KEY_SEGMENT,
                                                     message = "guide must be an alnum/hyphen token") String guide) {
         String g = (guide == null || guide.isBlank()) ? HomeGuideService.DEFAULT_GUIDE : guide;
-        return guides.isDismissed(jwt.getSubject(), g)
+        return guides.isDismissed(jwt.getSubject(), g, principalDomain.forScope(jwt))
                 .map(dismissed -> Map.of("guide", g, "dismissed", dismissed));
     }
 
@@ -51,7 +54,7 @@ public class HomeGuideController {
                                             @Pattern(regexp = ValidationPatterns.PREF_KEY_SEGMENT,
                                                     message = "guide must be an alnum/hyphen token") String guide) {
         String g = (guide == null || guide.isBlank()) ? HomeGuideService.DEFAULT_GUIDE : guide;
-        return guides.dismiss(jwt.getSubject(), g)
+        return guides.dismiss(jwt.getSubject(), g, principalDomain.forScope(jwt))
                 .thenReturn(Map.of("guide", g, "dismissed", true));
     }
 
@@ -69,7 +72,7 @@ public class HomeGuideController {
     public Mono<Map<String, Object>> reset(@AuthenticationPrincipal Jwt jwt,
                                            @RequestParam(value = "guide", required = false) String guide) {
         String g = (guide == null || guide.isBlank()) ? HomeGuideService.DEFAULT_GUIDE : guide;
-        return guides.reset(jwt.getSubject(), g)
+        return guides.reset(jwt.getSubject(), g, principalDomain.forScope(jwt))
                 .thenReturn(Map.of("guide", g, "dismissed", false));
     }
 }

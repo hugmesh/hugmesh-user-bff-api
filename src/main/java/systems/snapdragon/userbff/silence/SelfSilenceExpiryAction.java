@@ -84,7 +84,10 @@ public class SelfSilenceExpiryAction {
             // localpart == user_id fallback on the scheduled path (no request JWT /
             // stored localpart); the homeserver un-hide seams are best-effort + gated.
             return silence.clearHides(s.userId())
-                    .then(repo.clear(s.userId()))
+                    // SYSTEM clear (unscoped): the expiry sweep auto-clears overdue
+                    // silences across ALL brands — it is a platform task, not a
+                    // per-principal mutation. See SelfSilenceRepository.clearSystem.
+                    .then(repo.clearSystem(s.userId()))
                     .doOnSuccess(c -> { if (c > 0) log.info("[self-silence] auto-cleared expired silence for {}", s.userId()); });
         });
     }

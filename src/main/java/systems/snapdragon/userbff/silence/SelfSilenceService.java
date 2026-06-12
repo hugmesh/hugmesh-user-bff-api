@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.federation.FederationApiClient;
+import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.web.ApiException;
 
 import java.time.Instant;
@@ -65,20 +66,33 @@ public class SelfSilenceService {
      * best-effort (never fail the call). {@code localpart} is the caller's homeserver
      * handle (JWT preferred_username) used for the homeserver hide seams.
      */
+    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
     public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason) {
+        return activate(owner, localpart, expiresAt, reason, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason,
+                                      String domain) {
         requireOwner(owner);
         if (expiresAt == null || !expiresAt.isAfter(Instant.now())) {
             return Mono.error(ApiException.badRequest("expiresAt must be in the future"));
         }
-        return repo.activate(owner, expiresAt, reason)
+        return repo.activate(owner, expiresAt, reason, domain)
                 .flatMap(saved -> applyHides(localpart).thenReturn(saved))
                 .doOnSuccess(s -> log.info("[self-silence] activated for {} until {}", owner, expiresAt));
     }
 
-    /** The owner's current silence row (active or cleared), or empty if none. */
-    public Mono<SelfSilence> status(String owner) {
+    /** The owner's current silence row (active or cleared) within their DOMAIN, or
+     *  empty if none. {@code domain} is the caller's validated-issuer brand (or
+     *  {@code null} for the SUPERADMIN cross-domain bypass). */
+    public Mono<SelfSilence> status(String owner, String domain) {
         requireOwner(owner);
-        return repo.find(owner);
+        return repo.find(owner, domain);
+    }
+
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    public Mono<SelfSilence> status(String owner) {
+        return status(owner, DomainRegistry.DEFAULT_DOMAIN);
     }
 
     /**
@@ -88,13 +102,18 @@ public class SelfSilenceService {
      * silent permanent hide). Idempotent: a no-op clear returns a notFound so the UI
      * can distinguish "nothing active".
      */
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Void> cancel(String owner, String localpart) {
+        return cancel(owner, localpart, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    public Mono<Void> cancel(String owner, String localpart, String domain) {
         requireOwner(owner);
-        Mono<SelfSilence> activeRow = repo.find(owner)
+        Mono<SelfSilence> activeRow = repo.find(owner, domain)
                 .filter(s -> s.clearedAt() == null)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no active self-silence to cancel")));
         return activeRow.flatMap(s -> clearHides(localpart)
-                .then(repo.clear(owner))
+                .then(repo.clear(owner, domain))
                 .flatMap(cleared -> cleared > 0
                         ? Mono.<Void>empty()
                         : Mono.error(ApiException.notFound("no active self-silence to cancel"))));
@@ -106,9 +125,14 @@ public class SelfSilenceService {
      * request via federation-api (the row IS the queue mods watch; NOT SMTP). Never
      * touches {@code access_suspension}. The caller must currently be self-silenced.
      */
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Map<String, Object>> requestEarlyReactivation(String owner, String reason) {
+        return requestEarlyReactivation(owner, reason, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    public Mono<Map<String, Object>> requestEarlyReactivation(String owner, String reason, String domain) {
         requireOwner(owner);
-        return repo.find(owner).flatMap(s -> {
+        return repo.find(owner, domain).flatMap(s -> {
             if (s == null || !s.active()) {
                 return Mono.error(ApiException.badRequest("no active self-silence to request reactivation for"));
             }

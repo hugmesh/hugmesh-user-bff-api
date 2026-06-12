@@ -13,6 +13,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 
 import java.util.Map;
 
@@ -33,9 +34,11 @@ import java.util.Map;
 public class ProfileController {
 
     private final ProfileService profiles;
+    private final PrincipalDomain principalDomain;
 
-    public ProfileController(ProfileService profiles) {
+    public ProfileController(ProfileService profiles, PrincipalDomain principalDomain) {
         this.profiles = profiles;
+        this.principalDomain = principalDomain;
     }
 
     /** Change-password body (typed + validated; was an untyped Map). The IdP
@@ -54,7 +57,7 @@ public class ProfileController {
     @Operation(summary = "Get my profile (owner = JWT subject).")
     @GetMapping
     public Mono<UserProfile> me(@AuthenticationPrincipal Jwt jwt) {
-        return profiles.get(jwt.getSubject());
+        return profiles.get(jwt.getSubject(), principalDomain.forScope(jwt));
     }
 
     @Operation(summary = "Create/update my profile. The body's userId is ignored — the owner is the JWT subject; the vanity username is derived from the token.")
@@ -63,7 +66,7 @@ public class ProfileController {
         // owner = JWT SUBJECT (the row key); username = the vanity DNS label, derived
         // from the token (NOT the body) so the reserved-username guard can't be
         // bypassed by spoofing the body.
-        return profiles.save(jwt.getSubject(), usernameOf(jwt), body);
+        return profiles.save(jwt.getSubject(), usernameOf(jwt), body, principalDomain.forScope(jwt));
     }
 
     /**
@@ -88,7 +91,8 @@ public class ProfileController {
     @Operation(summary = "Delete my profile.")
     @DeleteMapping
     public Mono<ResponseEntity<Void>> delete(@AuthenticationPrincipal Jwt jwt) {
-        return profiles.delete(jwt.getSubject()).thenReturn(ResponseEntity.noContent().build());
+        return profiles.delete(jwt.getSubject(), principalDomain.forScope(jwt))
+                .thenReturn(ResponseEntity.noContent().build());
     }
 
     @Operation(summary = "Change my Casdoor password (goes to the IdP, not the profile table).")

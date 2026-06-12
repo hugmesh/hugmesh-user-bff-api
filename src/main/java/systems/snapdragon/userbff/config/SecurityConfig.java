@@ -3,6 +3,7 @@ package systems.snapdragon.userbff.config;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchy;
@@ -19,6 +20,7 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import systems.snapdragon.userbff.security.CasdoorAuthorities;
 import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.userbff.security.PrincipalDomain;
 
 /**
  * Casdoor-aware OAuth2 resource-server security for the user BFF (reactive
@@ -46,6 +48,11 @@ import systems.snapdragon.userbff.security.DomainRegistry;
 @Configuration
 @EnableWebFluxSecurity
 @EnableReactiveMethodSecurity
+// SecurityConfig depends on DomainRegistry (the converter stamps the issuer-derived
+// DOMAIN_<x>); PrincipalDomain is the controllers' single domain-resolution bean.
+// Importing both here means every @WebFluxTest slice that imports SecurityConfig
+// gets them too — the slice context loads without each test re-declaring them.
+@Import({DomainRegistry.class, PrincipalDomain.class})
 public class SecurityConfig {
 
     /** Issuer→domain source of truth. Injected so the converter can stamp the

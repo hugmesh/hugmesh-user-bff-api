@@ -2,6 +2,7 @@ package systems.snapdragon.userbff.preference;
 
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.web.ApiException;
 
 /**
@@ -29,22 +30,38 @@ public class HomeGuideService {
         this.repo = repo;
     }
 
-    /** True if the owner has dismissed the named guide. */
+    /** True if the owner has dismissed the named guide (within their domain;
+     *  {@code domain} null = SUPERADMIN cross-domain bypass). */
+    public Mono<Boolean> isDismissed(String owner, String guide, String domain) {
+        requireOwner(owner);
+        return repo.find(owner, keyFor(guide), domain).map(TRUE::equals).defaultIfEmpty(false);
+    }
+
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Boolean> isDismissed(String owner, String guide) {
-        requireOwner(owner);
-        return repo.find(owner, keyFor(guide)).map(TRUE::equals).defaultIfEmpty(false);
+        return isDismissed(owner, guide, DomainRegistry.DEFAULT_DOMAIN);
     }
 
-    /** Mark the named guide dismissed for the owner (idempotent). */
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Void> dismiss(String owner, String guide) {
-        requireOwner(owner);
-        return repo.set(owner, keyFor(guide), TRUE);
+        return dismiss(owner, guide, DomainRegistry.DEFAULT_DOMAIN);
     }
 
-    /** Un-dismiss (re-show) the named guide for the owner. */
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
     public Mono<Void> reset(String owner, String guide) {
+        return reset(owner, guide, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** Mark the named guide dismissed for the owner in their domain (idempotent). */
+    public Mono<Void> dismiss(String owner, String guide, String domain) {
         requireOwner(owner);
-        return repo.delete(owner, keyFor(guide));
+        return repo.set(owner, keyFor(guide), TRUE, domain);
+    }
+
+    /** Un-dismiss (re-show) the named guide for the owner in their domain. */
+    public Mono<Void> reset(String owner, String guide, String domain) {
+        requireOwner(owner);
+        return repo.delete(owner, keyFor(guide), domain);
     }
 
     static String keyFor(String guide) {

@@ -64,7 +64,7 @@ class ConnectedClientsControllerGateTest {
                 .get().uri("/bff/user/connected-clients")
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(clients, never()).list(anyString(), anyString(), any(), any());
+        verify(clients, never()).list(anyString(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -73,7 +73,7 @@ class ConnectedClientsControllerGateTest {
                 .delete().uri("/bff/user/connected-clients/" + ID)
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(clients, never()).revoke(anyString(), anyString(), anyString(), any(), any());
+        verify(clients, never()).revoke(anyString(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -83,14 +83,14 @@ class ConnectedClientsControllerGateTest {
                 .get().uri("/bff/user/connected-clients")
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(clients, never()).list(anyString(), anyString(), any(), any());
+        verify(clients, never()).list(anyString(), anyString(), any(), any(), any());
     }
 
     // ── with an external-client role → reaches the service ───────────────────
 
     @Test
     void list_withMatrixExternalClientRole_reachesService() {
-        when(clients.list(anyString(), anyString(), any(), any())).thenReturn(Flux.empty());
+        when(clients.list(anyString(), anyString(), any(), any(), any())).thenReturn(Flux.empty());
         client.mutateWith(mockJwt().jwt(j -> j.subject("alice"))
                         .authorities(authorities("ROLE_USER", "ROLE_MATRIX_EXTERNAL_CLIENT")))
                 .get().uri("/bff/user/connected-clients")
@@ -100,7 +100,7 @@ class ConnectedClientsControllerGateTest {
 
     @Test
     void revoke_withMastodonExternalClientRole_reachesService() {
-        when(clients.revoke(anyString(), anyString(), anyString(), any(), any()))
+        when(clients.revoke(anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Mono.just(Map.of("revoked", true)));
         client.mutateWith(mockJwt().jwt(j -> j.subject("bob"))
                         .authorities(authorities("ROLE_USER", "ROLE_MASTODON_EXTERNAL_CLIENT")))

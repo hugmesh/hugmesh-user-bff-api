@@ -11,7 +11,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
-import systems.snapdragon.userbff.security.DomainRegistry;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -50,7 +49,7 @@ class Probes {
  * </ul>
  */
 @WebFluxTest(controllers = Probes.class)
-@Import({SecurityConfig.class, DomainRegistry.class})
+@Import(SecurityConfig.class)
 class SecurityConfigPathRulesTest {
 
     @Autowired WebTestClient client;

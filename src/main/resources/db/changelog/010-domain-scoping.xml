@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        010 — DOMAIN SCOPING (multi-tenant / multi-brand foundation).
+
+        Every owner-keyed table gains a `domain` column = the brand/tenant the row
+        belongs to, derived SERVER-SIDE from the token's cryptographically-validated
+        issuer (DOMAIN_<x>) — NEVER from a request field. A principal only ever
+        sees/mutates rows in its OWN domain (the service + repo layers add a
+        `domain = :domain` predicate alongside the existing owner predicate);
+        SUPERADMIN (the cross-domain infra super-role) is unscoped.
+
+        BACK-COMPAT: the column is NOT NULL with DEFAULT 'default'. Existing rows
+        backfill to 'default' and a single-issuer cluster (DomainRegistry maps the
+        lone issuer / no config -> DOMAIN_default) writes 'default' for every row, so
+        nothing changes for a single-tenant deployment. The owner==JWT-subject
+        invariant is UNWEAKENED — domain is an ADDITIONAL predicate, never a
+        replacement.
+
+        Tables scoped (owner column in parentheses):
+          • user_profile            (user_id)
+          • user_preference         (user_id)
+          • user_block              (user_id)
+          • self_silence            (user_id)
+          • media_poison_decision   (user_id)
+          • connected_client_audit  (owner)
+
+        DEFAULT 'default' + NOT NULL is plain ANSI DDL that runs identically on
+        production Postgres AND the H2 PostgreSQL-compat slice DB. Each addColumn has
+        an implicit Liquibase rollback (drop column).
+    -->
+
+    <changeSet id="010-1-user-profile-domain" author="snapdragon">
+        <addColumn tableName="user_profile">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="010-2-user-preference-domain" author="snapdragon">
+        <addColumn tableName="user_preference">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="010-3-user-block-domain" author="snapdragon">
+        <addColumn tableName="user_block">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <!-- The owner+domain list scan is the hot read path. -->
+        <createIndex tableName="user_block" indexName="idx_user_block_owner_domain">
+            <column name="user_id"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="user_block" indexName="idx_user_block_owner_domain"/>
+            <dropColumn tableName="user_block" columnName="domain"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="010-4-self-silence-domain" author="snapdragon">
+        <addColumn tableName="self_silence">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="010-5-media-poison-decision-domain" author="snapdragon">
+        <addColumn tableName="media_poison_decision">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <!-- The owner+domain+media_ref lookup (badge + repost guard) is owner-scoped
+             already; widen the existing index intent with a domain column. -->
+        <createIndex tableName="media_poison_decision" indexName="idx_media_poison_owner_domain">
+            <column name="user_id"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="media_poison_decision" indexName="idx_media_poison_owner_domain"/>
+            <dropColumn tableName="media_poison_decision" columnName="domain"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="010-6-connected-client-audit-domain" author="snapdragon">
+        <addColumn tableName="connected_client_audit">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <createIndex tableName="connected_client_audit" indexName="idx_connected_client_owner_domain">
+            <column name="owner"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="connected_client_audit" indexName="idx_connected_client_owner_domain"/>
+            <dropColumn tableName="connected_client_audit" columnName="domain"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
