@@ -3,7 +3,7 @@
 # GitLab (mirror_trigger_builds=true), so this runs on push / mirror-sync on the
 # privileged x86 runner (shell executor with docker, matching the generator CI).
 # Images carry NO keys — KEYS material is supplied from the USB at first boot.
-stages: [test, build]
+stages: [test, security, build]
 
 test:
   stage: test
@@ -37,3 +37,35 @@ build:image:
     - docker build --pull -t "$CI_REGISTRY_IMAGE:$TAG" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" .
     - docker push "$CI_REGISTRY_IMAGE:$TAG"
     - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+
+dependency-check:
+  stage: security
+  needs: [test]
+  tags: [snapdragon-x86, privileged]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  allow_failure: true
+  script:
+    - |
+      docker run --rm \
+        -v "$(pwd):/workspace" \
+        -v "$(pwd)/.dep-check-data:/dep-check-data" \
+        -w /workspace \
+        --entrypoint "" \
+        eclipse-temurin:21-jdk-noble \
+        ./mvnw org.owasp:dependency-check-maven:check \
+          -Dformat=HTML,JSON \
+          -DfailBuildOnCVSS=9 \
+          -DdataDirectory=/dep-check-data \
+          -DautoUpdate=true \
+          -B
+  cache:
+    key: dep-check-nvd
+    paths: [.dep-check-data/]
+  artifacts:
+    when: always
+    paths:
+      - target/dependency-check-report.html
+      - target/dependency-check-report.json
+    expire_in: 30 days
