@@ -114,6 +114,11 @@ external:
 # applied", never "protected", and the badge says 'protected' ONLY when the
 # perturbation survived the homeserver re-encode.
 app:
+  # Per-brand Casdoor issuers for multi-tenant mode. OPT-IN: empty = single-issuer.
+  # Format: comma-separated issuerUri=domainName pairs.
+  # When non-empty, TenancyResourceServerConfig activates; unknown issuers → 401.
+  tenancy:
+    issuers: "${APP_TENANCY_ISSUERS:}"
   media:
     poisoning:
       enabled: "${MEDIA_POISONING_ENABLED:false}"
