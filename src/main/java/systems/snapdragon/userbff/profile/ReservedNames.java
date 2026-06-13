@@ -21,7 +21,10 @@ import java.util.Set;
  *   <li><b>be-gateway</b> route prefixes (snapdragon-be-gateway/application-be.yml):
  *       {@code api, _matrix, oauth};</li>
  *   <li><b>reserved subdomains</b> (snapdragon.systems): {@code id, api, matrix,
- *       mastodon, scale, headscale, www};</li>
+ *       mastodon, pleroma, forum, wiki, owncast, tube, scale, headscale, www} —
+ *       {@code forum} is the phpBB forum; {@code wiki} is the Kiwix wiki;
+ *       {@code owncast} and {@code tube} are optional GPU-gated video services
+ *       (all reserved so vanity subdomains can never collide);</li>
  *   <li><b>snapdragon.GAMES app route prefixes</b> — DERIVED from
  *       snapdragon.games/frontend/nginx.conf {@code /_remotes/<slug>/} blocks +
  *       location prefixes + the {@code <service>.snapdragon.games} subdomains
@@ -59,7 +62,8 @@ public final class ReservedNames {
             // --- be-gateway route prefixes ---
             "api", "_matrix", "oauth",
             // --- reserved subdomains (snapdragon.systems) ---
-            "id", "matrix", "mastodon", "pleroma", "scale", "headscale", "www",
+            "id", "matrix", "mastodon", "pleroma", "forum", "wiki", "owncast", "tube",
+            "scale", "headscale", "www",
             // --- snapdragon.GAMES app route prefixes (derived: nginx /_remotes/<slug>/
             //     + location prefixes + <service>.snapdragon.games subdomains) ---
             "games", "play", "wasm", "producer", "publisher", "banned",
