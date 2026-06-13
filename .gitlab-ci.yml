@@ -3,10 +3,28 @@
 # GitLab (mirror_trigger_builds=true), so this runs on push / mirror-sync on the
 # privileged x86 runner (shell executor with docker, matching the generator CI).
 # Images carry NO keys — KEYS material is supplied from the USB at first boot.
-stages: [build]
+stages: [test, build]
+
+test:
+  stage: test
+  tags: [snapdragon-x86, privileged]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - docker run --rm -v "${CI_PROJECT_DIR}:/workspace:ro" -w /workspace eclipse-temurin:21-jdk-noble ./mvnw verify -B
+  artifacts:
+    when: always
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+    paths:
+      - target/surefire-reports/
+    expire_in: 7 days
 
 build:image:
   stage: build
+  needs: [test]
   tags: [snapdragon-x86, privileged]
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
