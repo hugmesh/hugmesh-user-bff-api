@@ -102,9 +102,6 @@ public record UserProfile(
                 vanitySubdomainEnabled, vu, screenReaderName);
     }
 
-    /**
-     * A copy with an explicit {@code screenReaderName}.
-     */
     public UserProfile withScreenReaderName(String screenReaderName) {
         return new UserProfile(userId, gender, pronouns, timezone, displayName, visibility,
                 vanitySubdomainEnabled, vanityUsername, screenReaderName);

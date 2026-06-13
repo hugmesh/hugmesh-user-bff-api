@@ -3,15 +3,12 @@ package systems.snapdragon.userbff.federation;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.MediaType;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.federation.FederationModerationModels.SubmitRequest;
 
-import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -190,17 +187,4 @@ public class FederationApiClient {
 
     @SuppressWarnings("unchecked")
     private static final Class<Map<String, Object>> MAP_TYPE = (Class<Map<String, Object>>) (Class<?>) Map.class;
-
-    /** UTF-8 bytes for a string body (small helper kept for callers). */
-    static byte[] bytes(String s) {
-        return s == null ? new byte[0] : s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    /** Build a query map (kept for symmetry/testability). */
-    static MultiValueMap<String, String> q(Map<String, String> in) {
-        MultiValueMap<String, String> out = new org.springframework.util.LinkedMultiValueMap<>();
-        Map<String, String> copy = new LinkedHashMap<>(in);
-        copy.forEach((k, v) -> { if (v != null) out.add(k, v); });
-        return out;
-    }
 }

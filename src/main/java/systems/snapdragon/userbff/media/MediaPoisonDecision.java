@@ -38,17 +38,14 @@ public record MediaPoisonDecision(
         String backend,
         Instant createdAt) {
 
-    /** The homeserver platforms an upload can target. */
     public static boolean validPlatform(String p) {
         return "matrix".equals(p) || "mastodon".equals(p);
     }
 
-    /** The requestable cloak modes (incl. {@code none} = opt-out / forward-through). */
     public static boolean validMode(String m) {
         return "glaze".equals(m) || "nightshade".equals(m) || "light".equals(m) || "none".equals(m);
     }
 
-    /** The honest status outcomes the badge renders from. */
     public static boolean validStatus(String s) {
         return "protected".equals(s) || "degraded".equals(s) || "skipped".equals(s)
                 || "none".equals(s) || "pending".equals(s) || "failed".equals(s);

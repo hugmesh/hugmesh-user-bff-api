@@ -70,6 +70,12 @@ public class BlockService {
         return repo.listForOwner(owner, domain);
     }
 
+    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
+    public Mono<Map<String, Object>> block(String owner, String target, String platform,
+                                            Set<String> callerRoles) {
+        return block(owner, target, platform, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    }
+
     /**
      * Record + push a self-block. The durable row is written FIRST (under the
      * owner), then the external push is best-effort (never fails the call). Returns
@@ -82,12 +88,6 @@ public class BlockService {
      * method-level {@code @PreAuthorize}. {@code internal} (the default) needs only
      * the ROLE_USER floor. A missing platform role is a 403.
      */
-    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
-    public Mono<Map<String, Object>> block(String owner, String target, String platform,
-                                            Set<String> callerRoles) {
-        return block(owner, target, platform, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
-    }
-
     public Mono<Map<String, Object>> block(String owner, String target, String platform,
                                             String domain, Set<String> callerRoles) {
         requireOwner(owner);

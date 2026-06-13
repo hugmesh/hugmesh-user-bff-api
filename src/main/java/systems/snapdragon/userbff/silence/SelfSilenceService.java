@@ -60,17 +60,17 @@ public class SelfSilenceService {
         for (HomeserverHideClient c : hideClients) this.hidesByPlatform.put(c.platform(), c);
     }
 
+    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
+    public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason) {
+        return activate(owner, localpart, expiresAt, reason, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
     /**
      * Activate (or re-activate) the owner's self-silence until {@code expiresAt}. The
      * durable row is written FIRST (source of truth), THEN the three hides fire
      * best-effort (never fail the call). {@code localpart} is the caller's homeserver
      * handle (JWT preferred_username) used for the homeserver hide seams.
      */
-    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
-    public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason) {
-        return activate(owner, localpart, expiresAt, reason, DomainRegistry.DEFAULT_DOMAIN);
-    }
-
     public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason,
                                       String domain) {
         requireOwner(owner);
@@ -95,6 +95,11 @@ public class SelfSilenceService {
         return status(owner, DomainRegistry.DEFAULT_DOMAIN);
     }
 
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    public Mono<Void> cancel(String owner, String localpart) {
+        return cancel(owner, localpart, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
     /**
      * Cancel the owner's active self-silence early: un-hide all three legs, THEN
      * stamp {@code cleared_at} (fail-safe ordering — un-hides first, clear last; a
@@ -102,11 +107,6 @@ public class SelfSilenceService {
      * silent permanent hide). Idempotent: a no-op clear returns a notFound so the UI
      * can distinguish "nothing active".
      */
-    /** Back-compat overload — scopes to the platform {@code default} domain. */
-    public Mono<Void> cancel(String owner, String localpart) {
-        return cancel(owner, localpart, DomainRegistry.DEFAULT_DOMAIN);
-    }
-
     public Mono<Void> cancel(String owner, String localpart, String domain) {
         requireOwner(owner);
         Mono<SelfSilence> activeRow = repo.find(owner, domain)
@@ -119,17 +119,17 @@ public class SelfSilenceService {
                         : Mono.error(ApiException.notFound("no active self-silence to cancel"))));
     }
 
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    public Mono<Map<String, Object>> requestEarlyReactivation(String owner, String reason) {
+        return requestEarlyReactivation(owner, reason, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
     /**
      * EMAIL-MOD — request a moderator/admin reactivation (un-silence sooner than
      * {@code expiresAt}). Writes a {@code kind='self-silence-appeal'} moderation
      * request via federation-api (the row IS the queue mods watch; NOT SMTP). Never
      * touches {@code access_suspension}. The caller must currently be self-silenced.
      */
-    /** Back-compat overload — scopes to the platform {@code default} domain. */
-    public Mono<Map<String, Object>> requestEarlyReactivation(String owner, String reason) {
-        return requestEarlyReactivation(owner, reason, DomainRegistry.DEFAULT_DOMAIN);
-    }
-
     public Mono<Map<String, Object>> requestEarlyReactivation(String owner, String reason, String domain) {
         requireOwner(owner);
         return repo.find(owner, domain).flatMap(s -> {
