@@ -36,6 +36,13 @@
               part of the composite PK (user_id, pref_key, domain) so a multi-brand
               owner keeps a separate, owner-isolated preference per brand (carries the
               per-user media.poison.default the compose AI-poison toggle persists).
+        012 — notifications PR1: the in-app notification FLOOR
+              (user_notifications) + per-category PREFERENCES
+              (notification_preference). Both owner-keyed (user_subject) + domain-
+              scoped; prefs MIRROR 011 (domain-first composite PK). account-restriction
+              is FORCED-ON (un-silenceable) — API-coerced + a DB CHECK backstop. SHIPS
+              DARK: nothing writes user_notifications yet (the snapdragon-actions
+              reconciler in a later PR is the only writer); this is the read/prefs side.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -49,4 +56,5 @@
     <include file="db/changelog/009-connected-client-audit.xml"/>
     <include file="db/changelog/010-domain-scoping.xml"/>
     <include file="db/changelog/011-user-preferences-store.xml"/>
+    <include file="db/changelog/012-notifications.xml"/>
 </databaseChangeLog>

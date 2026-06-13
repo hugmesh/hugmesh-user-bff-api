@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        012 — Notifications PR1: the in-app notification FLOOR + per-category
+        PREFERENCES (the no-deps foundation of the notifications subsystem). Two
+        tables, both owner-keyed by the Casdoor JWT subject AND domain-scoped by the
+        validated-issuer brand — a user only ever touches their own rows in their own
+        brand (owner-enforcement lives in the service layer too; SUPERADMIN unscoped).
+
+        notification_preference — per-category opt-in/out, MIRRORING the 011
+        user_preferences_store conventions EXACTLY: domain-FIRST (the brand is part of
+        the COMPOSITE PRIMARY KEY (domain, user_subject, category), derived SERVER-SIDE
+        from the validated token issuer (DOMAIN_<x>) — NEVER a request field). So the
+        SAME owner id (one person reachable across brands) keeps a SEPARATE preference
+        per brand and the (domain, owner, category) triple is unique-by-construction
+        (the upsert is a true PK upsert, not a "find-then-insert" race window).
+
+          • domain       — the brand/tenant (DOMAIN_<x>), DEFAULT 'default', NOT NULL;
+                           server-derived from the issuer, never from the body.
+          • user_subject — Casdoor JWT subject (owner); never from the request body.
+          • category     — the notification category {account-restriction|role-change|
+                           infra-impacting|feature-availability}. DB-paralleled by the
+                           012-3 CHECK (same pattern as 005/007).
+          • enabled      — whether the user wants notifications in this category.
+                           account-restriction is FORCED-ON (un-silenceable): the API
+                           coerces enabled=false to true on this category, and the
+                           012-4 CHECK is a DB-level backstop so the account-restriction
+                           row can NEVER persist enabled=false.
+
+        user_notifications — the in-app FLOOR inbox (always-on; the in-app channel can
+        never be silenced — prefs only gate the OTHER channels in later PRs). One row
+        per delivered notification, owner+domain scoped. SHIPS DARK: nothing writes
+        this table in PR1 — the snapdragon-actions reconciler in a later PR is the
+        only writer. This PR is the read/prefs/floor side only (intended).
+
+          • id           — app-generated UUID (portable INSERT across Postgres + H2),
+                           the {id}/read path key.
+          • domain       — the brand/tenant (DOMAIN_<x>), DEFAULT 'default', NOT NULL.
+          • user_subject — Casdoor JWT subject (owner); never from the request body.
+          • category     — the notification category (same vocabulary as the prefs).
+          • title        — short headline.
+          • body         — the notification text (clob/text).
+          • created_at   — when the notification was recorded.
+          • read_at      — when the owner marked it read (NULL = unread).
+
+        DEFAULT 'default' + NOT NULL + plain ANSI DDL runs identically on production
+        Postgres AND the H2 PostgreSQL-compat slice DB. Changeset id 012 follows 011.
+    -->
+
+    <changeSet id="012-1-notification-preference" author="snapdragon">
+        <createTable tableName="notification_preference">
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="category" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="enabled" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <!-- (domain, owner, category) is unique by construction so the upsert is a real
+             PK upsert (one durable preference row per owner per category per brand). -->
+        <addPrimaryKey tableName="notification_preference"
+                       columnNames="domain, user_subject, category"
+                       constraintName="pk_notification_preference"/>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced category vocabulary (same pattern as 005/007):
+         plain ANSI `col IN (...)` runs identically on Postgres AND the H2 slice DB. -->
+    <changeSet id="012-2-notification-preference-category-check" author="snapdragon">
+        <sql>
+            ALTER TABLE notification_preference
+                ADD CONSTRAINT ck_notification_preference_category
+                CHECK (category IN ('account-restriction', 'role-change',
+                                    'infra-impacting', 'feature-availability'))
+        </sql>
+        <rollback>
+            ALTER TABLE notification_preference DROP CONSTRAINT ck_notification_preference_category
+        </rollback>
+    </changeSet>
+
+    <!-- account-restriction is FORCED-ON (un-silenceable): a DB-level backstop so the
+         account-restriction preference row can NEVER persist enabled=false even if a
+         future code path tried to. The API also coerces it — defence in depth. -->
+    <changeSet id="012-3-notification-preference-account-restriction-forced-on" author="snapdragon">
+        <sql>
+            ALTER TABLE notification_preference
+                ADD CONSTRAINT ck_notification_preference_account_restriction_forced_on
+                CHECK (category != 'account-restriction' OR enabled = TRUE)
+        </sql>
+        <rollback>
+            ALTER TABLE notification_preference DROP CONSTRAINT ck_notification_preference_account_restriction_forced_on
+        </rollback>
+    </changeSet>
+
+    <changeSet id="012-4-user-notifications" author="snapdragon">
+        <createTable tableName="user_notifications">
+            <column name="id" type="varchar(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="domain" type="varchar(64)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="category" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="title" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="body" type="clob"/>
+            <column name="created_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="read_at" type="timestamp"/>
+        </createTable>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced category vocabulary on the inbox too. -->
+    <changeSet id="012-5-user-notifications-category-check" author="snapdragon">
+        <sql>
+            ALTER TABLE user_notifications
+                ADD CONSTRAINT ck_user_notifications_category
+                CHECK (category IN ('account-restriction', 'role-change',
+                                    'infra-impacting', 'feature-availability'))
+        </sql>
+        <rollback>
+            ALTER TABLE user_notifications DROP CONSTRAINT ck_user_notifications_category
+        </rollback>
+    </changeSet>
+
+    <!-- The owner+domain newest-first inbox scan (GET /bff/user/notifications) is the
+         hot read path. -->
+    <changeSet id="012-6-user-notifications-index" author="snapdragon">
+        <createIndex tableName="user_notifications" indexName="idx_user_notifications_owner_domain_created">
+            <column name="domain"/>
+            <column name="user_subject"/>
+            <column name="created_at"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="user_notifications" indexName="idx_user_notifications_owner_domain_created"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
