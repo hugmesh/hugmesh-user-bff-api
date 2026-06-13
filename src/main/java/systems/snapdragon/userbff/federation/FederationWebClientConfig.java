@@ -4,7 +4,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -76,7 +75,4 @@ public class FederationWebClientConfig {
                 .flatMap(next::exchange);
     }
 
-    /** Header name kept referenced so the import/intent is explicit. */
-    @SuppressWarnings("unused")
-    private static final String AUTH = HttpHeaders.AUTHORIZATION;
 }

@@ -60,18 +60,18 @@ public class MediaPoisonDecisionRepository {
     private static final String COLS =
             "id, user_id, platform, media_ref, mode, status, backend, created_at";
 
-    /**
-     * Record a decision for the owner (app-generated id) and return it. The
-     * {@code mediaRef} is nullable (a pre-upload failure has no homeserver ref yet);
-     * {@code backend} is nullable (no worker ran). The owner is the JWT subject the
-     * service passes — never a request field.
-     */
     /** Back-compat overload — stamps the platform {@code default} domain. */
     public Mono<MediaPoisonDecision> record(String userId, String platform, String mediaRef,
                                             String mode, String status, String backend) {
         return record(userId, platform, mediaRef, mode, status, backend, DomainRegistry.DEFAULT_DOMAIN);
     }
 
+    /**
+     * Record a decision for the owner (app-generated id) and return it. The
+     * {@code mediaRef} is nullable (a pre-upload failure has no homeserver ref yet);
+     * {@code backend} is nullable (no worker ran). The owner is the JWT subject the
+     * service passes — never a request field.
+     */
     public Mono<MediaPoisonDecision> record(String userId, String platform, String mediaRef,
                                             String mode, String status, String backend, String domain) {
         String id = UUID.randomUUID().toString();

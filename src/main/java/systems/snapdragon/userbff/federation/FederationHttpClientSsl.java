@@ -102,7 +102,6 @@ public class FederationHttpClientSsl {
         }
     }
 
-    /** Build the client {@link SslContext}: key-manager = client identity, trust-manager = cluster CA. */
     SslContext buildSslContext() throws Exception {
         KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
         kmf.init(load(keyStore, keyStoreType, keyStorePassword), pw(keyStorePassword));

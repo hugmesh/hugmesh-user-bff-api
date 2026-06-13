@@ -69,11 +69,6 @@ public class HomeGuideService {
         return KEY_PREFIX + g;
     }
 
-    /** The guide name back out of a stored preference key. */
-    static String guideOf(String key) {
-        return key.startsWith(KEY_PREFIX) ? key.substring(KEY_PREFIX.length()) : key;
-    }
-
     private static void requireOwner(String owner) {
         if (owner == null || owner.isBlank()) {
             throw ApiException.unauthorized("missing authenticated subject");

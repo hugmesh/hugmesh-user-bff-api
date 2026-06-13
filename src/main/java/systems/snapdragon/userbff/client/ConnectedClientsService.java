@@ -69,12 +69,6 @@ public class ConnectedClientsService {
      * with NO external-client role gets only their durable audit rows (no live read) —
      * they cannot drive a homeserver client-API read they're not entitled to.
      */
-    /** Back-compat overload — scopes to the platform {@code default} domain. */
-    public Flux<ConnectedClient> list(String owner, String localpart, String bearer,
-                                      Set<String> callerRoles) {
-        return list(owner, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
-    }
-
     public Flux<ConnectedClient> list(String owner, String localpart, String bearer, String domain,
                                       Set<String> callerRoles) {
         requireOwner(owner);
@@ -91,6 +85,18 @@ public class ConnectedClientsService {
         return audited.concatWith(live);
     }
 
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    public Flux<ConnectedClient> list(String owner, String localpart, String bearer,
+                                      Set<String> callerRoles) {
+        return list(owner, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    }
+
+    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
+                                            Set<String> callerRoles) {
+        return revoke(owner, id, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    }
+
     /**
      * Revoke one of the owner's connected clients (audit row id). Ordering (per the
      * design): (1) write the per-credential gateway revocation key FIRST (so the gateway
@@ -99,12 +105,6 @@ public class ConnectedClientsService {
      * platform is required (service leg). Owner-AND-id scoped (a 404 for a non-owner /
      * unknown / already-revoked id).
      */
-    /** Back-compat overload — scopes to the platform {@code default} domain. */
-    public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
-                                            Set<String> callerRoles) {
-        return revoke(owner, id, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
-    }
-
     public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
                                             String domain, Set<String> callerRoles) {
         requireOwner(owner);

@@ -37,22 +37,17 @@ public record ConnectedClient(
         Instant createdAt,
         Instant revokedAt) {
 
-    /** Client-kind: an OAuth application grant (Connected Apps). */
     public static final String KIND_OAUTH_APP = "oauth-app";
-    /** Client-kind: a login device session (Connected Devices). */
     public static final String KIND_DEVICE = "device";
 
-    /** Allowed homeserver platforms a native client can connect to. */
     public static boolean validPlatform(String p) {
         return "matrix".equals(p) || "mastodon".equals(p);
     }
 
-    /** Allowed client kinds. */
     public static boolean validKind(String k) {
         return KIND_OAUTH_APP.equals(k) || KIND_DEVICE.equals(k);
     }
 
-    /** Whether this client is still active (not yet revoked). */
     public boolean active() {
         return revokedAt == null;
     }
