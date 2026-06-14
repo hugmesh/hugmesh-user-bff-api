@@ -97,6 +97,19 @@ public class SecurityConfig {
     private static void commonRoutes(ServerHttpSecurity.AuthorizeExchangeSpec ex) {
         // Probes are public so k8s/Docker healthchecks need no token.
         ex.pathMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll();
+        // INTERNAL service-to-service surface — SERVICE PRINCIPAL ONLY. The deliver
+        // endpoint takes its TARGET (domain, userSubject) from the request BODY (the
+        // system acting on a user's behalf, NOT owner==caller), so it MUST be
+        // unreachable by any human JWT — a human reaching it could spoof a notification
+        // to ANY user (an IDOR). ROLE_SERVICE is the platform service-account role (a
+        // Casdoor client-credentials token carries it; no human login does), the SAME
+        // mechanism federation-api gates its internal oracle with. Deliberately NOT
+        // hasAnyRole(SERVICE,ADMIN,SUPERADMIN): ADMIN/SUPERADMIN are human-reachable and
+        // would re-open the IDOR. The role hierarchy (SUPERADMIN > ADMIN/MOD/USER, NO
+        // edge to SERVICE) means even SUPERADMIN is DENIED here. Declared BEFORE the
+        // /bff/user/** authenticated catch-all so it can never fall through to the
+        // any-authenticated-user floor.
+        ex.pathMatchers("/bff/user/internal/**").hasRole("SERVICE");
         // The entire user surface — ROLE_USER floor. The converter adds ROLE_USER to
         // every authenticated principal, so .authenticated() == the ROLE_USER floor.
         // No pre-auth /login or /register: this BFF is JWT-only (post-login); the
