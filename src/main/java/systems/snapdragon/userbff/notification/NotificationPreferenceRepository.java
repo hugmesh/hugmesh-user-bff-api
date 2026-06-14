@@ -43,6 +43,32 @@ public class NotificationPreferenceRepository {
         return upsert(userSubject, category, enabled, DomainRegistry.DEFAULT_DOMAIN);
     }
 
+    /**
+     * The owner's RESOLVED enabled state for ONE category in their domain, applied for
+     * the internal deliver suppression check: the EXPLICITLY-stored value when a row
+     * exists, else the DEFAULT (every category is opt-OUT, so the default is
+     * {@code true} / enabled). Owner-AND-category-AND-domain scoped — it reads only the
+     * exact target's own row in the target brand, never another user's/brand's.
+     *
+     * <p>Returns the resolved boolean directly (defaulting to enabled) so the caller
+     * never has to distinguish "no row" from "row=true". The FORCED-ON
+     * {@code account-restriction} coercion is the SERVICE's concern (the deliver service
+     * overrides this for that category) — this method reports the raw stored/default
+     * state honestly.
+     *
+     * @param domain the TARGET brand (a concrete domain from the deliver body, never the
+     *               SUPERADMIN null bypass — the system delivers to a specific tenant).
+     */
+    public Mono<Boolean> isEnabled(String userSubject, String category, String domain) {
+        var spec = db.sql("SELECT enabled FROM notification_preference "
+                        + "WHERE user_subject = :uid AND category = :cat" + DomainScope.andPredicate(domain))
+                .bind("uid", userSubject).bind("cat", category);
+        return DomainScope.bind(spec, domain)
+                .map((row, m) -> Boolean.TRUE.equals(row.get("enabled", Boolean.class)))
+                .first()
+                .defaultIfEmpty(Boolean.TRUE);   // no stored row → default ENABLED (opt-out)
+    }
+
     /** All of the owner's category preferences in their domain as an ordered
      *  category→enabled map ({@code domain} null = SUPERADMIN cross-domain bypass).
      *  Only EXPLICITLY-stored rows are returned — the service merges defaults for any

@@ -106,6 +106,55 @@ public class UserNotificationRepository {
     }
 
     /**
+     * INSERT-IF-ABSENT one delivered in-app notification keyed by the caller-supplied
+     * DETERMINISTIC {@code id} (see {@link StableNotificationId}). The ONLY production
+     * write path into {@code user_notifications} — reached ONLY by the service-principal
+     * internal deliver endpoint (the snapdragon-actions reconciler). Idempotent by
+     * construction: the {@code id} is derived from the source event, so a RETRY of the
+     * same delivery presents the SAME id and the row already exists → no second row.
+     *
+     * <p>Portable (Postgres + H2): an existence check on the PK, then an INSERT only when
+     * absent. The {@code id} is the {@code user_notifications} PRIMARY KEY, so even under
+     * a concurrent double-call the second INSERT would hit a duplicate-key error rather
+     * than write a second row — the existence pre-check makes the common (sequential
+     * retry) path a clean no-op without surfacing an error.
+     *
+     * <p>Unlike the read/mark-read paths this takes the target {@code (domain,
+     * userSubject)} EXPLICITLY (the service principal acts on behalf of the SYSTEM for a
+     * named target, NOT owner==caller) — the {@code domain} is stamped verbatim, never a
+     * SUPERADMIN-style bypass. {@code title}/{@code body} come from the caller (the
+     * reconciler builds them); no actor identity is ever synthesised here.
+     *
+     * @return {@code true} iff a NEW row was inserted; {@code false} iff the id already
+     *         existed (a deduped retry — no write performed).
+     */
+    public Mono<Boolean> insertIfAbsent(String id, String domain, String userSubject,
+                                        String category, String title, String body) {
+        return existsById(id).flatMap(exists -> {
+            if (exists) {
+                return Mono.just(false);                 // deduped retry — no second row
+            }
+            var spec = db.sql("INSERT INTO user_notifications "
+                            + "(id, domain, user_subject, category, title, body, created_at) "
+                            + "VALUES (:id, :dom, :uid, :cat, :title, :body, now())")
+                    .bind("id", id).bind("dom", domain).bind("uid", userSubject)
+                    .bind("cat", category).bind("title", title);
+            spec = (body == null) ? spec.bindNull("body", String.class) : spec.bind("body", body);
+            return spec.fetch().rowsUpdated().thenReturn(true);
+        });
+    }
+
+    /** True iff a row with this PK id exists (any owner/domain) — the idempotency probe
+     *  for {@link #insertIfAbsent}. The id is a server-derived deterministic hash, never
+     *  caller-enumerable, so this is not an information-leak side channel (the deliver
+     *  endpoint is service-principal-only). */
+    public Mono<Boolean> existsById(String id) {
+        return db.sql("SELECT 1 FROM user_notifications WHERE id = :id")
+                .bind("id", id)
+                .map((row, m) -> Boolean.TRUE).first().defaultIfEmpty(false);
+    }
+
+    /**
      * True iff a row with this id exists for the owner in their domain (regardless of
      * read state). Lets the service distinguish "already-read own row" (a no-op success)
      * from "not the caller's row" (a 404) after a 0-row {@link #markRead}. Owner+domain
