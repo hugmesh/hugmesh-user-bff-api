@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -41,6 +42,10 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * {@code userId} influences neither the owner NOR the scoped domain:
  *
  * <ul>
+ *   <li>anonymous (no token) → 401 on every method, the service never invoked;
+ *       authenticated WITHOUT {@code ROLE_USER} → 403, the service never invoked
+ *       (the {@code @PreAuthorize("hasRole('USER')")} + the SecurityConfig
+ *       {@code /bff/user/**} floor);</li>
  *   <li>brand-X token → {@code get/save/delete} all scoped to {@code "brandx"};
  *       brand-Y token → {@code "brandy"} (a brand-Y caller is never given a brand-X
  *       scope);</li>
@@ -51,6 +56,14 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  *       GET and DELETE (cross-domain DENY through the controller);</li>
  *   <li>SUPERADMIN → {@code null} cross-domain bypass.</li>
  * </ul>
+ *
+ * <p>WAVE-2C SELF-COMPLETENESS: the {@code AuthzGate} nested class adds the
+ * 401-anonymous and 403-wrong-role assertions that this file previously leaned on the
+ * sibling {@code ProfileControllerTest} for — every DENY is now proved IN THIS FILE,
+ * through the SAME prod {@code SecurityConfig} chain that the cross-domain tests use,
+ * and every DENY is mutation-resistant (paired with {@code verify(profiles, never())}
+ * so removing the guard turns the test red rather than letting an unauthorized call
+ * silently reach the service).
  */
 @WebFluxTest(controllers = ProfileController.class)
 @Import({SecurityConfig.class, PrincipalDomain.class, DomainRegistry.class})
@@ -76,6 +89,72 @@ class ProfileControllerCrossDomainTest {
 
     private static UserProfile stubProfile(String userId) {
         return new UserProfile(userId, null, null, null, "Display", "internal", false, null, null);
+    }
+
+    /**
+     * SELF-COMPLETE authz gate (wave-2c): the 401-anonymous and 403-wrong-role DENYs
+     * for {@link ProfileController}, asserted IN THIS FILE through the prod
+     * {@link SecurityConfig} chain (this file previously relied on the sibling
+     * {@code ProfileControllerTest} for the anonymous 401 and had NO wrong-role 403).
+     *
+     * <p>Each DENY is mutation-resistant: paired with {@code verify(profiles, never())}
+     * across every {@link ProfileService} entry point, so deleting the path floor /
+     * {@code @PreAuthorize} would let the call reach the (still-mocked) service and the
+     * {@code never()} verify would FAIL — not silently pass on a re-derived status.
+     */
+    @Nested
+    class AuthzGate {
+
+        /** No token at all → 401 on GET/PUT/DELETE; the service is never invoked. */
+        @Test
+        void anonymous_everyMethod_isUnauthorized_serviceNeverInvoked() {
+            client.get().uri("/bff/user/profile")
+                    .exchange().expectStatus().isUnauthorized();
+            client.delete().uri("/bff/user/profile")
+                    .exchange().expectStatus().isUnauthorized();
+            client.put().uri("/bff/user/profile")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(stubProfile("alice"))
+                    .exchange().expectStatus().isUnauthorized();
+
+            verify(profiles, never()).get(anyString(), any());
+            verify(profiles, never()).save(anyString(), anyString(), any(), any());
+            verify(profiles, never()).delete(anyString(), any());
+        }
+
+        /**
+         * A genuine brand-X token that carries a domain authority but NOT
+         * {@code ROLE_USER} is rejected 403 at the {@code /bff/user/**} floor +
+         * {@code @PreAuthorize("hasRole('USER')")} — authenticated is not authorized.
+         * The service is never invoked for any of the three owner-scoped methods (so
+         * this DENY would fail-RED if the USER gate were removed).
+         */
+        @Test
+        void authenticatedWithoutRoleUser_everyMethod_isForbidden_serviceNeverInvoked() {
+            client.mutateWith(mockJwt()
+                            .jwt(j -> j.subject("alice").issuer(BRANDX))
+                            .authorities(authorities("DOMAIN_brandx")))   // no ROLE_USER
+                    .get().uri("/bff/user/profile")
+                    .exchange().expectStatus().isForbidden();
+
+            client.mutateWith(mockJwt()
+                            .jwt(j -> j.subject("alice").issuer(BRANDX))
+                            .authorities(authorities("DOMAIN_brandx")))
+                    .method(HttpMethod.DELETE).uri("/bff/user/profile")
+                    .exchange().expectStatus().isForbidden();
+
+            client.mutateWith(mockJwt()
+                            .jwt(j -> j.subject("alice").claim("preferred_username", "alice").issuer(BRANDX))
+                            .authorities(authorities("DOMAIN_brandx")))
+                    .put().uri("/bff/user/profile")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(stubProfile("alice"))
+                    .exchange().expectStatus().isForbidden();
+
+            verify(profiles, never()).get(anyString(), any());
+            verify(profiles, never()).save(anyString(), anyString(), any(), any());
+            verify(profiles, never()).delete(anyString(), any());
+        }
     }
 
     @Nested
