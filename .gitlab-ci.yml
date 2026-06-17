@@ -3,7 +3,17 @@
 # GitLab (mirror_trigger_builds=true), so this runs on push / mirror-sync on the
 # privileged x86 runner (shell executor with docker, matching the generator CI).
 # Images carry NO keys — KEYS material is supplied from the USB at first boot.
-stages: [test, security, dast, build]
+
+# Pull in the centralized OWASP pen-test stage (hidden .pentest-* jobs) from the
+# generator repo so this service shares ONE source of truth for SCA + DAST. The
+# pentest:sca / pentest:dast jobs below `extends:` those hidden jobs and run the
+# full harness (Dependency-Check SCA + authenticated ZAP baseline + probes/nuclei).
+include:
+  - project: 'Snapdragon-Systems/snapdragon-generator'
+    ref: main
+    file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
+
+stages: [test, security, dast, build, pentest]
 
 test:
   stage: test
@@ -107,3 +117,26 @@ zap-api-scan:
       - zap-report.xml
       - zap-report.md
     expire_in: 30 days
+
+# -----------------------------------------------------------------------------
+# Centralized OWASP pen-test stage (single source of truth, included above).
+# These thin jobs `extends:` the hidden .pentest-* jobs from the generator so the
+# FULL harness (Dependency-Check SCA + ZAP baseline + custom probes + nuclei) runs
+# without duplicating script blocks in every repo. Kept ADDITIVE alongside the
+# legacy inline dependency-check / zap-api-scan jobs (migration left for a follow-up
+# so the existing security/dast jobs stay untouched). allow_failure: advisory only.
+# Rules mirror this repo's security-job posture: default branch + merge requests.
+# -----------------------------------------------------------------------------
+pentest:sca:
+  extends: .pentest-sca
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+pentest:dast:
+  extends: .pentest-dast-baseline
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
