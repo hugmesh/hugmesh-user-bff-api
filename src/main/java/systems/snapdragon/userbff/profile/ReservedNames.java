@@ -69,7 +69,7 @@ public final class ReservedNames {
             "games", "play", "wasm", "producer", "publisher", "banned",
             "api-docs", "docs", "_remotes", "producer-registration", "registration",
             "wasm-fragment", "games-dodecahedron", "games-rpg-maker",
-            "games-three-wizards", "games-vn-maker",
+            "games-three-wizards", "games-vn-maker", "games-instances-console",
             // --- defensive web reserved names ---
             "root", "static", "assets", "public", "health", "healthz", "actuator",
             "metrics", "well-known", "favicon", "robots", "sitemap", "status",
