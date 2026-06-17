@@ -59,11 +59,22 @@ public final class ReservedNames {
     public static final Set<String> RESERVED_LABELS = Set.of(
             // --- fe-gateway route prefixes (snapdragon.systems front door) ---
             "admin", "apidocs", "be", "bff", "_fragments", "login", "mod", "user",
-            // --- be-gateway route prefixes ---
-            "api", "_matrix", "oauth",
+            // superadmin: the TAILNET superadmin App-Store console is served at
+            // /superadmin/appstore/** on the superadmin-gateway — a dedicated
+            // first-segment route prefix (canonical reserved-prefixes.yaml).
+            "superadmin",
+            // --- be-gateway route prefixes / publicly-routable homeserver surfaces ---
+            // _synapse + media: PUBLICLY-ROUTABLE homeserver client surfaces the
+            // route-access seed deploys — /_synapse/** (Matrix Synapse-compat,
+            // matrix-host-scoped) and /media/** (Mastodon media). Real first-segment
+            // route prefixes, so a vanity username equal to either would shadow them.
+            "api", "_matrix", "_synapse", "media", "oauth",
             // --- reserved subdomains (snapdragon.systems) ---
-            "id", "matrix", "mastodon", "pleroma", "forum", "wiki", "owncast", "tube",
-            "scale", "headscale", "www",
+            // forum/phpbb: the phpBB community forum surfaces; owncast/wiki/tube:
+            // optional video/wiki/streaming services — all reserved so a vanity
+            // subdomain can never collide (canonical reserved-prefixes.yaml).
+            "id", "matrix", "mastodon", "pleroma", "forum", "phpbb", "wiki",
+            "owncast", "tube", "scale", "headscale", "www",
             // --- snapdragon.GAMES app route prefixes (derived: nginx /_remotes/<slug>/
             //     + location prefixes + <service>.snapdragon.games subdomains) ---
             "games", "play", "wasm", "producer", "publisher", "banned",
