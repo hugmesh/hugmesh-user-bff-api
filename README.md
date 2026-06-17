@@ -24,6 +24,40 @@ It talks to:
   connected-client list/revoke, and the AI-cloak media upload. These legs are
   **gated stub-seams** that never hard-fail (see *Honest deferrals*).
 
+```mermaid
+flowchart LR
+    UI["snapdragon-user-ui<br/>(later; ng-openapi-gen)"]:::planned
+    GW["snapdragon gateway<br/>(JWT validate + mTLS)"]
+    Casdoor["Casdoor IdP<br/>(JWT issuer)"]
+
+    subgraph BFF["snapdragon-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
+        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients ·<br/>media · status · notifications"]
+        Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
+        DB[("own R2DBC tables<br/>+ domain-scoped rows")]
+    end
+
+    Fed["snapdragon-federation-api<br/>(cards + moderation, forwarded JWT)"]
+    HS["homeservers via mTLS proxy<br/>tuwunel / Akkoma<br/>(gated stub-seams)"]:::gated
+    Actions["snapdragon-actions reconciler<br/>(only writer of user_notifications)"]:::planned
+
+    UI -->|Bearer JWT| GW
+    GW -->|forwarded JWT| Surfaces
+    Casdoor -.->|validates iss / roles| GW
+    Surfaces --> DB
+    Surfaces -->|forwarded JWT| Fed
+    Surfaces -->|gated, never hard-fail| HS
+    Surfaces -->|password / email| Casdoor
+    Actions -->|ROLE_SERVICE deliver| Internal
+    Internal --> DB
+
+    classDef planned stroke-dasharray:4,stroke:#888;
+    classDef gated stroke-dasharray:2,stroke:#b58900;
+```
+
+In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed nodes are 🔭 planned
+or built elsewhere (`snapdragon-user-ui`, the `snapdragon-actions` reconciler), and the
+amber-dashed homeserver leg is the ✅-shipped-but-**gated** stub-seam (off by default).
+
 ## The core invariant: owner-enforcement
 
 **Every endpoint operates ONLY on the caller's OWN data.** The owner is ALWAYS the
@@ -232,11 +266,70 @@ never *forced* to block. Ships **dark** by default (`app.media.poisoning.enabled
 =false` ⇒ the controller is mounted but every upload forwards through `status=none`)
 until the survival gate is verified on a real GPU cluster.
 
+### Account status — `AccountStatusController` (`/bff/user/status`) ✅ shipped
+A `ROLE_USER`-floor, owner-scoped, **read-only polling** endpoint. There is no write
+path, so it is entirely safe to cache or poll at whatever interval the UI prefers.
+
+- `GET /bff/user/status` → `{ sub, domain, roles, silenced, silenceExpiresAt }`.
+
+Everything is derived from the already-validated JWT authorities (the active `ROLE_*`
+list, stripped of the `ROLE_` prefix) + the caller's OWN `self_silence` row (owner =
+JWT subject, no BOLA). UIs poll it to detect account-status changes: a suspension
+removes roles at Casdoor so the NEXT token refresh reflects the change (the gateway's
+revocation filter covers in-flight JWTs), and a self-silence state flip shows up here
+without a token refresh. `domain` falls back to `default` for single-issuer clusters.
+
+### Notifications — in-app floor ✅ shipped
+The **in-app notification channel** — the always-on channel a user can never silence.
+All three surfaces are owner-enforced (owner = JWT subject) and domain-scoped
+(SUPERADMIN unscoped); see the [Notifications roadmap](#notifications-roadmap) for the
+external channels that build on top.
+
+**Inbox — `UserNotificationController` (`/bff/user/notifications`)** (`ROLE_USER` floor)
+- `GET /bff/user/notifications?limit=<n>` — my OWN in-app notifications, newest first,
+  server-capped (`limit` bounded to `UserNotificationRepository.MAX_PAGE` = 100,
+  default 50).
+- `POST /bff/user/notifications/{id}/read` — mark ONE of my own notifications read; an
+  id that is not my own owner+domain row is a **404** (no cross-user mark).
+
+**Per-category preferences — `NotificationPreferenceController`
+(`/bff/user/notification-preferences`)** (`ROLE_USER` floor) — MIRRORS the durable
+`UserPreferencesController` shape.
+- `GET` — my resolved per-category preferences (every known category defaults
+  **enabled**, my explicit choices merged in).
+- `PUT` — body `{ "category": ..., "enabled": ... }`; upsert ONE category, returns the
+  resolved view. `account-restriction` is **forced-on / un-silenceable**: an
+  `enabled=false` for it is COERCED to enabled (API-coerced + a DB CHECK backstop), so
+  the durable row and the view always show it on.
+
+**Internal deliver — `InternalNotificationController`
+(`/bff/user/internal/notifications`)** — **SERVICE-PRINCIPAL ONLY.**
+- `POST /bff/user/internal/notifications` — the ONLY production writer of
+  `user_notifications`; the `snapdragon-actions` reconciler calls it.
+- The target `(domain, userSubject)` comes from the **request body** (the service acts
+  on behalf of the SYSTEM for a named user — NOT owner==caller), which is exactly why
+  it must be unreachable by any human JWT. `SecurityConfig` gates the
+  `/bff/user/internal/**` prefix to `ROLE_SERVICE` **exclusively** — declared BEFORE
+  the `/bff/user/**` authenticated rule, and deliberately NOT `hasAnyRole(SERVICE,
+  ADMIN, SUPERADMIN)`, so even SUPERADMIN is DENIED here — plus a method-level
+  `@PreAuthorize("hasRole('SERVICE')")`. `ROLE_SERVICE` is the platform service-account
+  role (a Casdoor client-credentials token carries it; no human login does — the same
+  mechanism federation-api uses for its internal username oracle).
+- Honours the per-category preference (`account-restriction` forced-on) and is
+  **idempotent**: the row id is a deterministic hash of the source event
+  (`sourceTable`+`sourceId`), so a retry is INSERT-IF-ABSENT (a duplicate returns
+  `delivered=true, deduped=true`, never a second row).
+
+> **SHIPS DARK (in-app floor MVP):** the read/mark-read + prefs surfaces are live and
+> the SERVICE-only deliver endpoint exists, but nothing writes `user_notifications` in
+> normal operation yet — the `snapdragon-actions` reconciler (a separate repo, later PR)
+> is the only writer. This is the read/prefs/deliver-seam side of the feature.
+
 ## Where data lives (the routing rule)
 
 | Concern | Destination |
 | --- | --- |
-| Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`) |
+| Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
 | External mute/block push, self-silence directory hide, connected-client list/revoke, media upload | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients via the gateway mTLS proxy (STUBBED/gated) |
@@ -252,14 +345,17 @@ until the survival gate is verified on a real GPU cluster.
   call (`FederationWebClientConfig`).
 - `CasdoorUserClient` — reactive WebClient for self-service password/email
   (`/api/set-password`, `/api/update-user`). Gated by `casdoor.account.enabled`.
-- `MatrixBlockClient` / `MastodonBlockClient` — reactive WebClients for the
+- `MatrixBlockClient` / `MastodonBlockClient` (behind the `ExternalBlockClient` /
+  `ExternalBlockConfig` abstraction seam) — reactive WebClients for the
   external self-block push. Base URLs grounded in the snapdragon-generator
   manifests: tuwunel `:8008` (`MATRIX_URL`), Akkoma `:4000` (`MASTODON_URL`).
   Gated by `block.matrix.enabled` / `block.mastodon.enabled`.
-- `MatrixHideClient` / `MastodonHideClient` — reactive WebClients for the
+- `MatrixHideClient` / `MastodonHideClient` (behind the `HomeserverHideClient` /
+  `HomeserverHideConfig` abstraction seam) — reactive WebClients for the
   self-silence directory/discovery hide seams. Gated by `external.{matrix,mastodon}
   .enabled`.
-- `MatrixClientsClient` / `MastodonClientsClient` — reactive WebClients for the
+- `MatrixClientsClient` / `MastodonClientsClient` (behind the `HomeserverClientsClient`
+  seam) — reactive WebClients for the
   connected-clients list/revoke against the homeserver client API (through the mTLS
   proxy). `RevocationWriter` writes the gateway per-credential revocation keys.
 - `PoisonWorkerClient` / `HomeserverMediaClient` — the media-proxy worker call +
@@ -290,13 +386,15 @@ BFF's client identity on its OUTBOUND federation-api calls when federation-api f
 its server-side client-auth to `need`. Both reuse one mounted `/stores` layout.
 Defaults keep local/dev/CI plaintext (`SSL_ENABLED=false`, client-auth `none`).
 
-### Multi-tenancy / domain-scoping (on `feat/domain-foundation`, not yet on `main`)
+### Multi-tenancy / domain-scoping ✅ shipped
 The platform is multi-brand: one Casdoor per brand, so a token's
-cryptographically-validated `iss` claim is the trustworthy tenant discriminator. The
-`feat/domain-foundation` branch threads issuer-keyed domain-scoping through this BFF
-to match the gateway. **Intent (on the branch):**
+cryptographically-validated `iss` claim is the trustworthy tenant discriminator.
+Issuer-keyed domain-scoping is **shipped and active on `main`** — it threads through this
+BFF to match the gateway, and is the in-data defence-in-depth layer **beneath** the
+authoritative cross-domain boundary (per-domain namespace + mTLS isolation; 1
+admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
-- The JWT→authority mapping moves to a shared `CasdoorAuthorities` converter COPIED
+- The JWT→authority mapping uses a shared `CasdoorAuthorities` converter COPIED
   (logic) from the gateway so the BFF and gateway emit **byte-identical** authorities.
   It stamps exactly one issuer-derived `DOMAIN_<x>` authority (resolved through a
   `DomainRegistry` issuer→domain map; unknown issuer → `default`), and **strips any
@@ -305,14 +403,18 @@ to match the gateway. **Intent (on the branch):**
   brand-X token cannot inject `permissions:["DOMAIN_brandy"]` (forged tenant) or
   `permissions:["ROLE_SUPERADMIN"]` (forged super-role) to escalate cross-domain.
 - A single-issuer cluster (today's default) resolves `DOMAIN_default` for every
-  token and nothing else changes (back-compat). When `app.tenancy.issuers` is
-  populated, an optional multi-issuer decoder (`TenancyResourceServerConfig`) 401s
-  an unknown `iss` before authorities are emitted (fail-closed).
+  token and nothing else changes (back-compat). When `app.tenancy.issuers`
+  (`${APP_TENANCY_ISSUERS:}`) carries `issuerUri=domain` pairs, the
+  config-gated multi-issuer decoder (`TenancyResourceServerConfig`) activates and
+  401s an unknown `iss` before authorities are emitted (fail-closed). The
+  `.contains('=')` guard means the empty default does NOT spuriously activate it; the
+  resolver is only swapped on when `DomainRegistry.isMultiIssuer()`.
 - `PrincipalDomain` turns the validated JWT into the effective scope: **SUPERADMIN**
   (the cross-domain infra super-role) → `null` = unscoped (sees/mutates every
   brand's rows); any other principal → its concrete issuer-derived domain (a
   non-SUPERADMIN with an unresolvable issuer fails closed to a non-matchable
-  `__deny__` sentinel).
+  `__deny__` sentinel). `AccountStatusController` and the notification surfaces call
+  `PrincipalDomain.forScope` at runtime.
 - The data layer adds a per-query `domain` predicate (`DomainScope`: `AND domain =
   :domain`, or NO predicate for the SUPERADMIN bypass) **alongside** — never
   replacing — the existing `owner = :uid` predicate. The 010 changelog adds a
@@ -321,12 +423,23 @@ to match the gateway. **Intent (on the branch):**
   domain. The domain is never read from a request field — only from the issuer — so a
   caller cannot forge a cross-tenant scope.
 
+> 🔭 **Roadmap (provisioning, not in this repo):** turning `domain_registry` rows into
+> a per-brand ArgoCD `ApplicationSet` (namespaces / CA / Casdoor org / gateway / BFF /
+> UI) is a later snapdragon-generator PR; multi-issuer **live** wiring beyond
+> single-issuer `DOMAIN_default` clusters lands with that provisioning. The code in this
+> BFF is ready for it today.
+
 ## Stack
 
 Reactive WebFlux everywhere (Mono/Flux, reactive WebClient; no `.block()` /
 `Thread.sleep` on the event loop). R2DBC for all runtime data; JDBC only for the
-Liquibase migrations (`db/changelog`, 001–009 on `main`; +010 domain-scoping on the
-branch). Spring Native: `native` profile + native-maven-plugin, surefire `argLine
+Liquibase migrations (`db/changelog`, **001–012**). 010 = domain-scoping (the
+`domain` column on every owner-keyed table); 011 = `user_preferences_store` (the
+durable per-user/per-brand preferences table backing `/bff/user/preferences`,
+domain-first composite PK `(user_id, pref_key, domain)`); 012 = the notifications
+floor (`user_notifications` + `notification_preference`, both owner-keyed +
+domain-scoped, `account-restriction` forced-on with a DB CHECK backstop). Spring
+Native: `native` profile + native-maven-plugin, surefire `argLine
 -Dnet.bytebuddy.experimental=true`, `NativeHintsConfig` with reflection hints for the
 JSON-bound DTOs + swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps
 Postgres/H2 timestamp types → `Instant` deterministically (JVM + native).
@@ -343,14 +456,33 @@ Postgres/H2 timestamp types → `Instant` deterministically (JVM + native).
   (no role/suspension/revocation) + round-trip; the media-proxy sniff/poison/survival
   flow; the home-guide dismiss round-trip; the federation / Casdoor / Matrix /
   Mastodon clients + the JWT-forwarding filter against a mocked `ExchangeFunction`;
-  and a full-context load test. (`feat/domain-foundation` adds the domain-scope
-  repo/service/converter tests.)
+  the **domain-scoping** layer (the `CasdoorAuthorities` reserved-prefix injection
+  guard, `PrincipalDomain` scope resolution, `DomainRegistry` issuer→domain mapping,
+  and a per-table repository domain-isolation slice for every owner-keyed table); the
+  **account-status** polling endpoint; the **notifications** floor (inbox + per-category
+  prefs + the SERVICE-only idempotent deliver + the `account-restriction` forced-on
+  coercion + per-table domain isolation); and a full-context load test.
 - `./mvnw package -DskipTests` — builds the runnable jar.
 - `./mvnw -Pnative native:compile` — GraalVM native binary (needs a GraalVM host).
 
 CI is **GitLab only** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
 in-cluster GitLab. There are deliberately **no `.github/workflows`** (GitHub
-Actions is billing-blocked).
+Actions is billing-blocked). The pipeline runs **`test`** (`mvn verify` on
+`eclipse-temurin:21-jdk-noble`) → **`security`** (OWASP Dependency-Check SCA,
+fail-on-CVSS≥9) → **`dast`** (a ZAP API scan against the OpenAPI spec when
+`DAST_TARGET_URL` is set, advisory otherwise) → **`build`** (the container image) →
+**`pentest`**. The `pentest` stage `include:`s the centralized OWASP harness from
+`snapdragon-generator` (`/tests/pentest/ci/pentest-stage.gitlab-ci.yml`), so the
+`pentest:sca` / `pentest:dast` jobs `extends:` the shared `.pentest-*` jobs that run
+the full harness (Dependency-Check SCA + authenticated ZAP baseline + custom probes +
+**nuclei**) from one source of truth. The legacy inline `dependency-check` /
+`zap-api-scan` jobs are kept additively alongside it (their migration onto the shared
+harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true`
+(advisory, not a hard gate) and scoped to the default branch + merge requests.
+
+> 🔭 **Roadmap (CI):** k6 load testing (part of the platform pen-test standard) is not
+> yet wired into this repo's `.gitlab-ci.yml`; nuclei already runs via the shared
+> `.pentest-*` jobs above.
 
 ## Honest deferrals
 
@@ -381,10 +513,16 @@ Actions is billing-blocked).
 - **AI-cloak media-proxy ships DARK** (`app.media.poisoning.enabled=false`) until
   the round-trip survival gate is verified on a real GPU cluster. The heavy-tier
   worker is optional; the lean fallback never *forces* posting to block.
-- **Domain-scoping is on `feat/domain-foundation`, not yet on `main`.** A
-  single-issuer cluster resolves `DOMAIN_default` and behaviour is unchanged; the
-  multi-issuer decoder + per-query domain predicate are documented above as branch
-  intent.
+- **Domain-scoping is ✅ shipped and active.** A single-issuer cluster resolves
+  `DOMAIN_default` and behaviour is unchanged (back-compat); the multi-issuer decoder
+  + per-query domain predicate are live (see *Multi-tenancy / domain-scoping* above).
+  Only the per-brand provisioning (ApplicationSet) and multi-issuer *live wiring* are
+  roadmap (in `snapdragon-generator`), not this BFF's code.
+- **Notifications floor ships DARK.** The read/mark-read inbox + per-category prefs +
+  the SERVICE-only deliver endpoint are wired and tested, but nothing writes
+  `user_notifications` in normal operation yet — the `snapdragon-actions` reconciler
+  (separate repo, later PR) is the only writer. EXTERNAL channels (Matrix DM / Akkoma
+  feed / phpBB / email) are roadmap (see below).
 - **Owner-enforcement coverage.** Enforced in EVERY service method (owner = JWT
   subject; body userId ignored) and tested at both the service layer
   (spoofed-body, owner+id-scoped delete) and the repository/SQL layer (owner
@@ -397,3 +535,34 @@ Actions is billing-blocked).
   native:compile` on a GraalVM host is the real check (not run in this CI).
 - **Paired `snapdragon-user-ui`** is built later, NOT here; this BFF's
   `/v3/api-docs` spec is the contract its ng-openapi-gen typed client will consume.
+
+## Roadmap
+
+State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR, not merged) ·
+🔭 planned (design-complete, no code). Everything in the sections above is ✅ shipped on
+`main` unless explicitly marked otherwise; the items below are NOT yet shipped here.
+
+<a id="notifications-roadmap"></a>
+### Notifications — external channels 🚧 in-flight
+On top of the shipped in-app floor, the platform design adds **external** notification
+adapters — Matrix DM + Akkoma local feed + phpBB forum + email — each user-silenceable
+via the per-category preferences this BFF already owns (`account-restriction` stays
+forced-on). The per-category prefs + minimal prefs tables here are the user-facing
+control surface; the actual external delivery is reconciler-driven (the
+`snapdragon-actions` reconciler / `mod-bff` `notify_channels` directive in other repos).
+User-facing notification silencing/preferences that land in THIS BFF will be documented
+as shipped only once merged to `main`.
+
+### Casdoor MFA / step-up 🔭 planned
+Platform MFA (WebAuthn + TOTP + recovery) is design-complete (admin-bff Liquibase
+150-band, a 9-PR plan): per-role defaults (superadmin/admin required, mod relaxable,
+user optional) enforced via `amr`/`acr` → `MFA_SATISFIED` + `gateway_route_access
+.mfa_required` (fail-closed) + generalized step-up. This BFF participates as a JWT
+resource server; if any step-up surface ever lands here it will be marked 🚧/✅ at that
+time. None is present today.
+
+### Generator supply-chain hardening 🚧 in-flight + CI pen-test completion 🔭 planned
+Stage3 GPG/sha + headscale/tailscale checksum verification + de-defaulted baked creds
+are in-flight in `snapdragon-generator`; for this repo, **k6 load testing** is the
+remaining pen-test-standard tool not yet wired into `.gitlab-ci.yml` (nuclei already
+runs via the shared `.pentest-*` jobs).
