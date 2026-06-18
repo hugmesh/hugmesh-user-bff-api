@@ -1,0 +1,25 @@
+# snapdragon-deploy.yaml — per-repo deploy descriptor (Phase 6 catalog).
+#
+# Discovered by the catalog ApplicationSet (snapdragon-generator
+# specs/cluster/apps/13-service-catalog.yaml): its scmProvider gitea generator
+# scans the in-cluster Forgejo org for repos carrying THIS file + a `deploy/`
+# kustomize dir and generates one ArgoCD Application (source path: deploy/).
+#
+# DUAL-HOME / SHIPS DARK: the central manifest still lives at
+# snapdragon-generator specs/cluster/manifests/user-bff-api/ and remains the
+# authoritative source today. This file + deploy/ are a Forgejo-cutover PILOT:
+# the live GitHub-rooted ArgoCD ignores it, and the (currently unseeded) Forgejo
+# catalog matches nothing, so it changes nothing running. deploy/ is a verbatim
+# copy of the central manifest — keep the two in sync until cutover.
+name: snapdragon-user-bff-api          # Application name
+namespace: snapdragon-backend          # target k8s namespace (existing tier ns)
+image: snapdragon-systems/user-bff-api # image repo (tag pinned in deploy/ kustomize)
+port: 8080
+replicas: 1
+# Gateway route the admin/BFF seeds into the routing DB (Phase 2 core). The user
+# BFF is ClusterIP-only and reachable solely via the fe-gateway's same-origin
+# /bff/user/** route, which enforces ROLE_USER from the route DB.
+route:
+  gateway: snapdragon-fe-gateway
+  path: /bff/user/**
+  stripPrefix: 0

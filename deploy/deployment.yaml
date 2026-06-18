@@ -1,0 +1,199 @@
+# user-bff — the Backend-For-Frontend the snapdragon-user-ui talks to for the
+# self-service user surfaces (/bff/user/**): profile, preferences, and block list.
+# It owns the user_profile / user_preference / user_block tables in its OWN
+# dedicated Postgres (user-bff-db) and calls federation-api (as a JWT-bearing
+# WebClient) for the user's federated module/profile data.
+#
+# It is a ClusterIP-only service in snapdragon-backend: nothing reaches it from
+# outside except via the fe-gateway, which routes same-origin /bff/user/** to it
+# AND enforces the Casdoor role rules (/bff/user/** => ROLE_USER) from the route
+# DB first.
+#
+# Security model: like federation-api, user-bff is purely an OAuth2 RESOURCE
+# SERVER. It VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS
+# auto-discovered) and FORWARDS the caller's bearer token onward to federation-api
+# — it mints/holds NO outbound client creds, so it needs NO Casdoor app or client
+# secret of its own.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-user-bff-api
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-user-bff-api } }
+  template:
+    metadata: { labels: { app: snapdragon-user-bff-api } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c29"
+      # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
+      # Mirrors the snapdragon-gateway chart's build-keystore initContainer: turns
+      # the Vault-PKI-issued, ESO-synced TLS Secret (snapdragon-user-bff-api-mtls:
+      # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
+      # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
+      # to the cluster CA. Store password generated in-pod, kept only in the tmpfs
+      # /stores emptyDir, emitted into application-tls.properties loaded via
+      # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
+      initContainers:
+        - name: build-keystore
+          image: snapdragon-systems/user-bff-api:dev
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name snapdragon-user-bff-api \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              umask 077
+              cat > /stores/application-tls.properties <<EOF
+              server.ssl.key-store-password=${P}
+              server.ssl.trust-store-password=${P}
+              EOF
+              echo "keystore + truststore + application-tls.properties built"
+          volumeMounts:
+            - { name: pki,    mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
+      containers:
+        - name: snapdragon-user-bff-api
+          image: snapdragon-systems/user-bff-api:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # ── API-to-API mTLS (server side) ─────────────────────────────────
+            # Require a client cert chaining to the cluster CA. Store passwords come
+            # from /stores/application-tls.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave (see PR body).
+            - { name: SSL_ENABLED,          value: "true" }
+            - { name: SSL_CLIENT_AUTH,      value: "need" }
+            - { name: SSL_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
+            # OAuth2 resource server: validate the cluster Casdoor JWT itself.
+            # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
+            # client secret needed (pure resource server, like federation-api).
+            - name: CASDOOR_ISSUER_URI
+              value: "https://id.snapdragon.systems"
+            # WebClient to the federation-api module-federation registry (the
+            # user BFF reads the user's federated module/profile data there,
+            # forwarding the caller JWT).
+            - name: FEDERATION_API_URL
+              value: "http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
+            # ── AI-cloak / media-poisoning (poison-before-ingest) ────────────────
+            # The media-proxy (/bff/user/media/upload) routes image uploads through
+            # the OPTIONAL snapdragon-media-poisoner worker BEFORE the real homeserver
+            # upload, so bytes are cloaked before any thumbnail/federation happens.
+            # WORKER_URL is the worker's in-cluster ClusterIP DNS; the BFF probes its
+            # /health for capability (cuda|rocm|cpu|none) and POSTs /poison per upload.
+            # On a Pi5-only cluster the worker pod is Pending (nodeSelector amd64+gpu)
+            # so this Service has no Ready endpoints, the probe reports the heavy tier
+            # ABSENT, and the BFF degrades to FALLBACK_MODE (warn-before-post). HONEST
+            # framing: best-effort training-set hygiene, NOT a guarantee — the BFF marks
+            # a result 'protected' only after its round-trip survival check.
+            - { name: MEDIA_POISONING_ENABLED,        value: "false" }
+            - name: MEDIA_POISONING_WORKER_URL
+              value: "http://snapdragon-media-poisoner.snapdragon-backend.svc.cluster.local:8080"
+            - { name: MEDIA_POISONING_DEFAULT_MODE,   value: "glaze" }
+            - { name: MEDIA_POISONING_FALLBACK_MODE,  value: "warn_before_post" }
+            - { name: MEDIA_POISONING_TIMEOUT_MS,     value: "120000" }
+            # Served sizes the worker must own so no clean derivative exists (akkoma
+            # "small"; Matrix 240x240 thumbnail). CSV of the longest-edge px.
+            - { name: MEDIA_POISONING_THUMBNAIL_SIZES, value: "240,480" }
+            # Config datastore: the user_profile / user_preference / user_block
+            # tables. The app's application.yml defaults spring.r2dbc +
+            # spring.liquibase to a literal `snapdragon-pg` host that does NOT
+            # exist; OVERRIDE both here to the dedicated user-bff-db (mirrors how
+            # admin-bff/federation override to their dedicated dbs). R2DBC is the
+            # runtime handle; the JDBC handle is used by Liquibase ONCE at startup.
+            # Password sourced from Vault via External Secrets (ESO Secret
+            # user-bff-db-auth, key password) — the SAME Secret the user-bff-db
+            # pod's POSTGRES_PASSWORD mounts, so the DB and its consumer stay in sync.
+            # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role
+            # `userbff_app` (DML only, no DDL), created by user-bff-db's
+            # initdb/10-roles.sh. Password from its OWN ESO Secret
+            # user-bff-db-app-auth (the SAME the DB pod's USERBFF_APP_PASSWORD mounts).
+            - name: SPRING_R2DBC_URL
+              value: "r2dbc:postgresql://user-bff-db.snapdragon-backend.svc.cluster.local:5432/userbff"
+            - name: SPRING_R2DBC_USERNAME
+              value: "userbff_app"
+            - name: SPRING_R2DBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-app-auth
+                  key: password
+            # JDBC handle used ONLY by Liquibase at startup. DDL needs the OWNER, so
+            # Liquibase keeps the owner role `userbff` + the owner ESO Secret
+            # user-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
+            - name: SPRING_LIQUIBASE_URL
+              value: "jdbc:postgresql://user-bff-db.snapdragon-backend.svc.cluster.local:5432/userbff"
+            - name: SPRING_LIQUIBASE_USER
+              value: "userbff"
+            - name: SPRING_LIQUIBASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-auth
+                  key: password
+          # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
+          # so curl PRESENTS this pod's client cert and validates the server cert
+          # against the cluster CA (--resolve maps the SAN to loopback). See
+          # admin-bff-api for the rationale.
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve snapdragon-user-bff-api:8080:127.0.0.1
+                  https://snapdragon-user-bff-api:8080/actuator/health/readiness
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve snapdragon-user-bff-api:8080:127.0.0.1
+                  https://snapdragon-user-bff-api:8080/actuator/health/liveness
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          volumeMounts:
+            - { name: tmp,    mountPath: /tmp }
+            - { name: stores, mountPath: /stores, readOnly: true }
+            - { name: pki,    mountPath: /pki,    readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: snapdragon-user-bff-api-mtls
+        # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory
