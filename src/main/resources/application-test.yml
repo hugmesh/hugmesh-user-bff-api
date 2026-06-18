@@ -3,11 +3,17 @@
 # federation-api), so the production Postgres R2DBC + Liquibase auto-config is
 # disabled here. The context-load test runs a JWT-decoder mock so no live Casdoor
 # is needed. External Matrix/Mastodon + Casdoor account writes stay STUBBED.
+#
+# R2dbcDataAutoConfiguration is intentionally NOT excluded: it builds the
+# r2dbcEntityTemplate / mapping-context the Spring Data R2DBC repositories need, over
+# the H2-PG-compat ConnectionFactory TestDatabaseConfig supplies (R2dbcAutoConfiguration
+# — the production Postgres ConnectionFactory from spring.r2dbc.url — STAYS excluded).
+# The custom R2dbcCustomConversions bean (R2dbcConvertersConfig) still overrides that
+# auto-config's conversions.
 spring:
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.r2dbc.R2dbcAutoConfiguration
-      - org.springframework.boot.autoconfigure.data.r2dbc.R2dbcDataAutoConfiguration
       - org.springframework.boot.autoconfigure.r2dbc.R2dbcTransactionManagerAutoConfiguration
       - org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration
   liquibase:

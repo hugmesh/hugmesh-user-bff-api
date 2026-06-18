@@ -1,53 +1,31 @@
 package systems.snapdragon.userbff.block;
 
-import io.r2dbc.spi.Row;
-import io.r2dbc.spi.RowMetadata;
-import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.security.DomainScope;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
- * Reactive (R2DBC) store for {@code user_block} — owner-keyed by {@code user_id}
- * (Casdoor JWT subject) AND domain-scoped by {@code domain} (the validated-issuer
- * brand). Every method takes the owner id so the SQL is always owner-scoped, PLUS an
- * optional {@code domain} predicate ({@link DomainScope}) so a caller only ever
- * touches rows in their OWN brand; a {@code null} domain is the SUPERADMIN
- * cross-domain bypass (no predicate). The id is app-generated (UUID) so the INSERT is
- * portable (Postgres + H2) and returns the new row. {@code delete} is
- * owner-AND-domain-AND-id scoped so a caller can never delete another user's (or
- * another brand's) block even with a guessed id.
+ * Owner-AND-domain-scoped facade over {@link UserBlockR2dbcRepository} for
+ * {@code user_block}. Keeps the original method surface ({@code listForOwner} /
+ * {@code add} / {@code delete}, with the {@code default}-domain back-compat overloads)
+ * so the block service and slice tests are unchanged; all data access now flows through
+ * the reactive repository interface (no raw {@code DatabaseClient SQL}).
  */
 @Repository
 public class UserBlockRepository {
 
-    private final DatabaseClient db;
+    private final UserBlockR2dbcRepository repo;
 
-    public UserBlockRepository(DatabaseClient db) {
-        this.db = db;
+    public UserBlockRepository(UserBlockR2dbcRepository repo) {
+        this.repo = repo;
     }
 
-    private static UserBlock map(Row row, RowMetadata meta) {
-        Object tsRaw = row.get("ts");
-        Instant ts = switch (tsRaw) {
-            case Instant i -> i;
-            case LocalDateTime ldt -> ldt.toInstant(ZoneOffset.UTC);
-            case java.time.OffsetDateTime odt -> odt.toInstant();
-            case null, default -> null;
-        };
-        return new UserBlock(
-                row.get("id", String.class),
-                row.get("user_id", String.class),
-                row.get("target", String.class),
-                row.get("platform", String.class),
-                ts);
+    private static UserBlock toWire(UserBlockEntity e) {
+        return new UserBlock(e.id(), e.userId(), e.target(), e.platform(), e.ts());
     }
 
     /** Back-compat overload — scopes to the platform {@code default} domain. */
@@ -68,11 +46,10 @@ public class UserBlockRepository {
     /** All of the owner's blocks in their domain (own data only; SUPERADMIN sees all
      *  domains when {@code domain} is null). */
     public Flux<UserBlock> listForOwner(String userId, String domain) {
-        var spec = db.sql("SELECT id, user_id, target, platform, ts FROM user_block "
-                        + "WHERE user_id = :uid" + DomainScope.andPredicate(domain)
-                        + " ORDER BY ts DESC, id")
-                .bind("uid", userId);
-        return DomainScope.bind(spec, domain).map(UserBlockRepository::map).all();
+        var rows = DomainScope.isUnscoped(domain)
+                ? repo.findByUserIdOrderByTsDescIdAsc(userId)
+                : repo.findByUserIdAndDomainOrderByTsDescIdAsc(userId, domain);
+        return rows.map(UserBlockRepository::toWire);
     }
 
     /** Insert a block for the owner in their domain (app-generated id) and return it.
@@ -82,20 +59,15 @@ public class UserBlockRepository {
     public Mono<UserBlock> add(String userId, String target, String platform, String domain) {
         String id = UUID.randomUUID().toString();
         String dom = DomainScope.isUnscoped(domain) ? DomainRegistry.DEFAULT_DOMAIN : domain;
-        return db.sql("INSERT INTO user_block (id, user_id, target, platform, domain, ts) "
-                        + "VALUES (:id, :uid, :t, :p, :dom, now())")
-                .bind("id", id).bind("uid", userId).bind("t", target).bind("p", platform)
-                .bind("dom", dom)
-                .fetch().rowsUpdated()
-                .then(db.sql("SELECT id, user_id, target, platform, ts FROM user_block WHERE id = :id")
-                        .bind("id", id).map(UserBlockRepository::map).first());
+        return repo.insertRow(id, userId, target, platform, dom)
+                .then(repo.findById(id))
+                .map(UserBlockRepository::toWire);
     }
 
     /** Delete one of the owner's blocks (scoped by owner AND domain AND id). */
     public Mono<Long> delete(String userId, String id, String domain) {
-        var spec = db.sql("DELETE FROM user_block WHERE user_id = :uid AND id = :id"
-                        + DomainScope.andPredicate(domain))
-                .bind("uid", userId).bind("id", id);
-        return DomainScope.bind(spec, domain).fetch().rowsUpdated();
+        return DomainScope.isUnscoped(domain)
+                ? repo.deleteByUserIdAndId(userId, id)
+                : repo.deleteByUserIdAndIdAndDomain(userId, id, domain);
     }
 }

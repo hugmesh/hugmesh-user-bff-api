@@ -1,11 +1,15 @@
 package systems.snapdragon.userbff.security;
 
-import org.springframework.r2dbc.core.DatabaseClient;
-
 /**
- * The optional {@code domain = :domain} predicate every owner-keyed repository
- * appends to scope a read/mutation to the caller's tenant — the data-layer half of
- * the multi-brand isolation boundary.
+ * The multi-brand scoping decision every owner-keyed repository applies: whether a
+ * read/mutation gains the {@code domain = :domain} tenant predicate or runs unscoped
+ * (the SUPERADMIN cross-domain bypass) — the data-layer half of the multi-brand
+ * isolation boundary.
+ *
+ * <p>Since the data access moved to Spring Data R2DBC repositories, the scoping is
+ * expressed as a CHOICE between a domain-scoped derived/{@code @Query} finder and an
+ * unscoped one (mirroring federation's {@code findBySlug} / {@code findBySlugAndDomain}
+ * pair); each repository facade calls {@link #isUnscoped(String)} to pick the variant.
  *
  * <p><b>Convention.</b> The service layer resolves the principal's domain from the
  * validated token issuer ({@link Roles#domainOf(org.springframework.security.oauth2.jwt.Jwt,
@@ -30,24 +34,6 @@ public final class DomainScope {
 
     /** The named bind parameter for the domain predicate. */
     public static final String PARAM = "domain";
-
-    /**
-     * The SQL fragment to splice into a WHERE clause for the given domain:
-     * {@code " AND domain = :domain"} when {@code domain} is non-null/blank, else the
-     * empty string (SUPERADMIN cross-domain bypass — no predicate).
-     */
-    public static String andPredicate(String domain) {
-        return isUnscoped(domain) ? "" : " AND domain = :" + PARAM;
-    }
-
-    /** Bind the domain parameter onto a spec IFF a domain predicate was added (i.e.
-     *  {@code domain} is non-null/blank). A no-op for the SUPERADMIN bypass so the
-     *  bound-parameter set always matches the SQL exactly (an unbound {@code :domain}
-     *  in non-bypass SQL, or a bound-but-unused param in bypass SQL, both throw). */
-    public static DatabaseClient.GenericExecuteSpec bind(
-            DatabaseClient.GenericExecuteSpec spec, String domain) {
-        return isUnscoped(domain) ? spec : spec.bind(PARAM, domain);
-    }
 
     /** True iff the domain represents the SUPERADMIN cross-domain bypass (null/blank
      *  ⇒ no predicate). */
