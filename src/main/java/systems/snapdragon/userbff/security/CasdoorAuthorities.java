@@ -39,6 +39,24 @@ public final class CasdoorAuthorities {
     private CasdoorAuthorities() {}
 
     /**
+     * MFA derivation config for the converter (D8 gateway MFA floor). Carried so
+     * the single-issuer ({@code SecurityConfig}) and multi-issuer
+     * ({@code TenancyResourceServerConfig}) paths derive the {@code MFA_SATISFIED}
+     * marker BYTE-IDENTICALLY. {@code enabled} is {@code app.mfa.enabled} (default
+     * {@code false} — ships dark: when off, the converter emits the legacy
+     * authority set verbatim and {@code MFA_SATISFIED} is NEVER produced).
+     * {@code freshnessWindowMillis} is {@code app.mfa.freshness-window} (default
+     * 10m).
+     *
+     * @param enabled               whether the {@code MFA_SATISFIED} marker is derived at all
+     * @param freshnessWindowMillis the {@code 0 <= now - ts <= window} freshness window
+     */
+    public record MfaConfig(boolean enabled, long freshnessWindowMillis) {
+        /** The dark default — MFA derivation OFF, byte-identical legacy behaviour. */
+        public static final MfaConfig DISABLED = new MfaConfig(false, 0L);
+    }
+
+    /**
      * Authority prefixes RESERVED for the converter's own controlled logic and
      * therefore NEVER allowed to originate from a user-influenced claim string:
      * <ul>
@@ -52,12 +70,20 @@ public final class CasdoorAuthorities {
      *       entry cannot either (it always gains the {@code ROLE_} prefix first, so
      *       {@code "DOMAIN_x" -> "ROLE_DOMAIN_X"}, which is an inert non-tenant
      *       authority).</li>
+     *   <li>{@code MFA_SATISFIED} (D8) — the second-factor marker, emitted ONLY
+     *       from the BFF-written, freshness-validated {@code mfa_satisfied_at}
+     *       claim (see {@link #authorities}), NEVER from a roles/permissions
+     *       entry. A forged {@code permissions:["MFA_SATISFIED"]} must be dropped
+     *       so a step-up gate can't be satisfied without an actual recent MFA.
+     *       Listed as a full prefix (not just an exact value) so casing /
+     *       whitespace variants are caught by the same trim+upper guard.</li>
      * </ul>
      * SECURITY: without this filter a brand-X token carrying
      * {@code permissions:["DOMAIN_brandy"]} or {@code permissions:["ROLE_SUPERADMIN"]}
-     * would inject a forged tenant scope / super-role and escalate cross-domain.
+     * would inject a forged tenant scope / super-role and escalate cross-domain;
+     * a {@code permissions:["MFA_SATISFIED"]} would forge a second factor.
      */
-    private static final String[] RESERVED_PREFIXES = {"ROLE_", "DOMAIN_"};
+    private static final String[] RESERVED_PREFIXES = {"ROLE_", "DOMAIN_", "MFA_SATISFIED"};
 
     private static boolean isReserved(String authority) {
         String upper = authority.trim().toUpperCase();
@@ -68,14 +94,35 @@ public final class CasdoorAuthorities {
     }
 
     /** Build the converter bound to the given {@link DomainRegistry} (used to resolve
-     *  the issuer -&gt; {@code DOMAIN_<x>} authority). */
+     *  the issuer -&gt; {@code DOMAIN_<x>} authority). MFA derivation OFF — the legacy
+     *  byte-identical authority set (no {@code MFA_SATISFIED}). */
     public static Converter<Jwt, Flux<GrantedAuthority>> converter(DomainRegistry domainRegistry) {
-        return jwt -> Flux.fromIterable(authorities(jwt, domainRegistry));
+        return converter(domainRegistry, MfaConfig.DISABLED);
+    }
+
+    /** Build the converter bound to the given {@link DomainRegistry} with the D8
+     *  {@link MfaConfig}. When {@code mfa.enabled()} is {@code false} (the dark
+     *  default) the emitted authorities are byte-identical to the legacy set;
+     *  when {@code true} a FRESH BFF-written {@code mfa_satisfied_at} claim adds
+     *  the {@code MFA_SATISFIED} marker. Production clock is
+     *  {@link System#currentTimeMillis()}. */
+    public static Converter<Jwt, Flux<GrantedAuthority>> converter(DomainRegistry domainRegistry,
+                                                                   MfaConfig mfa) {
+        return jwt -> Flux.fromIterable(
+                authorities(jwt, domainRegistry, mfa, System.currentTimeMillis()));
     }
 
     /** Compute the authority list for a token (the pure mapping, exposed for reuse +
-     *  unit testing). */
+     *  unit testing). MFA derivation OFF — legacy authority set. */
     public static List<GrantedAuthority> authorities(Jwt jwt, DomainRegistry domainRegistry) {
+        return authorities(jwt, domainRegistry, MfaConfig.DISABLED, System.currentTimeMillis());
+    }
+
+    /** Compute the authority list for a token with the D8 {@link MfaConfig} and an
+     *  explicit {@code now} (epoch-millis) so the freshness window is
+     *  deterministically unit-testable. */
+    public static List<GrantedAuthority> authorities(Jwt jwt, DomainRegistry domainRegistry,
+                                                     MfaConfig mfa, long now) {
         List<GrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority("ROLE_USER")); // floor — UNCHANGED
 
@@ -114,6 +161,19 @@ public final class CasdoorAuthorities {
 
         if (Boolean.TRUE.equals(jwt.getClaim("isAdmin"))) {
             authorities.add(new SimpleGrantedAuthority("ROLE_ADMIN"));
+        }
+
+        // MFA_SATISFIED marker (D8 gateway MFA floor) — ships DARK (app.mfa.enabled,
+        // default false). Derived ONLY from the BFF-written, freshness-validated
+        // `mfa_satisfied_at` JWT-Custom claim (Roles.isMfaSatisfied), NEVER from a
+        // roles/permissions entry (those carrying MFA_SATISFIED were already dropped
+        // by the reserved-prefix guard above). A NON-role SimpleGrantedAuthority
+        // (no ROLE_ prefix) so it can never satisfy a hasRole()/route-access role
+        // check by accident — it is a distinct second-factor proof consumed only by
+        // the mfa_required route gate + the privileged floor. When the flag is off
+        // the marker is never produced => byte-identical legacy authority set.
+        if (mfa.enabled() && Roles.isMfaSatisfied(jwt, now, mfa.freshnessWindowMillis())) {
+            authorities.add(new SimpleGrantedAuthority(Roles.MFA_SATISFIED));
         }
 
         // Domain authority — keyed on the cryptographically-validated ISSUER

@@ -27,6 +27,78 @@ public final class Roles {
 
     private Roles() {}
 
+    /**
+     * Non-role marker authority asserting THIS session completed a second factor
+     * recently (D8 MFA floor). NOT a Casdoor role and NOT a permission — it is
+     * derived ONLY by {@link #isMfaSatisfied(Jwt, long, long)} from the
+     * BFF-written, freshness-validated {@code mfa_satisfied_at} JWT-Custom claim,
+     * and is added to the converter's RESERVED prefixes so a forged
+     * {@code permissions:["MFA_SATISFIED"]} can never inject it. See
+     * {@code CasdoorAuthorities}.
+     */
+    public static final String MFA_SATISFIED = "MFA_SATISFIED";
+
+    /**
+     * Flat top-level JWT-Custom claim the admin-bff stamps on a successful
+     * BFF-driven MFA challenge: a numeric epoch-MILLIS timestamp carried as a
+     * STRING. Casdoor stores {@code User.properties} as a Go {@code map[string]string}
+     * (a JSON number is rejected at write time), so the value persists and emits
+     * VERBATIM as a string (e.g. {@code "1750233600000"}) — top-level snake_case,
+     * NOT camel-cased (Casdoor's SnakeToCamel does not rewrite the
+     * {@code Properties.<key>} branch; empirically pinned, workflow wfza2mi09).
+     */
+    public static final String MFA_SATISFIED_AT_CLAIM = "mfa_satisfied_at";
+
+    /**
+     * True iff the JWT carries a FRESH MFA stamp: the BFF-written
+     * {@link #MFA_SATISFIED_AT_CLAIM} epoch-millis string parses to a {@code long}
+     * {@code ts} satisfying {@code 0 <= now - ts <= freshnessWindowMillis}. A
+     * timestamp in the FUTURE ({@code now - ts < 0}) is REJECTED (clock-skew /
+     * forged-future defense — a far-future stamp would otherwise never go stale),
+     * a STALE one ({@code now - ts > window}) is rejected, and any
+     * missing / blank / non-numeric / non-positive value is rejected. Fail-closed
+     * throughout — this NEVER throws, it returns {@code false} on every malformed
+     * input.
+     *
+     * <p>The claim is the SOLE source of {@code MFA_SATISFIED}; it is never derived
+     * from roles/permissions. {@code now} is passed in (caller supplies
+     * {@link System#currentTimeMillis()} in production) so the freshness window is
+     * deterministically unit-testable.
+     */
+    public static boolean isMfaSatisfied(Jwt jwt, long now, long freshnessWindowMillis) {
+        if (jwt == null) return false;
+        Long ts = mfaSatisfiedAtMillis(jwt);
+        if (ts == null) return false;
+        long age = now - ts;
+        if (age < 0) return false;                    // future timestamp -> reject
+        return age <= freshnessWindowMillis;          // within the freshness window
+    }
+
+    /**
+     * Parse the {@link #MFA_SATISFIED_AT_CLAIM} claim to epoch-millis, or
+     * {@code null} when absent / blank / non-numeric / non-positive. Tolerant of
+     * the claim arriving as a String (the Casdoor JWT-Custom shape) OR a JSON
+     * Number (defensive — should not happen, but parsing it costs nothing). Never
+     * throws.
+     */
+    private static Long mfaSatisfiedAtMillis(Jwt jwt) {
+        Object raw = jwt.getClaim(MFA_SATISFIED_AT_CLAIM);
+        if (raw == null) return null;
+        long ts;
+        if (raw instanceof Number n) {
+            ts = n.longValue();
+        } else {
+            String s = raw.toString().trim();
+            if (s.isEmpty()) return null;
+            try {
+                ts = Long.parseLong(s);
+            } catch (NumberFormatException e) {
+                return null;                          // non-numeric -> fail-closed
+            }
+        }
+        return ts > 0 ? ts : null;                    // non-positive -> fail-closed
+    }
+
     /** Returns every role name carried by the JWT, upper-cased and trimmed. Empty
      *  list if the claim is missing. */
     public static List<String> fromJwt(Jwt jwt) {

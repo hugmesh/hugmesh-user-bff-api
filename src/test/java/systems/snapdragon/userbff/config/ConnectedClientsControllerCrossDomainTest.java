@@ -128,7 +128,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
                 new ConnectedClientsController(service, new PrincipalDomain(registry));
 
         // REAL multi-issuer resolver, built exactly as TenancyResourceServerConfig does.
-        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "");
+        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
                 tenancy.tenantAuthManagerResolver();
 
@@ -139,7 +139,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
         // keystone probe controller) and the prod @RestControllerAdvice
         // (ApiExceptionHandler) so an ApiException.notFound maps to 404 exactly as in
         // production rather than surfacing as a 500.
-        SecurityConfig securityConfig = new SecurityConfig(registry, present(resolver));
+        SecurityConfig securityConfig = new SecurityConfig(registry, present(resolver), false, 600000L);
         SecurityWebFilterChain chain = securityConfig.filterChain(ServerHttpSecurity.http());
         client = WebTestClient.bindToController(controller)
                 .controllerAdvice(new ApiExceptionHandler())

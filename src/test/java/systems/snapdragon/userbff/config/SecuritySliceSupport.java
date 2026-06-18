@@ -57,7 +57,7 @@ abstract class SecuritySliceSupport {
             ObjectProvider<ReactiveAuthenticationManagerResolver<ServerWebExchange>> tenantResolver,
             Object... controllers) {
 
-        SecurityConfig config = new SecurityConfig(registry, tenantResolver);
+        SecurityConfig config = new SecurityConfig(registry, tenantResolver, false, 600000L);
         SecurityWebFilterChain chain = config.filterChain(ServerHttpSecurity.http());
         WebFilterChainProxy securityFilter = new WebFilterChainProxy(chain);
 

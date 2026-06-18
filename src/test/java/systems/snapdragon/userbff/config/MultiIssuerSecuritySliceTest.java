@@ -77,7 +77,7 @@ class MultiIssuerSecuritySliceTest extends SecuritySliceSupport {
         // REAL resolver bean (per-issuer manager + Casdoor converter), built exactly
         // as TenancyResourceServerConfig contributes it. No back-compat jwk-set-uri,
         // so each brand decoder discovers from its own issuer (the in-process server).
-        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "");
+        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
                 tenancy.tenantAuthManagerResolver();
 

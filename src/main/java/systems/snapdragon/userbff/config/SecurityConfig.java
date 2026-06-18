@@ -1,6 +1,7 @@
 package systems.snapdragon.userbff.config;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -69,11 +70,25 @@ public class SecurityConfig {
     private final ObjectProvider<ReactiveAuthenticationManagerResolver<ServerWebExchange>>
             tenantAuthManagerResolver;
 
+    /** D8 MFA floor — whether the converter derives the {@code MFA_SATISFIED}
+     *  marker at all. {@code app.mfa.enabled}, DEFAULT {@code false} (ships dark:
+     *  when off the converter emits the legacy byte-identical authority set and
+     *  {@code MFA_SATISFIED} is NEVER produced). */
+    private final boolean mfaEnabled;
+
+    /** D8 freshness window in millis for {@code Roles.isMfaSatisfied}.
+     *  {@code app.mfa.freshness-window}, DEFAULT 600000 (10m). */
+    private final long mfaFreshnessWindowMillis;
+
     public SecurityConfig(DomainRegistry domainRegistry,
                           ObjectProvider<ReactiveAuthenticationManagerResolver<ServerWebExchange>>
-                                  tenantAuthManagerResolver) {
+                                  tenantAuthManagerResolver,
+                          @Value("${app.mfa.enabled:false}") boolean mfaEnabled,
+                          @Value("${app.mfa.freshness-window:600000}") long mfaFreshnessWindowMillis) {
         this.domainRegistry = domainRegistry;
         this.tenantAuthManagerResolver = tenantAuthManagerResolver;
+        this.mfaEnabled = mfaEnabled;
+        this.mfaFreshnessWindowMillis = mfaFreshnessWindowMillis;
     }
 
     /**
@@ -217,6 +232,7 @@ public class SecurityConfig {
      * single-issuer fallback so this cluster is unchanged).
      */
     Converter<Jwt, Flux<GrantedAuthority>> casdoorAuthoritiesConverter() {
-        return CasdoorAuthorities.converter(domainRegistry);
+        return CasdoorAuthorities.converter(domainRegistry,
+                new CasdoorAuthorities.MfaConfig(mfaEnabled, mfaFreshnessWindowMillis));
     }
 }

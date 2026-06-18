@@ -58,7 +58,7 @@ class SecurityConfigPathGateSliceTest extends SecuritySliceSupport {
         rogue = new TestIssuer();
         String issuersCsv = issuer.issuerUri() + "=brandx," + issuer2.issuerUri() + "=brandy";
         DomainRegistry registry = new DomainRegistry(issuer.issuerUri(), issuersCsv);
-        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "");
+        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
                 tenancy.tenantAuthManagerResolver();
         client = sliceClient(registry, provider(resolver), new ProbeController());
