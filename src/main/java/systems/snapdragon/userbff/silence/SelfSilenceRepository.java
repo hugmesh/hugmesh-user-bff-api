@@ -2,10 +2,12 @@ package systems.snapdragon.userbff.silence;
 
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 import systems.snapdragon.userbff.security.DomainRegistry;
 import systems.snapdragon.userbff.security.DomainScope;
 
@@ -81,28 +83,70 @@ public class SelfSilenceRepository {
         return DomainScope.bind(spec, domain).map(SelfSilenceRepository::map).first();
     }
 
+    /** Bound on the upsert's lose-the-INSERT-race retries (see {@link #activate}).
+     *  A handful is ample: each retry only happens when a CONCURRENT peer won the
+     *  INSERT for the SAME single-row PK, after which the retry's UPDATE-first path
+     *  always finds the row and succeeds — there is no unbounded contention. */
+    private static final long UPSERT_MAX_RETRIES = 8;
+
     /**
      * Activate (or re-activate) the owner's silence in their domain: upsert a row with
-     * the given window/reason and a NULL {@code cleared_at}. Implemented as
-     * DELETE-then-INSERT (portable across Postgres + H2; the PK keeps it to one row)
-     * so re-activating after a prior cleared silence starts a clean active window. The
-     * DELETE is owner+domain scoped; the INSERT stamps the domain server-side. Returns
-     * the freshly-written row.
+     * the given window/reason and a NULL {@code cleared_at}, starting a clean active
+     * window. ATOMIC/IDEMPOTENT and PORTABLE (Postgres + H2): UPDATE-first (owner AND
+     * domain scoped), INSERT only if absent (the domain is stamped server-side) — the
+     * UPDATE-first/INSERT-if-absent shape MIRRORS
+     * {@link systems.snapdragon.userbff.notification.NotificationPreferenceRepository#upsert},
+     * HARDENED with a duplicate-key retry to also close the concurrent-first-INSERT
+     * window (see below).
+     *
+     * <p>This deliberately replaces the former DELETE-then-INSERT (two unguarded
+     * statements against a {@code user_id}-only PK): two CONCURRENT same-subject
+     * activations could interleave DELETE/DELETE then INSERT/INSERT and trip the PK with
+     * a {@code 23505} unique violation surfacing as a 500 ({@code ApiExceptionHandler}
+     * has no duplicate-key handler). The self-silence is owner-only ({@code owner ==
+     * subject}), so a single user CAN race themselves (double-tap / retry). The
+     * UPDATE-first form makes a re-activate a no-409 in-place overwrite: it re-stamps
+     * {@code started_at = now()} (a fresh window, preserving the old DELETE-then-INSERT
+     * semantics), the new window/reason/domain and clears {@code cleared_at}. The UPDATE
+     * is owner+domain scoped; the INSERT (when absent) stamps the domain server-side.
+     * Returns the freshly-written row.
+     *
+     * <p><b>Concurrent-first-INSERT window.</b> UPDATE-first/INSERT-if-absent is NOT
+     * atomic on its own: two activations for a brand-new subject can BOTH UPDATE zero
+     * rows and BOTH attempt the INSERT, so the loser hits a unique violation. Rather than
+     * a non-portable {@code INSERT ... ON CONFLICT} (Postgres-only) or a heavier
+     * serialized transaction, the whole upsert is wrapped in a bounded
+     * {@code retryWhen(DuplicateKeyException)}: on the (rare, single-row) collision the
+     * retry's UPDATE finds the now-present row and succeeds. Net effect on BOTH engines
+     * — {@code activate} is idempotent and never surfaces a 23505/500.
      */
     public Mono<SelfSilence> activate(String userId, Instant expiresAt, String reason, String domain) {
         String dom = DomainScope.isUnscoped(domain) ? DomainRegistry.DEFAULT_DOMAIN : domain;
-        var delSpec = db.sql("DELETE FROM self_silence WHERE user_id = :uid"
-                        + DomainScope.andPredicate(domain))
-                .bind("uid", userId);
-        return DomainScope.bind(delSpec, domain).fetch().rowsUpdated()
-                .then(db.sql("INSERT INTO self_silence "
-                                + "(user_id, started_at, expires_at, cleared_at, reason, domain, updated_at) "
-                                + "VALUES (:uid, now(), :exp, NULL, :reason, :dom, now())")
-                        .bind("uid", userId)
-                        .bind("exp", LocalDateTime.ofInstant(expiresAt, ZoneOffset.UTC))
-                        .bind("reason", reason == null ? "" : reason)
-                        .bind("dom", dom)
-                        .fetch().rowsUpdated())
+        var exp = LocalDateTime.ofInstant(expiresAt, ZoneOffset.UTC);
+        String safeReason = reason == null ? "" : reason;
+        return Mono.defer(() -> {
+                    var updateSpec = db.sql("UPDATE self_silence "
+                                    + "SET started_at = now(), expires_at = :exp, cleared_at = NULL, "
+                                    + "reason = :reason, updated_at = now() "
+                                    + "WHERE user_id = :uid" + DomainScope.andPredicate(domain))
+                            .bind("uid", userId)
+                            .bind("exp", exp)
+                            .bind("reason", safeReason);
+                    return DomainScope.bind(updateSpec, domain).fetch().rowsUpdated()
+                            .flatMap(updated -> updated > 0 ? Mono.empty() :
+                                    db.sql("INSERT INTO self_silence "
+                                                    + "(user_id, started_at, expires_at, cleared_at, reason, domain, updated_at) "
+                                                    + "VALUES (:uid, now(), :exp, NULL, :reason, :dom, now())")
+                                            .bind("uid", userId)
+                                            .bind("exp", exp)
+                                            .bind("reason", safeReason)
+                                            .bind("dom", dom)
+                                            .fetch().rowsUpdated().then());
+                })
+                // A concurrent peer won the INSERT for this same single-row PK — retry the
+                // whole upsert; the retry's UPDATE-first path now finds the row.
+                .retryWhen(Retry.max(UPSERT_MAX_RETRIES)
+                        .filter(t -> t instanceof DuplicateKeyException))
                 .then(find(userId, domain));
     }
 
