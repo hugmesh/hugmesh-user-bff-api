@@ -43,6 +43,13 @@
               is FORCED-ON (un-silenceable) — API-coerced + a DB CHECK backstop. SHIPS
               DARK: nothing writes user_notifications yet (the snapdragon-actions
               reconciler in a later PR is the only writer); this is the read/prefs side.
+        013 — D6 hs_service_token: the SERVER-SIDE CUSTODY STORE for homeserver-NATIVE
+              Matrix/Mastodon access tokens this BFF mints + holds per user. One row
+              per (owner_subject, platform) UNIQUE; access/refresh tokens AES-256-GCM
+              at rest (HsTokenCipher, key from app.hs-token.key via ESO/Vault), NEVER
+              plaintext / NEVER returned to a client. SHIPS DARK: read/written only
+              when app.hs-token.enabled=true (default false); the legacy admin-bff
+              /bff/provision/* browser-token path stays the live fallback.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -57,4 +64,5 @@
     <include file="db/changelog/010-domain-scoping.xml"/>
     <include file="db/changelog/011-user-preferences-store.xml"/>
     <include file="db/changelog/012-notifications.xml"/>
+    <include file="db/changelog/013-hs-service-token.xml"/>
 </databaseChangeLog>

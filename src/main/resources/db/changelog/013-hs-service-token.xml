@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        013 — D6 Matrix/Mastodon BFF-proxy: the SERVER-SIDE CUSTODY STORE for the
+        homeserver-NATIVE access tokens this BFF mints and holds on a user's behalf.
+
+        WHY co-located here (option Y): admin-bff and user-bff use SEPARATE Postgres
+        with mutual NetworkPolicy denial, so a shared custody table is impossible —
+        the mint + custody + reactive proxy are all co-located in user-bff. The proxy
+        sidecars (tuwunel-proxy:4443 / akkoma-proxy:4443) are plain nginx mTLS fronts
+        that pass the Authorization bearer through unchanged; the homeservers REJECT
+        the Casdoor JWT for the general API, so the proxy MUST inject the homeserver-
+        native token held here.
+
+        hs_service_token — one custody row per (owner_subject, platform). The
+        access/refresh tokens are stored ENCRYPTED (AES-256-GCM at rest via
+        HsTokenCipher, key from app.hs-token.key fed by ESO/Vault) — NEVER plaintext,
+        NEVER returned to any client, NEVER in a GET/list response.
+
+          • id              — app-generated varchar(36) UUID PK (portable INSERT across
+                              Postgres + the H2 PostgreSQL-compat slice DB).
+          • owner_subject   — the Casdoor JWT subject (owner). NEVER a request-body
+                              field; the cross-user isolation keystone is the owner-
+                              scoped SQL predicate keyed on this column.
+          • platform        — 'matrix' or 'mastodon' (DB-paralleled by the 013-2 CHECK,
+                              same pattern as 005/007/012).
+          • access_token_enc  — AES-256-GCM base64(nonce||ct||tag) of the homeserver-
+                              native access token. NOT NULL.
+          • refresh_token_enc — AES-256-GCM blob of a refresh token when the platform
+                              issues one (Mastodon/OAuth); NULL for Matrix (its access
+                              tokens are effectively non-expiring → re-mint, no refresh).
+          • expires_at      — when the access token expires (NULL = no known expiry,
+                              e.g. Matrix); informational — refresh-on-401 is the
+                              authoritative re-mint trigger.
+          • localpart       — the homeserver localpart the token authenticates (the
+                              gateway revocation-hash + re-mint key).
+          • minted_at       — when this custody row was (re-)minted.
+
+        (owner_subject, platform) is UNIQUE so the custody upsert is a real upsert (one
+        durable token per owner per platform) — never a find-then-insert race window.
+
+        SHIPS DARK: nothing in this PR writes/reads this table unless
+        app.hs-token.enabled=true (default false). The legacy admin-bff /bff/provision/*
+        browser-token path stays the live fallback.
+    -->
+
+    <changeSet id="013-1-hs-service-token" author="snapdragon">
+        <createTable tableName="hs_service_token">
+            <column name="id" type="varchar(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="owner_subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="platform" type="varchar(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="access_token_enc" type="clob">
+                <constraints nullable="false"/>
+            </column>
+            <column name="refresh_token_enc" type="clob"/>
+            <column name="expires_at" type="timestamp"/>
+            <column name="localpart" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="minted_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <!-- (owner_subject, platform) unique by construction so the custody upsert is a
+             true upsert (one token per owner per platform), not a find-then-insert. -->
+        <addUniqueConstraint tableName="hs_service_token"
+                             columnNames="owner_subject, platform"
+                             constraintName="uq_hs_service_token_owner_platform"/>
+    </changeSet>
+
+    <!-- DB parity for the platform vocabulary (same pattern as 005/007/012): plain
+         ANSI `col IN (...)` runs identically on Postgres AND the H2 slice DB. -->
+    <changeSet id="013-2-hs-service-token-platform-check" author="snapdragon">
+        <sql>
+            ALTER TABLE hs_service_token
+                ADD CONSTRAINT ck_hs_service_token_platform
+                CHECK (platform IN ('matrix', 'mastodon'))
+        </sql>
+        <rollback>
+            ALTER TABLE hs_service_token DROP CONSTRAINT ck_hs_service_token_platform
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

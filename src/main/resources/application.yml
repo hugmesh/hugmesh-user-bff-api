@@ -119,6 +119,34 @@ app:
   # When non-empty, TenancyResourceServerConfig activates; unknown issuers → 401.
   tenancy:
     issuers: "${APP_TENANCY_ISSUERS:}"
+  # ── D6 Matrix/Mastodon BFF-proxy (custody store + mint + reactive proxy) ──────
+  # SHIPS DARK: enabled=false ⇒ every /bff/user/{matrix,mastodon}/** endpoint 503s
+  # and nothing reads/writes the hs_service_token custody table. The legacy admin-bff
+  # /bff/provision/* browser-token path stays the live fallback (NOT removed; PR5/UI
+  # is out of scope). Flip enabled=true ONLY once a custody key (app.hs-token.key) is
+  # provisioned AND the tuwunel-proxy/akkoma-proxy mTLS sidecars exist.
+  #
+  # key: the AES-256-GCM data key for the at-rest custody-token cipher — ESO/Vault-
+  # sourced at deploy, NEVER a literal in git. Blank ⇒ the cipher is INERT and the
+  # proxy 503s even if enabled=true (fail-closed, no plaintext fallback).
+  #
+  # matrix-url/mastodon-url: the per-pod mTLS proxy sidecars the mint + proxy forward
+  # through (ssl_verify_client on; the BFF presents the SNAPDRAGON_MTLS_CLIENT_* PKI
+  # identity). svc-password: the homeserver service-account password the broker mints
+  # with — ESO/Vault-sourced at deploy, never a real literal in git.
+  #
+  # registry.enabled: write the SHA-256 mint hash to the gateway hs_tokens registry so
+  # the gateway HomeserverTokenRevocationFilter keeps working. Default OFF (the custody
+  # row + decrypted token are the source of truth; the gateway hash converges next tick).
+  hs-token:
+    enabled: "${APP_HS_TOKEN_ENABLED:false}"
+    key: "${APP_HS_TOKEN_KEY:}"
+    matrix-url: "${APP_HS_TOKEN_MATRIX_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
+    mastodon-url: "${APP_HS_TOKEN_MASTODON_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"
+    svc-password: "${APP_HS_TOKEN_SVC_PASSWORD:}"
+    registry:
+      enabled: "${APP_HS_TOKEN_REGISTRY_ENABLED:false}"
+      base-url: "${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}"
   media:
     poisoning:
       enabled: "${MEDIA_POISONING_ENABLED:false}"

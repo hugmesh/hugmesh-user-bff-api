@@ -1,0 +1,125 @@
+package systems.snapdragon.userbff.hsproxy;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.reactive.function.client.WebClient;
+import systems.snapdragon.userbff.config.SecurityConfig;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
+
+/**
+ * Security + SHIPS-DARK surface tests for the D6 proxy controllers via
+ * {@link WebTestClient} with synthetic authentications. The custody/broker are mocked
+ * (no live homeserver). Asserts:
+ * <ul>
+ *   <li>anonymous → 401 on both surfaces (the ROLE_USER floor + @PreAuthorize);</li>
+ *   <li>a ROLE_USER without ROLE_MATRIX/ROLE_MASTODON → 403 (the per-platform gate);</li>
+ *   <li><b>ships dark</b>: with the matching role but {@code app.hs-token.enabled=false}
+ *       the endpoint 503s and the custody store is NEVER touched (no token read);</li>
+ *   <li>cross-surface: a MATRIX-only role is 403 on the Mastodon surface (no leakage).</li>
+ * </ul>
+ *
+ * <p>This test pins the DARK posture (the default {@code app.hs-token.enabled} is unset →
+ * false), which is the safe shipping state of the PR.
+ */
+@WebFluxTest(controllers = {MatrixProxyController.class, MastodonProxyController.class})
+@Import({SecurityConfig.class, HsProxyControllerSecurityTest.StubClients.class})
+class HsProxyControllerSecurityTest {
+
+    @Autowired WebTestClient client;
+
+    @MockitoBean ReactiveJwtDecoder jwtDecoder;
+    @MockitoBean HsTokenCustody custody;
+    @MockitoBean ServiceTokenBroker broker;
+
+    /** The two qualified proxy WebClients the controllers inject (never called in the
+     *  dark path — the 503 short-circuits before any upstream use). */
+    @TestConfiguration
+    static class StubClients {
+        @Bean("matrixProxyWebClient")
+        WebClient matrixProxyWebClient() { return WebClient.builder().build(); }
+
+        @Bean("mastodonProxyWebClient")
+        WebClient mastodonProxyWebClient() { return WebClient.builder().build(); }
+    }
+
+    private static Collection<GrantedAuthority> authorities(String... names) {
+        List<GrantedAuthority> out = new ArrayList<>();
+        for (String n : names) {
+            out.add(new SimpleGrantedAuthority(n));
+        }
+        return out;
+    }
+
+    @Test
+    void matrix_anonymous_isUnauthorized() {
+        client.get().uri("/bff/user/matrix/_matrix/client/v3/sync")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void mastodon_anonymous_isUnauthorized() {
+        client.get().uri("/bff/user/mastodon/api/v1/timelines/home")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void matrix_userWithoutMatrixRole_isForbidden() {
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/user/matrix/_matrix/client/v3/sync")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    @Test
+    void matrix_withRole_butFeatureDark_is503_andCustodyNeverTouched() {
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
+                        .authorities(authorities("ROLE_USER", "ROLE_MATRIX")))
+                .get().uri("/bff/user/matrix/_matrix/client/v3/sync")
+                .exchange()
+                .expectStatus().isEqualTo(503);
+        // SHIPS-DARK: the dark 503 short-circuits before any custody read / mint.
+        verify(custody, never()).loadAccessToken(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+        verify(broker, never()).mintMatrix(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void mastodon_withRole_butFeatureDark_is503_andCustodyNeverTouched() {
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
+                        .authorities(authorities("ROLE_USER", "ROLE_MASTODON")))
+                .get().uri("/bff/user/mastodon/api/v1/streaming/user")
+                .exchange()
+                .expectStatus().isEqualTo(503);
+        verify(custody, never()).loadAccessToken(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+        verify(broker, never()).mintMastodon(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void matrixRole_cannotReachMastodonSurface() {
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER", "ROLE_MATRIX")))
+                .get().uri("/bff/user/mastodon/api/v1/timelines/home")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+}
