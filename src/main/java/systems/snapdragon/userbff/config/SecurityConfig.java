@@ -109,6 +109,41 @@ public class SecurityConfig {
      * so every other route lives here to keep the two chains in lockstep and make it
      * impossible to loosen a non-spec route by editing only one chain.
      */
+    /**
+     * Reactive HTTP RESPONSE-HEADER hardening — the API-DEFENSIVE MINIMUM for a
+     * pure-JSON BFF resource server, applied to EVERY {@link SecurityWebFilterChain}.
+     *
+     * <p>This BFF is NOT the TLS front door — it is a no-document JSON resource server
+     * that ALWAYS sits behind the shared snapdragon-gateway, which emits the full
+     * browser-policy set (HSTS / Permissions-Policy / COOP / CORP / the UI-shell CSP)
+     * ONCE at the single TLS-terminating PEP so 12 configs can't drift (NIST 800-228
+     * sec 3-4). So this chain deliberately OMITS HSTS (meaningless over plaintext
+     * intra-mesh, and misleading to assert from a non-edge hop) and Permissions-Policy
+     * (no document surface to govern). It re-asserts only the defense-in-depth minimum:
+     *
+     * <ul>
+     *   <li><b>Content-Security-Policy: {@code default-src 'none'; frame-ancestors 'none'}</b>
+     *       — a JSON API serves no document, scripts, or framed content; the lockdown CSP
+     *       is belt-and-braces should a response ever be mis-typed as HTML.</li>
+     *   <li>Spring's reactive SECURE DEFAULTS are KEPT, never disabled —
+     *       {@code X-Content-Type-Options: nosniff}, {@code X-Frame-Options: DENY},
+     *       {@code Cache-Control: no-store...}, and {@code Referrer-Policy: no-referrer}
+     *       (made explicit here so a CSP/Referrer regression is visible).</li>
+     * </ul>
+     *
+     * <p>Purely ADDITIVE: no authz rule, issuer validation, or the correct-by-design
+     * {@code csrf.disable()} bearer posture is touched.
+     */
+    private static void hardenHeaders(ServerHttpSecurity.HeaderSpec h) {
+        h.contentSecurityPolicy(csp -> csp.policyDirectives(
+                        "default-src 'none'; frame-ancestors 'none'"))
+                // Keep Spring's nosniff + X-Frame-Options:DENY + Cache-Control defaults
+                // (NOT disabled); make Referrer-Policy:no-referrer explicit.
+                .referrerPolicy(rp -> rp.policy(
+                        org.springframework.security.web.server.header
+                                .ReferrerPolicyServerHttpHeadersWriter.ReferrerPolicy.NO_REFERRER));
+    }
+
     private static void commonRoutes(ServerHttpSecurity.AuthorizeExchangeSpec ex) {
         // Probes are public so k8s/Docker healthchecks need no token.
         ex.pathMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll();
@@ -145,6 +180,7 @@ public class SecurityConfig {
     SecurityWebFilterChain devFilterChain(ServerHttpSecurity http) {
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .headers(SecurityConfig::hardenHeaders)
                 .authorizeExchange(ex -> {
                     commonRoutes(ex);
                     ex.pathMatchers(SPEC_PATHS).permitAll();
@@ -166,6 +202,7 @@ public class SecurityConfig {
     SecurityWebFilterChain filterChain(ServerHttpSecurity http) {
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .headers(SecurityConfig::hardenHeaders)
                 .authorizeExchange(ex -> {
                     commonRoutes(ex);
                     ex.pathMatchers(SPEC_PATHS).hasAnyRole("ADMIN", "SUPERADMIN");
