@@ -1,5 +1,7 @@
 package systems.snapdragon.userbff.config;
 
+import systems.snapdragon.commons.config.TenancyResourceServerConfig;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.testsupport.TestIssuer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,7 +58,7 @@ class SecurityHeadersSliceTest extends SecuritySliceSupport {
         TenancyResourceServerConfig tenancy =
                 new TenancyResourceServerConfig(registry, "", "", false, 600000L);
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
-                tenancy.tenantAuthManagerResolver();
+                systems.snapdragon.commons.config.TenancyResolvers.tenantResolver(tenancy);
         client = sliceClient(registry, provider(resolver), new ProbeController());
     }
 

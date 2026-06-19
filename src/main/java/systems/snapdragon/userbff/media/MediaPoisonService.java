@@ -9,8 +9,8 @@ import systems.snapdragon.userbff.media.MediaPoisoningProperties.FallbackMode;
 import systems.snapdragon.userbff.media.PoisonModels.Backend;
 import systems.snapdragon.userbff.media.PoisonModels.Health;
 import systems.snapdragon.userbff.media.PoisonModels.PoisonResult;
-import systems.snapdragon.userbff.security.DomainRegistry;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.util.List;
 import java.util.Map;

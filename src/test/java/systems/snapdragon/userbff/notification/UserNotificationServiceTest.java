@@ -6,7 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.util.List;
 

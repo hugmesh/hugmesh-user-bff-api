@@ -12,7 +12,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.federation.FederationApiClient;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;

@@ -3,49 +3,53 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
+
+  <!-- The org metapom — consolidates the Spring Boot 3.5.5 / Java 21 reactive BFF
+       baseline (WebFlux + Casdoor OAuth2 resource server + R2DBC/Liquibase +
+       SpringDoc), the shared <dependencies>, dependencyManagement (snapdragon-commons,
+       AWS SDK BOM, resilience4j, springdoc), pluginManagement (compiler / surefire
+       bytebuddy flag / spring-boot / native) and the GitLab Maven publishing wiring.
+       snapdragon-parent is itself a child of spring-boot-starter-parent:3.5.5, so the
+       Spring Boot dependency + plugin management is inherited TRANSITIVELY. -->
   <parent>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-parent</artifactId>
-    <!-- 3.5.5 matches snapdragon-admin-bff-api / snapdragon-federation-api
-         (proven WebFlux + Casdoor reactive JWT resource server + GraalVM native
-         on Java 21). -->
-    <version>3.5.5</version>
+    <groupId>systems.snapdragon</groupId>
+    <artifactId>snapdragon-parent</artifactId>
+    <version>1.0.0</version>
     <relativePath/>
   </parent>
+
   <groupId>systems.snapdragon</groupId>
   <!-- NO -api suffix in the artifactId (mirrors admin-bff): -api is only in the
        repo/service/image name. -->
   <artifactId>user-bff</artifactId>
   <version>0.1.0</version>
   <properties>
-    <java.version>21</java.version>
+    <!-- java.version (21), encoding, the snapdragon-commons version and the springdoc
+         version are all inherited from snapdragon-parent. ONLY the repo-specific pins
+         (icu4j / commons-text) stay below on the dependencies themselves. -->
   </properties>
   <dependencies>
-    <!-- Reactive web (WebFlux) — replaces spring-boot-starter-web (servlet). -->
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webflux</artifactId></dependency>
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-oauth2-resource-server</artifactId></dependency>
-
-    <!-- jakarta Bean Validation (Hibernate Validator) — @Valid on request bodies,
-         @NotBlank/@Pattern/@Size on DTO fields, and @Validated path/param checks on
-         the controllers. The reactive validation advice in ApiExceptionHandler maps
-         a WebExchangeBindException / ConstraintViolationException to a clean 400
-         (the {"error":...} shape the UIs read) instead of a 500 or a raw
-         DB-constraint error. -->
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
-
-    <!-- SpringDoc — generates the OpenAPI 3 spec at /v3/api-docs (+ Swagger UI at
-         /swagger-ui.html). This is the source the platform ng-openapi-gen typed
-         clients (the paired snapdragon-user-ui) + the docs pipeline consume.
-         WEBFLUX variant to match the reactive stack. Version 2.7.0 is the same pin
-         admin-bff / federation-api use (the 2.7.x line targets the Spring Boot
-         3.5.x baseline this BFF runs on). -->
+    <!-- The shared, canonical Snapdragon security/tenancy/config/web building blocks
+         (Casdoor JWT authorities, issuer->domain DomainRegistry, Roles helpers, the
+         config-gated multi-issuer TenancyResourceServerConfig, the static-utility
+         tenancy.DomainScope, the BFF web.ApiException). Version is MANAGED by
+         snapdragon-parent's dependencyManagement, so NO <version> here. This replaces
+         this repo's deleted local copies of security.{Roles,DomainRegistry,DomainScope,
+         CasdoorAuthorities}, config.TenancyResourceServerConfig and web.ApiException. -->
     <dependency>
-      <groupId>org.springdoc</groupId>
-      <artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
-      <version>2.7.0</version>
+      <groupId>systems.snapdragon</groupId>
+      <artifactId>snapdragon-commons</artifactId>
     </dependency>
+
+    <!-- ============================================================================
+         The core reactive BFF stack (webflux / actuator / security /
+         oauth2-resource-server / validation), the data-access stack (data-r2dbc /
+         r2dbc-postgresql / liquibase-core / spring-jdbc / postgresql), springdoc, and
+         the whole test stack (spring-boot-starter-test / reactor-test /
+         spring-security-test / r2dbc-h2 / h2) are INHERITED from snapdragon-parent's
+         common <dependencies>. They were removed here to de-duplicate. ONLY the
+         repo-specific dependencies below remain.
+         ============================================================================ -->
 
     <!-- ICU4J — Unicode confusable/skeleton folding (SpoofChecker.getSkeleton +
          RESTRICTION_LEVEL/CONFUSABLE) for the username/displayName impersonation
@@ -67,29 +71,12 @@
       <artifactId>commons-text</artifactId>
       <version>1.13.0</version>
     </dependency>
-
-    <!-- Reactive data access: R2DBC for all runtime reads/writes (user_profile,
-         user_preference, user_block). -->
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-r2dbc</artifactId></dependency>
-    <dependency><groupId>org.postgresql</groupId><artifactId>r2dbc-postgresql</artifactId><scope>runtime</scope></dependency>
-
-    <!-- Liquibase owns schema migrations. Liquibase has no R2DBC runner, so a
-         plain JDBC datasource (org.postgresql) is kept ONLY for Liquibase, while
-         all runtime data access goes through R2DBC. -->
-    <dependency><groupId>org.liquibase</groupId><artifactId>liquibase-core</artifactId></dependency>
-    <dependency><groupId>org.springframework</groupId><artifactId>spring-jdbc</artifactId></dependency>
-    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
-
-    <!-- test -->
-    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
-    <dependency><groupId>io.projectreactor</groupId><artifactId>reactor-test</artifactId><scope>test</scope></dependency>
-    <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
-    <!-- R2DBC H2 (runtime data access in @DataR2dbcTest) + JDBC H2 (Liquibase
-         applies the changelog over the same in-mem DB for the slice tests). -->
-    <dependency><groupId>io.r2dbc</groupId><artifactId>r2dbc-h2</artifactId><scope>test</scope></dependency>
-    <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>test</scope></dependency>
   </dependencies>
   <build><plugins>
+    <!-- The spring-boot, native and surefire (bytebuddy-experimental argLine)
+         plugins are configured in snapdragon-parent's pluginManagement; declaring
+         them here (no config) binds the managed config. The native plugin is bound
+         so `./mvnw -Pnative native:compile` works; spring-boot repackages the app. -->
     <plugin>
       <groupId>org.graalvm.buildtools</groupId>
       <artifactId>native-maven-plugin</artifactId>
@@ -97,16 +84,6 @@
     <plugin>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-maven-plugin</artifactId>
-    </plugin>
-    <!-- Byte Buddy (via Mockito) only officially supports up to JDK 23; this
-         enables it to run on newer JDKs (the build host runs Temurin 25). A
-         no-op on JDK <=23, so it is safe for the Java 21 target too. -->
-    <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-surefire-plugin</artifactId>
-      <configuration>
-        <argLine>-Dnet.bytebuddy.experimental=true</argLine>
-      </configuration>
     </plugin>
   </plugins></build>
   <profiles>

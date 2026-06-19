@@ -2,6 +2,9 @@ package systems.snapdragon.userbff.security;
 
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.security.Roles;
+import systems.snapdragon.commons.tenancy.DomainScope;
 
 /**
  * Resolves the EFFECTIVE domain-scope for a request principal — the single place a

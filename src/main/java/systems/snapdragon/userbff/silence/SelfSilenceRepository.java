@@ -5,8 +5,8 @@ import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
-import systems.snapdragon.userbff.security.DomainRegistry;
-import systems.snapdragon.userbff.security.DomainScope;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.tenancy.DomainScope;
 
 import java.time.Instant;
 import java.time.LocalDateTime;

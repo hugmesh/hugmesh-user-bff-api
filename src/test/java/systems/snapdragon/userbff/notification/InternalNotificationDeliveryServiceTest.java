@@ -221,7 +221,7 @@ class InternalNotificationDeliveryServiceTest {
             assertThat(
                     catchThrowable(() -> service.deliver("brandx", "u-badcat", "not-a-real-category",
                             "t", "b", "role_grant", "bc-1").block()))
-                    .isInstanceOf(systems.snapdragon.userbff.web.ApiException.class);
+                    .isInstanceOf(systems.snapdragon.commons.web.ApiException.class);
             assertThat(countRows("brandx", "u-badcat")).isEqualTo(0L);
         }
 
@@ -230,7 +230,7 @@ class InternalNotificationDeliveryServiceTest {
             assertThat(
                     catchThrowable(() -> service.deliver("brandx", "  ", NotificationCategory.ROLE_CHANGE,
                             "t", "b", "role_grant", "bu-1").block()))
-                    .isInstanceOf(systems.snapdragon.userbff.web.ApiException.class);
+                    .isInstanceOf(systems.snapdragon.commons.web.ApiException.class);
         }
     }
 

@@ -1,5 +1,7 @@
 package systems.snapdragon.userbff.config;
 
+import systems.snapdragon.commons.config.TenancyResourceServerConfig;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,7 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.testsupport.TestIssuer;
 
 import java.util.List;
@@ -78,8 +80,10 @@ class MultiIssuerSecuritySliceTest extends SecuritySliceSupport {
         // as TenancyResourceServerConfig contributes it. No back-compat jwk-set-uri,
         // so each brand decoder discovers from its own issuer (the in-process server).
         TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
+        // tenantAuthManagerResolver() is package-private in systems.snapdragon.commons.config;
+        // reach it through the same-package test accessor (src/test/.../commons/config/TenancyResolvers).
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
-                tenancy.tenantAuthManagerResolver();
+                systems.snapdragon.commons.config.TenancyResolvers.tenantResolver(tenancy);
 
         client = sliceClient(registry, present(resolver), new AuthoritiesController());
     }

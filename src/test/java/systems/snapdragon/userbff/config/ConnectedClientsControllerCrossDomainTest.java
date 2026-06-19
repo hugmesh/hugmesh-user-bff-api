@@ -1,5 +1,7 @@
 package systems.snapdragon.userbff.config;
 
+import systems.snapdragon.commons.config.TenancyResourceServerConfig;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,7 @@ import systems.snapdragon.userbff.client.ConnectedClientsController;
 import systems.snapdragon.userbff.client.ConnectedClientsService;
 import systems.snapdragon.userbff.client.HomeserverClientsClient;
 import systems.snapdragon.userbff.client.RevocationWriter;
-import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.testsupport.TestIssuer;
 
@@ -130,7 +132,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
         // REAL multi-issuer resolver, built exactly as TenancyResourceServerConfig does.
         TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
-                tenancy.tenantAuthManagerResolver();
+                systems.snapdragon.commons.config.TenancyResolvers.tenantResolver(tenancy);
 
         // Build the slice client THROUGH the prod SecurityConfig#filterChain (the same
         // seam SecuritySliceSupport.sliceClient uses), but additionally register the

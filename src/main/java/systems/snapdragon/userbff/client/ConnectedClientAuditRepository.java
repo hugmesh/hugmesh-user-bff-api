@@ -3,8 +3,8 @@ package systems.snapdragon.userbff.client;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.security.DomainRegistry;
-import systems.snapdragon.userbff.security.DomainScope;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.tenancy.DomainScope;
 
 import java.util.UUID;
 

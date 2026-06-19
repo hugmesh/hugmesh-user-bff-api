@@ -2,8 +2,8 @@ package systems.snapdragon.userbff.preference;
 
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.security.DomainRegistry;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.web.ApiException;
 
 /**
  * Owner-enforced home/getting-started-guide dismissal preference. The role home

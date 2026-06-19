@@ -1,7 +1,7 @@
 package systems.snapdragon.userbff.config;
 
 import org.junit.jupiter.api.Test;
-import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.commons.security.DomainRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

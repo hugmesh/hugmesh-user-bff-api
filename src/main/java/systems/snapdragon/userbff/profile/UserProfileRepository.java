@@ -2,8 +2,8 @@ package systems.snapdragon.userbff.profile;
 
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.security.DomainRegistry;
-import systems.snapdragon.userbff.security.DomainScope;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.tenancy.DomainScope;
 
 /**
  * Owner-AND-domain-scoped facade over the Spring Data {@link UserProfileR2dbcRepository}

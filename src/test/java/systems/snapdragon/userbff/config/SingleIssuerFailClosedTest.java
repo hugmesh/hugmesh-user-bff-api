@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link MultiIssuerSecuritySliceTest} / {@link SecurityConfigPathGateSliceTest}
  * exercise the OPT-IN multi-issuer {@code tenantAuthManagerResolver} path
  * end-to-end, and {@link SingleIssuerModeSliceTest} unit-tests {@link
- * systems.snapdragon.userbff.security.DomainRegistry} in single-issuer mode. But the
+ * systems.snapdragon.commons.security.DomainRegistry} in single-issuer mode. But the
  * single-issuer branch of {@link SecurityConfig#resourceServer} — the plain
  * {@code o.jwt(...)} wiring that EVERY single-tenant cluster runs in production, and
  * the path the D6 (cookie / opaque-session bridge) + D8 (MFA challenge stamping)
@@ -54,7 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the fail-closed posture asserted here is the production posture). A single
  * in-process {@link TestIssuer} is the TRUSTED issuer-uri; a second {@link TestIssuer}
  * is a FOREIGN/unconfigured issuer. {@code app.tenancy.issuers} is left UNSET so
- * {@link systems.snapdragon.userbff.security.DomainRegistry#isMultiIssuer()} is false
+ * {@link systems.snapdragon.commons.security.DomainRegistry#isMultiIssuer()} is false
  * and the single-issuer {@code o.jwt(...)} branch is the one under test.
  *
  * <p>Assertions (the fail-closed contract the cookie/MFA work rides on):

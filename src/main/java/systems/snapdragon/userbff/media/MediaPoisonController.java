@@ -12,7 +12,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.security.PrincipalDomain;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

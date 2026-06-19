@@ -375,6 +375,76 @@ Profile/spec gating is profile-split: under `dev`/`test` the OpenAPI spec + Swag
 UI are public (so `gen:fetch` can curl `/v3/api-docs` tokenless); in prod they need
 `ROLE_ADMIN`. Actuator health/info are public for probes.
 
+### Shared commons library (`snapdragon-parent` + `snapdragon-commons`)
+
+This service adopts the org's shared Maven artifacts. Two de-duplication moves:
+
+1. **Parent POM →** `systems.snapdragon:snapdragon-parent:1.0.0` (itself a child of
+   `spring-boot-starter-parent:3.5.5`, so the whole Spring Boot dependency/plugin
+   management is inherited transitively). The parent consolidates the reactive-BFF
+   `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
+   R2DBC + Liquibase + JDBC, springdoc, the full test stack) and the
+   `dependencyManagement` for `snapdragon-commons` + springdoc + the surefire/native
+   plugin config. Only the **repo-specific** deps stay in this POM: `icu4j` and
+   `commons-text` (the Unicode confusable / typo-squat guard).
+
+2. **Shared security/tenancy/web →** `systems.snapdragon:snapdragon-commons:1.0.0`.
+   The local copies of `security.{Roles,DomainRegistry,CasdoorAuthorities,DomainScope}`,
+   `config.TenancyResourceServerConfig` and `web.ApiException` were **deleted** and
+   replaced by:
+   - `commons.security.Roles` — its `Set<String>`/names overloads are
+     `isSuperadminNames(...)` / `domainOfNames(...)`; the `isSuperadmin` / `domainOf`
+     names take `Collection<? extends GrantedAuthority>` (the form this BFF uses
+     directly).
+   - `commons.security.DomainRegistry` (same `domainOf`/`isTrusted`/`trustedIssuers`/
+     `isMultiIssuer` API).
+   - `commons.security.CasdoorAuthorities` (now `public`, methods `public static`;
+     `MfaConfig` is a `public record`).
+   - `commons.config.TenancyResourceServerConfig` (the config-gated multi-issuer
+     wiring).
+   - `commons.tenancy.DomainScope` — the static-utility `isUnscoped(String)` / `PARAM`
+     the owner-keyed repositories call.
+   - `commons.web.ApiException` (the `{"error": msg}` carrier).
+
+   **Stays per-repo:** this repo's `config.SecurityConfig` (route matchers +
+   CSRF/cookie/header policy), `web.ApiExceptionHandler`, the test
+   `config.SecuritySliceSupport`, and — crucially — **`security.PrincipalDomain`**.
+   That class is a `@Component` with this BFF's own `forScope(Jwt)` contract (the
+   fail-closed `__deny__` sentinel for a non-SUPERADMIN whose issuer is unresolved),
+   which the commons value-type `PrincipalDomain` does NOT provide; it is KEPT and
+   its imports were rewired to the commons `Roles`/`DomainRegistry`.
+
+   **Two consumer-wiring steps** (the canonical recipe for the fan-out):
+   - `config.CommonsSecurityConfig` `@Import`s the commons `DomainRegistry` +
+     `TenancyResourceServerConfig` beans, because the `@SpringBootApplication`
+     component-scan over `systems.snapdragon.userbff` does **not** cover the
+     `systems.snapdragon.commons.*` packages. (`@Import` preserves
+     `TenancyResourceServerConfig`'s `@ConditionalOnExpression` gate.)
+   - the multi-issuer security-slice tests reach the package-private
+     `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
+     test accessor at `src/test/java/systems/snapdragon/commons/config/TenancyResolvers.java`.
+
+   The committed [`openapi.json`](src/main/resources/openapi/openapi.json) is
+   **byte-identical** after the refactor (internal-only change).
+
+#### Resolving the private `snapdragon-commons` artifact
+
+`snapdragon-commons` is **not** on Maven Central — it lives in the org GitLab Maven
+Package Registry. Two resolution paths, **no secrets in git**:
+
+- **Local dev:** `snapdragon-parent` + `snapdragon-commons` are `mvn install`ed into
+  `~/.m2`, so a plain `./mvnw test` resolves them locally and never touches the
+  remote (this is how the build was verified green).
+- **CI / Docker:** the committed [`settings.xml`](settings.xml) declares the
+  `gitlab-maven` group registry, authenticated by the GitLab `CI_JOB_TOKEN`
+  (`${env.CI_JOB_TOKEN}` — injected by GitLab, never committed). The
+  [`Dockerfile`](Dockerfile) multi-stage build runs `./mvnw -s settings.xml package`
+  with the token mounted as a **BuildKit secret** (`--mount=type=secret`, so it never
+  lands in an image layer); `.gitlab-ci.yml` passes
+  `--secret id=ci_job_token,env=CI_JOB_TOKEN` plus the `CI_API_V4_URL` /
+  `GITLAB_GROUP_ID` build-args, and the `test:` job passes the same env into the
+  build container.
+
 ### API-to-API mTLS (PKI identity, both directions)
 In-cluster the deployment mounts a PKCS12 keystore (this service's Vault-PKI
 identity) + truststore (the cluster CA) and flips on **server-side** client-auth

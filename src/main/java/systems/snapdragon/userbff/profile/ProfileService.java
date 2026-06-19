@@ -2,8 +2,8 @@ package systems.snapdragon.userbff.profile;
 
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.security.DomainRegistry;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.commons.web.ApiException;
 import systems.snapdragon.userbff.web.ScreenReaderNames;
 
 /**

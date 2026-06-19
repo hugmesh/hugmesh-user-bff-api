@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import systems.snapdragon.userbff.federation.FederationHttpClientSsl;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.util.List;
 import java.util.Map;

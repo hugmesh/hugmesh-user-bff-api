@@ -89,7 +89,7 @@ class BlockServiceDomainScopeTest {
             assertThat(service.list("u2", "brandx").collectList().block()).isEmpty();
             // an unblock scoped to brandx for the brandy row id 404s (zero rows).
             assertThatThrownBy(() -> service.unblock("u2", yRow.id(), "brandx").block())
-                    .isInstanceOf(systems.snapdragon.userbff.web.ApiException.class);
+                    .isInstanceOf(systems.snapdragon.commons.web.ApiException.class);
             // the brandy row stands and is reachable from brandy.
             assertThat(service.list("u2", "brandy").collectList().block()).hasSize(1);
         }

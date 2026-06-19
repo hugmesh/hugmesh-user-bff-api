@@ -12,7 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.config.SecurityConfig;
-import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.silence.SelfSilenceRepository;
 

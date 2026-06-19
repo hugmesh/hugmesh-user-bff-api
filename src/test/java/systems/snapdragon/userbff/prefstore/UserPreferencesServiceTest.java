@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Import;
 import reactor.core.publisher.Flux;
 import systems.snapdragon.userbff.media.MediaPoisoningProperties;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.time.Duration;
 import java.util.Map;

@@ -3,6 +3,7 @@ package systems.snapdragon.userbff.security;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.oauth2.jwt.Jwt;
+import systems.snapdragon.commons.security.DomainRegistry;
 
 import java.time.Instant;
 import java.util.List;

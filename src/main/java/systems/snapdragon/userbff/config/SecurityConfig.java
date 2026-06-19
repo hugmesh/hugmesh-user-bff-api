@@ -19,8 +19,8 @@ import org.springframework.security.oauth2.server.resource.authentication.Reacti
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
-import systems.snapdragon.userbff.security.CasdoorAuthorities;
-import systems.snapdragon.userbff.security.DomainRegistry;
+import systems.snapdragon.commons.security.CasdoorAuthorities;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 
 /**
@@ -49,11 +49,15 @@ import systems.snapdragon.userbff.security.PrincipalDomain;
 @Configuration
 @EnableWebFluxSecurity
 @EnableReactiveMethodSecurity
-// SecurityConfig depends on DomainRegistry (the converter stamps the issuer-derived
-// DOMAIN_<x>); PrincipalDomain is the controllers' single domain-resolution bean.
-// Importing both here means every @WebFluxTest slice that imports SecurityConfig
-// gets them too — the slice context loads without each test re-declaring them.
-@Import({DomainRegistry.class, PrincipalDomain.class})
+// SecurityConfig depends on the commons DomainRegistry (the converter stamps the
+// issuer-derived DOMAIN_<x>); PrincipalDomain is the controllers' single
+// domain-resolution bean. DomainRegistry + the config-gated multi-issuer
+// TenancyResourceServerConfig now live in systems.snapdragon.commons.* (OUTSIDE the
+// userbff component-scan), so they are pulled in via CommonsSecurityConfig's @Import;
+// PrincipalDomain stays a userbff @Component but is imported here too so every
+// @WebFluxTest slice that imports SecurityConfig gets it — the slice context loads
+// without each test re-declaring them.
+@Import({CommonsSecurityConfig.class, PrincipalDomain.class})
 public class SecurityConfig {
 
     /** Issuer→domain source of truth. Injected so the converter can stamp the

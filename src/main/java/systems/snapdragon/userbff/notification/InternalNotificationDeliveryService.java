@@ -2,7 +2,7 @@ package systems.snapdragon.userbff.notification;
 
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.web.ApiException;
+import systems.snapdragon.commons.web.ApiException;
 
 /**
  * The SYSTEM-side deliver path for the in-app notification FLOOR — the ONLY production
