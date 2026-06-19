@@ -12,8 +12,14 @@
 # Security model: like federation-api, user-bff is purely an OAuth2 RESOURCE
 # SERVER. It VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS
 # auto-discovered) and FORWARDS the caller's bearer token onward to federation-api
-# — it mints/holds NO outbound client creds, so it needs NO Casdoor app or client
-# secret of its own.
+# — it needs NO Casdoor app or client secret of its own.
+#
+# D6 (SHIPS DARK): for the user's self-service /bff/user/** homeserver surfaces the
+# homeservers REJECT the Casdoor JWT, so user-bff mints a homeserver-NATIVE token,
+# AES-256-GCM-encrypts it at rest (key APP_HS_TOKEN_KEY, custody in its OWN
+# Postgres), and injects it when proxying through akkoma-proxy / tuwunel-proxy
+# (:4443 mTLS). The whole surface is inert behind HS_TOKEN_ENABLED (default false);
+# see the homeserver-token env block below.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -153,6 +159,59 @@ spec:
                 secretKeyRef:
                   name: user-bff-db-auth
                   key: password
+            # ── D6 homeserver-token proxy (mint + custody + inject) — SHIPS DARK ──
+            # Homeservers REJECT the Casdoor JWT for the general API (tuwunel has no
+            # jwt_config; Akkoma OIDC is interactive-login-only). So for the user's
+            # self-service /bff/user/** surfaces (block / silence / profile) the
+            # user-bff mints the homeserver-NATIVE token, AES-256-GCM-encrypts it at
+            # rest, custody-holds it in its OWN Postgres (no shared table — admin-bff
+            # & user-bff use SEPARATE dbs with mutual NetworkPolicy denial), and
+            # injects the decrypted token when proxying the call through the
+            # akkoma-proxy / tuwunel-proxy nginx mTLS fronts (:4443, ssl_verify_client
+            # on, which pass the Authorization bearer through UNCHANGED).
+            #
+            # HS_TOKEN_ENABLED gates the whole mint/custody/inject surface
+            # (app.hs-token.enabled). DEFAULT-OFF: while false the proxy code path is
+            # inert, the cipher refuses to operate without a key, and NO homeserver
+            # token is minted or held — so this only PROVISIONS the wiring, it does
+            # not turn the feature on. A later enablement step flips it to "true"
+            # AFTER the homeserver-isolation netpol (this PR) + the proxy sidecars are
+            # live and the Vault key is seeded.
+            - { name: HS_TOKEN_ENABLED, value: "false" }
+            # APP_HS_TOKEN_KEY — the 256-bit AES-GCM data key the homeserver-token
+            # custody cipher uses to encrypt each minted token at rest (mirrors
+            # admin-bff MfaSecretCipher: base64-decoded 32-byte key preferred, SHA-256
+            # passphrase fallback, NO plaintext fallback → inert + fail-closed when
+            # unconfigured). Sourced from the ESO Secret user-bff-hs-token (key `key`),
+            # materialized from Vault secret/<brand>/user-bff-hs-token.key. optional:
+            # true so the pod still starts if the Secret is absent (cipher stays inert,
+            # mint refuses). The KEY VALUE is NEVER a literal here — ESO/Vault only.
+            - name: APP_HS_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-hs-token
+                  key: key
+                  optional: true
+            # Homeserver base URLs the WebClients target: the mTLS PROXY fronts
+            # (:4443), NOT the plain homeserver ports. user-bff presents its OWN
+            # cluster-CA client cert (the /stores/keystore.p12 + /stores/truststore.p12
+            # the build-keystore initContainer already assembles from the /pki PEM) to
+            # satisfy each proxy's ssl_verify_client. These OVERRIDE the app's
+            # MATRIX_URL / MASTODON_URL defaults so all homeserver traffic is mTLS.
+            # Inert until HS_TOKEN_ENABLED flips (the proxy code path is the only
+            # caller that dials these).
+            - { name: MATRIX_URL,   value: "https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443" }
+            - { name: MASTODON_URL, value: "https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443" }
+            # Outbound mTLS client identity for the homeserver-proxy calls — mirrors
+            # the MEDIA_PROXY_* / federation outbound-mTLS pattern: present the in-pod
+            # keystore.p12 (this service's cluster-CA cert) + validate the proxy's
+            # server cert against the truststore.p12 (cluster CA). Store passwords come
+            # from /stores/application-tls.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See
