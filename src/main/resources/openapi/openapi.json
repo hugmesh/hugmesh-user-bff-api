@@ -1,0 +1,1468 @@
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "snapdragon-user-bff-api",
+    "description" : "User BFF API (/bff/user/**) — owner-scoped profile, home-guide preferences, federation-bundle cards, self-blocking, and instance-block recommendation. Every endpoint is keyed to the caller's Casdoor JWT subject.",
+    "version" : "0.1.0"
+  },
+  "servers" : [ {
+    "url" : "",
+    "description" : "Generated server url"
+  } ],
+  "tags" : [ {
+    "name" : "Mastodon proxy (D6)",
+    "description" : "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Ships dark behind app.hs-token.enabled."
+  }, {
+    "name" : "Home guide",
+    "description" : "Per-user home/getting-started guide dismissal (owner = JWT subject)."
+  }, {
+    "name" : "Media-cloak",
+    "description" : "Poison-before-ingest media proxy (owner = JWT subject). Best-effort AI-cloak — 'AI-cloak applied', never 'protected' unless the round-trip survival gate passes."
+  }, {
+    "name" : "Profile",
+    "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
+  }, {
+    "name" : "Self-block",
+    "description" : "The caller's OWN blocks (owner = JWT subject) + instance-block recommendation."
+  }, {
+    "name" : "Notification preferences",
+    "description" : "Per-category notification preferences (owner = JWT subject, domain-scoped). account-restriction is forced-on / un-silenceable."
+  }, {
+    "name" : "Cards",
+    "description" : "The caller's OWN federation bundles (owner = JWT subject), via snapdragon-federation-api."
+  }, {
+    "name" : "User preferences",
+    "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default — the per-user AI-poison default the compose toggle persists."
+  }, {
+    "name" : "Matrix proxy (D6)",
+    "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Ships dark behind app.hs-token.enabled."
+  }, {
+    "name" : "Self-silence",
+    "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
+  }, {
+    "name" : "Account status",
+    "description" : "Polling endpoint for the caller's own account status (roles, domain, silence)."
+  }, {
+    "name" : "Notifications (in-app floor)",
+    "description" : "The caller's OWN in-app notifications (owner = JWT subject, domain-scoped). The always-on in-app channel — read + mark-read only; the actions reconciler writes them."
+  }, {
+    "name" : "Connected clients",
+    "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."
+  }, {
+    "name" : "Notifications (internal deliver)",
+    "description" : "SERVICE-PRINCIPAL ONLY in-app notification delivery (target taken from the body). Honours prefs (account-restriction forced-on) and is idempotent on the source event."
+  } ],
+  "paths" : {
+    "/bff/user/profile" : {
+      "get" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Get my profile (owner = JWT subject).",
+        "operationId" : "me",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Create/update my profile. The body's userId is ignored — the owner is the JWT subject; the vanity username is derived from the token.",
+        "operationId" : "upsert",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UserProfile"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Delete my profile.",
+        "operationId" : "delete",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/user/preferences" : {
+      "get" : {
+        "tags" : [ "User preferences" ],
+        "summary" : "My durable preferences (server defaults merged in for unset keys).",
+        "operationId" : "get",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "User preferences" ],
+        "summary" : "Upsert one of my durable preferences (returns the resolved view).",
+        "operationId" : "put",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PreferenceUpsert"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/notification-preferences" : {
+      "get" : {
+        "tags" : [ "Notification preferences" ],
+        "summary" : "My notification preferences (defaults merged in; account-restriction always enabled).",
+        "operationId" : "get_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "Notification preferences" ],
+        "summary" : "Upsert one notification-category preference (returns the resolved view). account-restriction enabled=false is coerced to true.",
+        "operationId" : "put_1",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PreferenceUpsert"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/home-guide/dismiss" : {
+      "put" : {
+        "tags" : [ "Home guide" ],
+        "summary" : "Dismiss the named guide for me (PUT alias of /dismiss).",
+        "operationId" : "dismissPut",
+        "parameters" : [ {
+          "name" : "guide",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Home guide" ],
+        "summary" : "Dismiss the named guide for me (idempotent).",
+        "operationId" : "dismiss",
+        "parameters" : [ {
+          "name" : "guide",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "Home guide" ],
+        "summary" : "Re-show (un-dismiss) the named guide for me.",
+        "operationId" : "reset",
+        "parameters" : [ {
+          "name" : "guide",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/cards/{slug}" : {
+      "get" : {
+        "tags" : [ "Cards" ],
+        "summary" : "List versions of one of my cards by slug.",
+        "operationId" : "bySlug",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserModuleCard"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "Cards" ],
+        "summary" : "Publish (create/update) a card bundle for a slug.",
+        "description" : "Body is the single entry file (octet-stream). federation-api content-hashes it, records a user_modules row under ME (forwarded JWT), and supersedes the prior version.",
+        "operationId" : "put_2",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
+          }
+        }, {
+          "name" : "entryFile",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "maxLength" : 512,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }, {
+          "name" : "visibility",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "pattern" : "^(public|internal)$",
+            "type" : "string"
+          }
+        }, {
+          "name" : "manifest",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/octet-stream" : {
+              "schema" : {
+                "type" : "string",
+                "format" : "byte"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserModuleCard"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "Cards" ],
+        "summary" : "Delete one of my cards by slug.",
+        "description" : "Proxies federation-api's owner-scoped DELETE: removes the caller's OWN current bundle for the slug (federation-api removes the storage version + supersedes the row). Owner-enforced upstream via the forwarded JWT (a non-owner gets 404 from federation-api).",
+        "operationId" : "delete_1",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "204" : {
+            "description" : "No Content"
+          }
+        }
+      }
+    },
+    "/bff/user/self-silence/email-mod" : {
+      "post" : {
+        "tags" : [ "Self-silence" ],
+        "summary" : "Email a mod/admin to reactivate me sooner (writes a self-silence-appeal request; NOT SMTP).",
+        "operationId" : "emailMod",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/EmailModRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/self-silence/cancel" : {
+      "post" : {
+        "tags" : [ "Self-silence" ],
+        "summary" : "Cancel my self-silence now (un-hide + clear).",
+        "operationId" : "cancel",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/user/self-silence/activate" : {
+      "post" : {
+        "tags" : [ "Self-silence" ],
+        "summary" : "Activate my self-silence (hide me from others until expiresAt). I keep my own access.",
+        "operationId" : "activate",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ActivateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SelfSilence"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/recommend-instance-block" : {
+      "post" : {
+        "tags" : [ "Self-block" ],
+        "summary" : "Recommend an instance block (starts the USER->MOD->ADMIN chain via federation-api). Requires a platform role.",
+        "operationId" : "recommendInstanceBlock",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RecommendRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/profile/password" : {
+      "post" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Change my Casdoor password (goes to the IdP, not the profile table).",
+        "operationId" : "changePassword",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PasswordChangeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/profile/email" : {
+      "post" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Change my Casdoor email (goes to the IdP, not the profile table).",
+        "operationId" : "changeEmail",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/EmailChangeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/notifications/{id}/read" : {
+      "post" : {
+        "tags" : [ "Notifications (in-app floor)" ],
+        "summary" : "Mark one of MY notifications read (404 if not my own row).",
+        "operationId" : "markRead",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "204" : {
+            "description" : "No Content"
+          }
+        }
+      }
+    },
+    "/bff/user/media/upload" : {
+      "post" : {
+        "tags" : [ "Media-cloak" ],
+        "summary" : "Upload media through the cloak proxy (poison-then-forward).",
+        "description" : "Multipart: file (required) + platform (matrix|mastodon) + mode (glaze|nightshade|light|none, default from server) + roomId/description (passthrough). Returns the homeserver response verbatim + the server-owned cloak decision.",
+        "operationId" : "upload",
+        "requestBody" : {
+          "content" : {
+            "multipart/form-data" : {
+              "schema" : {
+                "required" : [ "file", "platform" ],
+                "type" : "object",
+                "properties" : {
+                  "file" : {
+                    "type" : "string",
+                    "format" : "binary"
+                  },
+                  "platform" : {
+                    "type" : "string"
+                  },
+                  "mode" : {
+                    "type" : "string"
+                  },
+                  "roomId" : {
+                    "type" : "string"
+                  },
+                  "description" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/notifications" : {
+      "post" : {
+        "tags" : [ "Notifications (internal deliver)" ],
+        "summary" : "Deliver one in-app notification to the target user (SERVICE-principal only; prefs honoured, account-restriction forced-on, idempotent on the source event).",
+        "operationId" : "deliver",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/DeliverRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DeliveryResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/blocks" : {
+      "get" : {
+        "tags" : [ "Self-block" ],
+        "summary" : "List my self-blocks.",
+        "operationId" : "mine",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserBlock"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Self-block" ],
+        "summary" : "Create a self-block (durable row + best-effort external push). Platform-role gated.",
+        "operationId" : "block",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/BlockRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v3/api-docs" : {
+      "get" : {
+        "tags" : [ "probes" ],
+        "operationId" : "apiDocs",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/status" : {
+      "get" : {
+        "tags" : [ "Account status" ],
+        "summary" : "Caller's own account status — active roles, domain scope, and self-silence state.",
+        "operationId" : "status",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/self-silence/status" : {
+      "get" : {
+        "tags" : [ "Self-silence" ],
+        "summary" : "My self-silence status (active or cleared).",
+        "operationId" : "status_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SelfSilence"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/notifications" : {
+      "get" : {
+        "tags" : [ "Notifications (in-app floor)" ],
+        "summary" : "My in-app notifications (newest first, server-capped).",
+        "operationId" : "list",
+        "parameters" : [ {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "maximum" : 100,
+            "minimum" : 1,
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 50
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserNotification"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/media/status/{ref}" : {
+      "get" : {
+        "tags" : [ "Media-cloak" ],
+        "summary" : "My cloak decision for a media ref (badge polling), owner-scoped.",
+        "operationId" : "status_2",
+        "parameters" : [ {
+          "name" : "ref",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MediaPoisonDecision"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/media/capability" : {
+      "get" : {
+        "tags" : [ "Media-cloak" ],
+        "summary" : "AI-cloak capability (worker backend + modes + ETA) for the shield state.",
+        "operationId" : "capability",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/home-guide" : {
+      "get" : {
+        "tags" : [ "Home guide" ],
+        "summary" : "Is the named guide dismissed for me? (default guide = 'home')",
+        "operationId" : "status_3",
+        "parameters" : [ {
+          "name" : "guide",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/connected-clients" : {
+      "get" : {
+        "tags" : [ "Connected clients" ],
+        "summary" : "List my connected apps + device sessions (owner = JWT subject). Requires an external-client role.",
+        "operationId" : "mine_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ConnectedClient"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/cards" : {
+      "get" : {
+        "tags" : [ "Cards" ],
+        "summary" : "List my cards (my federation bundles).",
+        "operationId" : "mine_2",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserModuleCard"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/cards/{slug}/body" : {
+      "get" : {
+        "tags" : [ "Cards" ],
+        "summary" : "Read my card's current body (source) by slug — for Edit pre-fill.",
+        "description" : "Proxies federation-api's owner-scoped read-my-card-body so the WYSIWYG editor can RE-READ a card's current source to edit it. Owner-enforced upstream via the forwarded JWT (a non-owner gets 404 from federation-api). Returns the raw entry-file bytes.",
+        "operationId" : "body",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/octet-stream" : {
+                "schema" : {
+                  "type" : "string",
+                  "format" : "byte"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/_probe" : {
+      "get" : {
+        "tags" : [ "probes" ],
+        "operationId" : "userSurface",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/actuator/info" : {
+      "get" : {
+        "tags" : [ "probes" ],
+        "operationId" : "info",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/actuator/health" : {
+      "get" : {
+        "tags" : [ "probes" ],
+        "operationId" : "health",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/connected-clients/{id}" : {
+      "delete" : {
+        "tags" : [ "Connected clients" ],
+        "summary" : "Revoke one of my connected clients (per-credential gateway key + best-effort homeserver delete + audit stamp).",
+        "operationId" : "revoke",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/blocks/{id}" : {
+      "delete" : {
+        "tags" : [ "Self-block" ],
+        "summary" : "Remove one of my self-blocks (scoped to me + id).",
+        "operationId" : "unblock",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "UserProfile" : {
+        "type" : "object",
+        "properties" : {
+          "userId" : {
+            "type" : "string"
+          },
+          "gender" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "pronouns" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "timezone" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "displayName" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "visibility" : {
+            "pattern" : "^(public|internal)$",
+            "type" : "string"
+          },
+          "vanitySubdomainEnabled" : {
+            "type" : "boolean"
+          },
+          "vanityUsername" : {
+            "type" : "string",
+            "readOnly" : true
+          },
+          "screenReaderName" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "PreferenceUpsert" : {
+        "required" : [ "key" ],
+        "type" : "object",
+        "properties" : {
+          "key" : {
+            "maxLength" : 128,
+            "minLength" : 0,
+            "pattern" : "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$",
+            "type" : "string"
+          },
+          "value" : {
+            "maxLength" : 1024,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "UserModuleCard" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "ownerUserId" : {
+            "type" : "string"
+          },
+          "slug" : {
+            "type" : "string"
+          },
+          "versionDir" : {
+            "type" : "string"
+          },
+          "contentHash" : {
+            "type" : "string"
+          },
+          "manifestJson" : {
+            "type" : "string"
+          },
+          "visibility" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "supersededAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "EmailModRequest" : {
+        "type" : "object",
+        "properties" : {
+          "reason" : {
+            "maxLength" : 2048,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "ActivateRequest" : {
+        "required" : [ "expiresAt" ],
+        "type" : "object",
+        "properties" : {
+          "expiresAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "reason" : {
+            "maxLength" : 2048,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "SelfSilence" : {
+        "type" : "object",
+        "properties" : {
+          "userId" : {
+            "type" : "string"
+          },
+          "startedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "expiresAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "clearedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "RecommendRequest" : {
+        "required" : [ "instance" ],
+        "type" : "object",
+        "properties" : {
+          "instance" : {
+            "maxLength" : 512,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "reason" : {
+            "maxLength" : 2048,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "PasswordChangeRequest" : {
+        "required" : [ "newPassword" ],
+        "type" : "object",
+        "properties" : {
+          "oldPassword" : {
+            "type" : "string"
+          },
+          "newPassword" : {
+            "maxLength" : 256,
+            "minLength" : 1,
+            "type" : "string"
+          }
+        }
+      },
+      "EmailChangeRequest" : {
+        "required" : [ "email" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "maxLength" : 320,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "DeliverRequest" : {
+        "required" : [ "category", "domain", "sourceId", "sourceTable", "title", "userSubject" ],
+        "type" : "object",
+        "properties" : {
+          "domain" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+            "type" : "string"
+          },
+          "userSubject" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "category" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "pattern" : "^[a-z][a-z-]{0,63}$",
+            "type" : "string"
+          },
+          "title" : {
+            "maxLength" : 512,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "body" : {
+            "maxLength" : 100000,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "sourceTable" : {
+            "maxLength" : 128,
+            "minLength" : 0,
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type" : "string"
+          },
+          "sourceId" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "DeliveryResult" : {
+        "type" : "object",
+        "properties" : {
+          "delivered" : {
+            "type" : "boolean"
+          },
+          "deduped" : {
+            "type" : "boolean"
+          },
+          "reason" : {
+            "type" : "string"
+          }
+        }
+      },
+      "BlockRequest" : {
+        "required" : [ "target" ],
+        "type" : "object",
+        "properties" : {
+          "target" : {
+            "maxLength" : 512,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "platform" : {
+            "pattern" : "^(matrix|mastodon|internal)$",
+            "type" : "string"
+          }
+        }
+      },
+      "UserNotification" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "userSubject" : {
+            "type" : "string"
+          },
+          "category" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "body" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "readAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "MediaPoisonDecision" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "platform" : {
+            "type" : "string"
+          },
+          "mediaRef" : {
+            "type" : "string"
+          },
+          "mode" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "backend" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "ConnectedClient" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "owner" : {
+            "type" : "string"
+          },
+          "platform" : {
+            "type" : "string"
+          },
+          "clientKind" : {
+            "type" : "string"
+          },
+          "externalRef" : {
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "revokedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "UserBlock" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "target" : {
+            "type" : "string"
+          },
+          "platform" : {
+            "type" : "string"
+          },
+          "ts" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      }
+    }
+  }
+}
