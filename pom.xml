@@ -52,6 +52,22 @@
       <scope>test</scope>
     </dependency>
 
+    <!-- The shared SSO / Casdoor-OIDC building blocks: the OidcExchangeClient (PKCE
+         code->token exchange + refresh against Casdoor), the at-rest BffCustodyCipher
+         (AES-256-GCM, inert + fail-closed when its key is blank), the opaque-bff_-cookie
+         SessionCookieService / SessionCookieWebFilter, the X-Internal-Token guard
+         (InternalTokenWebFilter), the InternalSurfaceBootGuard and the canonical
+         reserved.ReservedNames (this repo's local profile.ReservedNames dup is deleted
+         in favour of it). Unlike snapdragon-commons, auth-core is NOT parent-managed —
+         so this dependency carries an EXPLICIT <version>. PINNED to 2.0.0: that is the
+         release that ships every class this BFF's OIDC-login relocation consumes
+         (BffCustodyCipher / SessionCookieService / OidcExchangeClient). -->
+    <dependency>
+      <groupId>systems.snapdragon</groupId>
+      <artifactId>snapdragon-auth-core</artifactId>
+      <version>2.0.0</version>
+    </dependency>
+
     <!-- ============================================================================
          The core reactive BFF stack (webflux / actuator / security /
          oauth2-resource-server / validation), the data-access stack (data-r2dbc /

@@ -39,6 +39,16 @@ import systems.snapdragon.userbff.security.PrincipalDomain;
  * authentication, the service layer proves ownership AND domain-scope (a principal
  * only sees/mutates rows in its own {@code DOMAIN_<x>}; SUPERADMIN is unscoped).
  *
+ * <p><b>SSO LOGIN RELOCATION.</b> user-bff now OWNS the login leg: the OIDC redirect
+ * callback ({@code /bff/auth/callback}) plus the {@code /bff/login} / {@code /bff/register}
+ * / {@code /bff/session} entrypoints are PRE-AUTH ({@code permitAll}) — they are how a
+ * caller obtains the opaque {@code bff_} session in the first place, so they cannot
+ * require the JWT they have not yet got. This whole surface SHIPS DARK behind
+ * {@code app.bff.oidc.enabled=false} (every handler 503s / fail-closes when the flag is
+ * off), so {@code permitAll} only EXPOSES the routes — it authenticates no one. The
+ * authenticated read-back ({@code /bff/me}) deliberately stays behind the floor
+ * (matches admin-bff).
+ *
  * <p><b>Multi-issuer is OPT-IN + backward-compatible.</b> When
  * {@code app.tenancy.issuers} carries per-brand issuer=domain pairs
  * ({@link TenancyResourceServerConfig} contributes a resolver AND the registry is
@@ -164,11 +174,20 @@ public class SecurityConfig {
         // /bff/user/** authenticated catch-all so it can never fall through to the
         // any-authenticated-user floor.
         ex.pathMatchers("/bff/user/internal/**").hasRole("SERVICE");
+        // PRE-AUTH SSO LOGIN SURFACE (ships dark behind app.bff.oidc.enabled=false): the
+        // OIDC redirect callback + the login/register/session entrypoints are reachable
+        // WITHOUT a Casdoor JWT — they are how a caller OBTAINS a session in the first
+        // place (the browser only ever holds the opaque bff_ session, never a JWT). When
+        // the surface is dark these handlers all 503/fail-closed, so permitAll only
+        // EXPOSES them, it does not authenticate anyone. Declared BEFORE the
+        // /bff/user/** floor so they don't fall through to .authenticated(). NOTE:
+        // /bff/me is deliberately NOT here — it stays authenticated (matches admin-bff),
+        // falling through to the anyExchange().authenticated() catch-all below.
+        ex.pathMatchers("/bff/auth/callback", "/bff/login", "/bff/register", "/bff/session").permitAll();
         // The entire user surface — ROLE_USER floor. The converter adds ROLE_USER to
         // every authenticated principal, so .authenticated() == the ROLE_USER floor.
-        // No pre-auth /login or /register: this BFF is JWT-only (post-login); the
-        // admin-bff owns registration. Owner-enforcement (owner = JWT subject) AND
-        // domain-scope (DOMAIN_<x>) are enforced in the services.
+        // Owner-enforcement (owner = JWT subject) AND domain-scope (DOMAIN_<x>) are
+        // enforced in the services.
         ex.pathMatchers("/bff/user/**").authenticated();
     }
 

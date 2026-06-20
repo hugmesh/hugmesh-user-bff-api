@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import systems.snapdragon.authcore.reserved.ReservedNames;
 import systems.snapdragon.commons.web.ApiException;
 
 import java.util.Set;
@@ -39,7 +40,7 @@ class ProfileServiceReservedUsernameTest {
     @Autowired UserProfileRepository repo;
 
     static Set<String> reservedLabels() {
-        return ReservedNames.RESERVED_LABELS;
+        return ReservedNames.RESERVED;
     }
 
     @ParameterizedTest
@@ -69,6 +70,27 @@ class ProfileServiceReservedUsernameTest {
         UserProfile body = new UserProfile("sub-3", null, null, null, "X", "internal", true);
         assertThatThrownBy(() -> profiles.save("sub-3", "ADMIN", body).block())
                 .isInstanceOf(ApiException.class);
+    }
+
+    /**
+     * INTENTIONAL behaviour delta from the deleted local dup: the canonical auth-core
+     * {@link ReservedNames} additionally treats the platform-internal {@code "system"}
+     * principal as reserved (via {@code RESERVED_PLATFORM_INTERNAL} — NOT a member of
+     * the route-derived {@link ReservedNames#RESERVED} set the parameterised cases above
+     * iterate, so it is asserted here explicitly). Enabling a {@code system} vanity
+     * subdomain must be rejected 400 so the @system notification/infra accounts can
+     * never be impersonated by a vanity profile.
+     */
+    @Test
+    void platformInternalSystemUsername_enablingVanity_isRejected400() {
+        assertThat(ReservedNames.RESERVED).doesNotContain("system");
+        assertThat(ReservedNames.isReserved("system")).isTrue();
+
+        UserProfile body = new UserProfile("sub-6", null, null, null, "X", "internal", true);
+        assertThatThrownBy(() -> profiles.save("sub-6", "system", body).block())
+                .isInstanceOfSatisfying(ApiException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(repo.find("sub-6").blockOptional()).isEmpty();
     }
 
     @Test

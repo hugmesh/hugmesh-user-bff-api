@@ -20,11 +20,11 @@
         ProfileController). The CHECK below is the DB-LEVEL backstop for the
         service-layer validation: a non-null vanity_username may not be a reserved
         label. The forbidden list is generated from the canonical
-        ReservedNames.RESERVED_LABELS set — the SAME list the federation serving layer
-        + its 016 reserved-slug CHECK use (canonical source: the fe-/be-gateway routes
-        + reserved subdomains + the snapdragon.games route prefixes). lower() makes the
-        constraint case-insensitive, matching the util. Keep this list in sync with
-        ReservedNames if that set changes.
+        systems.snapdragon.authcore.reserved.ReservedNames.RESERVED set — the SAME list
+        the federation serving layer + its 016 reserved-slug CHECK use (canonical
+        source: the fe-/be-gateway routes + reserved subdomains + the snapdragon.games
+        route prefixes). lower() makes the constraint case-insensitive, matching the
+        util. Keep this list in sync with ReservedNames if that set changes.
 
         Portability: plain ANSI `vanity_username IS NULL OR lower(vanity_username)
         NOT IN (...)` — runs identically on production Postgres AND the H2

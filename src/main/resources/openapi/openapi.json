@@ -18,6 +18,12 @@
     "name" : "Media-cloak",
     "description" : "Poison-before-ingest media proxy (owner = JWT subject). Best-effort AI-cloak — 'AI-cloak applied', never 'protected' unless the round-trip survival gate passes."
   }, {
+    "name" : "OIDC login callback",
+    "description" : "Casdoor OIDC redirect callback. Ships dark behind app.bff.oidc.enabled; 503 when disabled."
+  }, {
+    "name" : "SSO auth",
+    "description" : "Login / register / session surface, delegating to admin-bff internal. Ships dark behind app.bff.oidc.enabled."
+  }, {
     "name" : "Profile",
     "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
   }, {
@@ -734,6 +740,70 @@
         }
       }
     },
+    "/bff/register" : {
+      "post" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "Email-provider registration: ensure the account. 503 when the SSO surface is dark.",
+        "operationId" : "register",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterEmailRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/login" : {
+      "post" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "Provider login: ensure the account and mint an opaque bff_ session (cookie + body). 503 when the SSO surface is dark.",
+        "operationId" : "login",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v3/api-docs" : {
       "get" : {
         "tags" : [ "probes" ],
@@ -999,6 +1069,55 @@
         }
       }
     },
+    "/bff/me" : {
+      "get" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "The caller's account view (from admin-bff). Authenticated. 503 when the SSO surface is dark.",
+        "operationId" : "me_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/auth/callback" : {
+      "get" : {
+        "tags" : [ "OIDC login callback" ],
+        "summary" : "Casdoor OIDC callback: validate state, exchange code (PKCE), provision account+session via admin-bff, mint the bff_ cookie, 302 to the UI. 503 when the OIDC surface is dark.",
+        "operationId" : "callback",
+        "parameters" : [ {
+          "name" : "code",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "state",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
     "/actuator/info" : {
       "get" : {
         "tags" : [ "probes" ],
@@ -1080,6 +1199,18 @@
             "type" : "string"
           }
         } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/session" : {
+      "delete" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "Revoke the caller's session (sessionOut) and expire the bff_ cookie. 503 when the SSO surface is dark.",
+        "operationId" : "sessionOut",
         "responses" : {
           "200" : {
             "description" : "OK"
@@ -1493,6 +1624,48 @@
           },
           "platform" : {
             "pattern" : "^(matrix|mastodon|internal)$",
+            "type" : "string"
+          }
+        }
+      },
+      "RegisterEmailRequest" : {
+        "required" : [ "email" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "maxLength" : 320,
+            "minLength" : 0,
+            "type" : "string",
+            "format" : "email"
+          },
+          "displayName" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "screenReaderName" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "pattern" : "[\\x20-\\x7E]*",
+            "type" : "string"
+          }
+        }
+      },
+      "LoginRequest" : {
+        "type" : "object",
+        "properties" : {
+          "provider" : {
+            "pattern" : "(?i)google|discord",
+            "type" : "string"
+          },
+          "email" : {
+            "maxLength" : 320,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "username" : {
+            "maxLength" : 64,
+            "minLength" : 0,
             "type" : "string"
           }
         }

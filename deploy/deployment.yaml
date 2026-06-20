@@ -212,6 +212,55 @@ spec:
             - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
+            # ── SSO LOGIN RELOCATION (user-bff owns OIDC login) — SHIPS DARK ──────
+            # The whole /bff/auth/callback + /bff/login|register|session surface is
+            # inert until APP_BFF_OIDC_ENABLED flips true: with it false the auth-core
+            # OidcExchangeClient bean is absent (callback 503s) and the
+            # AdminBffInternalClient is a fail-closed stub. This block only PROVISIONS
+            # the wiring; a later enablement step flips it AFTER the custody key + the
+            # internal token are seeded and the user-bff -> admin-bff egress NetworkPolicy
+            # peer ships (cross-repo follow-up — see the PR body).
+            - { name: APP_BFF_OIDC_ENABLED, value: "false" }
+            # Casdoor OIDC client id/secret. id is non-secret; secret is ESO/Vault-sourced
+            # (Secret user-bff-oidc, key client-secret), optional:true so the pod still
+            # starts when the Secret is absent (the surface stays dark) — mirrors the
+            # APP_HS_TOKEN_KEY block. The secret VALUE is NEVER a literal here.
+            - { name: APP_BFF_OIDC_CLIENT_ID, value: "user-bff" }
+            - name: APP_BFF_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: client-secret
+                  optional: true
+            # APP_BFF_CUSTODY_KEY — the 256-bit AES-GCM key the BffCustodyCipher uses to
+            # encrypt the exchanged access/refresh tokens at rest before they are stamped
+            # onto admin-bff's bff_session row (only ciphertext crosses the wire).
+            # ESO/Vault-sourced (Secret user-bff-oidc, key custody-key), optional:true ⇒
+            # cipher stays inert + the OidcCustodyBootGuard refuses oidc.enabled with a
+            # blank key (no plaintext token at rest). NEVER a literal here.
+            - name: APP_BFF_CUSTODY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: custody-key
+                  optional: true
+            # INTERNAL_TOKEN — the X-Internal-Token the AdminBffInternalClient stamps on
+            # its calls to admin-bff's internal surface (matches admin-bff's inbound
+            # auth-core InternalTokenWebFilter). ESO/Vault-sourced (Secret
+            # user-bff-internal-token, key token), optional:true ⇒ no stamp (dev/test/CI;
+            # admin-bff's filter is a matching no-op). NEVER a literal here.
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-internal-token
+                  key: token
+                  optional: true
+            # admin-bff internal base-url the AdminBffInternalClient targets (account +
+            # session + custody-stamp ops). A NEW egress NetworkPolicy peer
+            # (user-bff -> admin-bff :8080) is required in the manifests/generator repo
+            # as a follow-up; the existing mutual db-denial between the two BFFs stays.
+            - name: ADMIN_BFF_INTERNAL_BASE_URL
+              value: "http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080"
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See

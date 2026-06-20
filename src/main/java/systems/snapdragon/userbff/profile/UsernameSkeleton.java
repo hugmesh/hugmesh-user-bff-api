@@ -1,6 +1,7 @@
 package systems.snapdragon.userbff.profile;
 
 import com.ibm.icu.text.SpoofChecker;
+import systems.snapdragon.authcore.reserved.ReservedNames;
 
 import java.text.Normalizer;
 import java.util.HashSet;
@@ -61,7 +62,7 @@ public final class UsernameSkeleton {
 
     private static Set<String> buildReservedSkeletons() {
         Set<String> out = new HashSet<>();
-        for (String label : ReservedNames.RESERVED_LABELS) {
+        for (String label : ReservedNames.RESERVED) {
             // Reserved labels are ASCII and free of invisibles, so skeleton() never
             // throws here; guard anyway so a future list addition can't break load.
             try {

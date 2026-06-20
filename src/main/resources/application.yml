@@ -119,6 +119,55 @@ app:
   # When non-empty, TenancyResourceServerConfig activates; unknown issuers → 401.
   tenancy:
     issuers: "${APP_TENANCY_ISSUERS:}"
+
+  # ── SSO LOGIN RELOCATION (user-bff owns OIDC login) — SHIPS DARK ─────────────
+  # The whole OIDC-login surface (/bff/auth/callback + /bff/login|register|session,
+  # the OidcCallbackController + SsoAuthController + the AdminBffInternalClient) is
+  # inert until app.bff.oidc.enabled flips to true:
+  #   • enabled=false ⇒ auth-core OidcExchangeConfig contributes NO OidcExchangeClient
+  #     bean (the callback 503s), AND the AdminBffInternalClient is a fail-closed stub
+  #     (every account/session op errors — never a silent auth).
+  # bff.custody-key: the AES-256-GCM data key the BffCustodyCipher uses to encrypt the
+  # exchanged access/refresh tokens at rest BEFORE handing the ciphertext to admin-bff.
+  # ESO/Vault-sourced at deploy, NEVER a literal in git. BLANK ⇒ the cipher is INERT
+  # and the callback 503s even if oidc.enabled=true (the OidcCustodyBootGuard ALSO
+  # fails the boot for that combination — fail-closed, no plaintext token at rest).
+  bff:
+    oidc:
+      enabled: "${APP_BFF_OIDC_ENABLED:false}"
+      issuer: "${APP_BFF_OIDC_ISSUER:${casdoor.gateway-base}}"
+      token-path: "${APP_BFF_OIDC_TOKEN_PATH:/api/login/oauth/access_token}"
+      client-id: "${APP_BFF_OIDC_CLIENT_ID:user-bff}"
+      client-secret: "${APP_BFF_OIDC_CLIENT_SECRET:}"
+      redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://snapdragon.systems/login/callback}"
+      default-expiry-seconds: 3600
+      # server-side PKCE/state/nonce pending-store TTL + sweep cadence.
+      pending-ttl: "${APP_BFF_OIDC_PENDING_TTL:PT5M}"
+      pending-sweep-ms: "${APP_BFF_OIDC_PENDING_SWEEP_MS:60000}"
+    custody-key: "${APP_BFF_CUSTODY_KEY:}"
+  # The opaque bff_ session cookie (auth-core SessionCookieService). SHIPS DARK:
+  # enabled=false ⇒ NO Set-Cookie is emitted (the session token stays in the body
+  # only, byte-identical to today). secure default true; ttl default 12h.
+  session:
+    cookie:
+      enabled: "${APP_SESSION_COOKIE_ENABLED:false}"
+      secure: "${APP_SESSION_COOKIE_SECURE:true}"
+      ttl: "${APP_SESSION_COOKIE_TTL:PT12H}"
+  # OUTBOUND X-Internal-Token the AdminBffInternalClient stamps on its calls to
+  # admin-bff's internal surface (matches admin-bff's INBOUND auth-core
+  # InternalTokenWebFilter). BLANK ⇒ no stamp (dev/test/CI; admin-bff's filter is a
+  # matching no-op) — ESO/Vault-sourced in-cluster, never a literal in git.
+  internal:
+    token: "${INTERNAL_TOKEN:}"
+    token-header: "${APP_INTERNAL_TOKEN_HEADER:X-Internal-Token}"
+  # admin-bff internal base-url the AdminBffInternalClient targets (account + session +
+  # custody-stamp ops; admin-bff owns those tables — user-bff has no such DB). A NEW
+  # egress peer (user-bff -> admin-bff :8080) is required in the manifests/generator
+  # repo as a follow-up (see PR body); the existing mutual db-denial stays.
+  admin-bff:
+    internal:
+      base-url: "${ADMIN_BFF_INTERNAL_BASE_URL:http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080}"
+
   # ── D6 Matrix/Mastodon BFF-proxy (custody store + mint + reactive proxy) ──────
   # SHIPS DARK: enabled=false ⇒ every /bff/user/{matrix,mastodon}/** endpoint 503s
   # and nothing reads/writes the hs_service_token custody table. The legacy admin-bff
