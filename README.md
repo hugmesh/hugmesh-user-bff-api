@@ -4,21 +4,25 @@ Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with t
 (later) `snapdragon-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
 resource-server + springdoc + Spring Native, scaffolded from the
 `snapdragon-admin-bff-api` template (same stack, same conventions). Java 21,
-Spring Boot 4.0.2.
+Spring Boot 4.0.2 / Spring Cloud 2025.1.
 
 ## Where it sits
 
 A **backend-namespace BFF** — deployed into `snapdragon-backend`, reached only
 *behind the gateway*, never public. It is the per-role backend-for-frontend for
 ordinary users, the `ROLE_USER` peer of `snapdragon-admin-bff-api` (admin) and the
-mod BFF. It is **JWT-only / post-login**: there is no `/login` or `/register` here
-(the admin-bff owns registration); every request must carry a valid Casdoor token.
-It talks to:
+mod BFF. It talks to:
 
 - **Casdoor** (the IdP) as an OAuth2 resource server — validates the JWT, and is
-  the destination for the self-service password/email change.
+  the destination for the self-service password/email change. Casdoor is the SSO
+  IdP for the whole platform; `login-ui` runs the OIDC authorization-code (PKCE)
+  redirect and this BFF does the server-side code→token exchange and holds per-session
+  JWT custody/refresh (see *Auth model / SSO relocation*).
 - **snapdragon-federation-api** — for the caller's federation **cards** (bundles)
   and the instance-block **recommendation** chain (caller JWT forwarded per request).
+- **snapdragon-admin-bff-api** `/bff/internal` (over mTLS + `X-Internal-Token`) — the
+  account/session **data** for the relocated login/session/account surfaces stays in
+  `admin-bff-db`; this BFF reaches it server-to-server (see *Auth model*).
 - the **homeservers** (tuwunel / Matrix, Akkoma / Mastodon) **through the gateway
   mTLS proxies** — for the external block push, self-silence visibility hides,
   connected-client list/revoke, and the AI-cloak media upload. These legs are
@@ -26,9 +30,10 @@ It talks to:
 
 ```mermaid
 flowchart LR
+    LoginUI["login-ui<br/>(Casdoor OIDC PKCE redirect)"]:::planned
     UI["snapdragon-user-ui<br/>(later; ng-openapi-gen)"]:::planned
-    GW["snapdragon gateway<br/>(JWT validate + mTLS)"]
-    Casdoor["Casdoor IdP<br/>(JWT issuer)"]
+    GW["snapdragon gateway<br/>(Casdoor-JWT RS + bff_→JWT swap + route-access gate)"]
+    Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
     subgraph BFF["snapdragon-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
         Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients ·<br/>media · status · notifications"]
@@ -36,15 +41,19 @@ flowchart LR
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
 
+    AdminBff["snapdragon-admin-bff-api /bff/internal<br/>(account/session DATA, mTLS + X-Internal-Token)"]:::planned
     Fed["snapdragon-federation-api<br/>(cards + moderation, forwarded JWT)"]
     HS["homeservers via mTLS proxy<br/>tuwunel / Akkoma<br/>(gated stub-seams)"]:::gated
     Actions["snapdragon-actions reconciler<br/>(only writer of user_notifications)"]:::planned
 
-    UI -->|Bearer JWT| GW
-    GW -->|forwarded JWT| Surfaces
+    LoginUI -.->|opaque bff_ session| UI
+    UI -->|opaque bff_ session| GW
+    GW -->|swap bff_→internal custody JWT, forwarded| Surfaces
+    Casdoor -.->|code→token exchange / refresh| BFF
     Casdoor -.->|validates iss / roles| GW
     Surfaces --> DB
     Surfaces -->|forwarded JWT| Fed
+    Surfaces -.->|account/session data| AdminBff
     Surfaces -->|gated, never hard-fail| HS
     Surfaces -->|password / email| Casdoor
     Actions -->|ROLE_SERVICE deliver| Internal
@@ -55,8 +64,39 @@ flowchart LR
 ```
 
 In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed nodes are 🔭 planned
-or built elsewhere (`snapdragon-user-ui`, the `snapdragon-actions` reconciler), and the
+or built/landing elsewhere (`login-ui`, `snapdragon-user-ui`, the `snapdragon-actions`
+reconciler, and the in-flight admin-bff→user-bff login/session relocation), and the
 amber-dashed homeserver leg is the ✅-shipped-but-**gated** stub-seam (off by default).
+
+## Auth model / SSO relocation 🚧
+
+The platform's auth is being consolidated this cycle, and this BFF is the new home
+for the user-facing slice of it. Ground truth as of 2026-06-20:
+
+- **Casdoor is the SSO IdP.** `login-ui` performs a Casdoor OIDC authorization-code
+  (PKCE) redirect; **this BFF does the server-side code→token exchange** and holds
+  per-session **JWT custody / refresh**. The browser only ever holds an **opaque
+  `bff_`-prefixed session** (localStorage or httpOnly cookie) — the user NEVER sees
+  their own Casdoor JWT.
+- **The gateway stays a pure Casdoor-JWT OAuth2 resource server.** A pre-security
+  exchange filter swaps the `bff_` session → the internal custody JWT, so the
+  gateway's JWT validation + role gate run unchanged.
+- **Authorization is data-driven.** The `gateway_route_access` Postgres table is the
+  source of truth, enforced by the gateway's `GatewayRouteAccessFilter`:
+  ADMIN / GAME-MASTER bypass within their own domain, SUPERADMIN cross-domain.
+- **Login / session / account logic is RELOCATING from admin-bff to this user-bff;**
+  the shared core is extracted to **`snapdragon-auth-core`** (account / session / MFA /
+  Casdoor-admin infra). The account/session **DATA stays in `admin-bff-db`** — this
+  BFF reaches it via admin-bff `/bff/internal` over **mTLS + `X-Internal-Token`**.
+- **Cloudflare** fronts prod.
+
+> ✅ Already on `main` here: the JWT-only `/bff/user/**` surfaces, the Casdoor
+> resource-server config, the canonical `CasdoorAuthorities` converter, and
+> issuer-keyed domain-scoping. 🚧 In-flight / landing: the server-side code→token
+> exchange + `bff_` session custody + the admin-bff `/bff/internal` account/session
+> data calls + the `snapdragon-auth-core` adoption. Until that lands, the historical
+> note still holds: registration is owned by admin-bff and there is no `/login` or
+> `/register` route here.
 
 ## The core invariant: owner-enforcement
 
@@ -178,7 +218,8 @@ bounded window while keeping their own full session/access. It is **NOT a ban**:
 surface is structurally incapable of writing a Casdoor role, an `access_suspension`
 row, or a revocation key — login/home stays normal for the silenced user. Own R2DBC
 `self_silence` table (006; `expires_at` authoritative; a `@Scheduled`
-`SelfSilenceExpiryAction` auto-clears at expiry).
+`SelfSilenceExpiryAction` auto-clears at expiry). `activate()` is atomic/idempotent
+(INSERT-or-UPDATE upsert, closing the 23505 race).
 
 - `POST /bff/user/self-silence/activate` — hide me until `expiresAt` (REQUIRED,
   must be in the FUTURE; `reason` optional). I keep my session + full access.
@@ -330,6 +371,7 @@ external channels that build on top.
 | Concern | Destination |
 | --- | --- |
 | Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`) |
+| Account / session data for the relocated login/session surfaces | **`snapdragon-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
 | External mute/block push, self-silence directory hide, connected-client list/revoke, media upload | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients via the gateway mTLS proxy (STUBBED/gated) |
@@ -366,8 +408,8 @@ external channels that build on top.
 
 `SecurityConfig` is a Casdoor OAuth2 resource server (`issuer-uri` from
 `CASDOOR_ISSUER_URI`). The JWT→authority converter is the **verbatim** Casdoor
-converter from `snapdragon-admin-bff-api` / the gateway: `ROLE_USER` floor on every
-authenticated principal; `roles` (string or `{name}`) → `ROLE_<UPPER>`;
+converter shared with `snapdragon-admin-bff-api` / the gateway: `ROLE_USER` floor on
+every authenticated principal; `roles` (string or `{name}`) → `ROLE_<UPPER>`;
 `permissions` verbatim; `isAdmin` → `ROLE_ADMIN`. `@EnableReactiveMethodSecurity`
 + `@PreAuthorize` on the controllers re-checks at the method (the `ROLE_USER` floor,
 plus the per-surface platform / external-client role gates above).
@@ -375,9 +417,16 @@ Profile/spec gating is profile-split: under `dev`/`test` the OpenAPI spec + Swag
 UI are public (so `gen:fetch` can curl `/v3/api-docs` tokenless); in prod they need
 `ROLE_ADMIN`. Actuator health/info are public for probes.
 
-### Shared commons library (`snapdragon-parent` + `snapdragon-commons`)
+This BFF is the per-session JWT custodian behind the gateway's `bff_`-opaque-session
+model (see *Auth model / SSO relocation*): the browser holds only the opaque `bff_`
+session, the gateway swaps it to the internal custody JWT before its own validation,
+and authorization at the edge is data-driven by `gateway_route_access` /
+`GatewayRouteAccessFilter` in the gateway. Inside this BFF the post-validation JWT is
+the only authority source.
 
-This service adopts the org's shared Maven artifacts. Two de-duplication moves:
+### Shared org artifacts (`snapdragon-parent` + `snapdragon-commons` + `snapdragon-auth-core`)
+
+This service adopts the org's shared Maven artifacts. Three de-duplication moves:
 
 1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.0.0` (itself a child of
    `spring-boot-starter-parent:4.0.2`, so the whole Spring Boot dependency/plugin
@@ -388,7 +437,7 @@ This service adopts the org's shared Maven artifacts. Two de-duplication moves:
    plugin config. Only the **repo-specific** deps stay in this POM: `icu4j` and
    `commons-text` (the Unicode confusable / typo-squat guard).
 
-2. **Shared security/tenancy/web →** `systems.snapdragon:snapdragon-commons:1.0.0`.
+2. **Shared security/tenancy/web →** `systems.snapdragon:snapdragon-commons:2.0.0`.
    The local copies of `security.{Roles,DomainRegistry,CasdoorAuthorities,DomainScope}`,
    `config.TenancyResourceServerConfig` and `web.ApiException` were **deleted** and
    replaced by:
@@ -424,17 +473,25 @@ This service adopts the org's shared Maven artifacts. Two de-duplication moves:
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/systems/snapdragon/commons/config/TenancyResolvers.java`.
 
+3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.snapdragon:snapdragon-auth-core:2.0.0`
+   🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
+   the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
+   infra) is extracted to `snapdragon-auth-core` (depends on `snapdragon-commons`,
+   consumed by **user-bff + admin-bff only**) rather than copied. This adoption is
+   in-flight alongside the SSO relocation above.
+
    The committed [`openapi.json`](src/main/resources/openapi/openapi.json) is
-   **byte-identical** after the refactor (internal-only change).
+   **byte-identical** after the commons refactor (internal-only change).
 
-#### Resolving the private `snapdragon-commons` artifact
+#### Resolving the private org artifacts
 
-`snapdragon-commons` is **not** on Maven Central — it lives in the org GitLab Maven
-Package Registry. Two resolution paths, **no secrets in git**:
+`snapdragon-parent` / `snapdragon-commons` / `snapdragon-auth-core` are **not** on
+Maven Central — they live in the org GitLab Maven Package Registry. Two resolution
+paths, **no secrets in git**:
 
-- **Local dev:** `snapdragon-parent` + `snapdragon-commons` are `mvn install`ed into
-  `~/.m2`, so a plain `./mvnw test` resolves them locally and never touches the
-  remote (this is how the build was verified green).
+- **Local dev:** the shared artifacts are `mvn install`ed into `~/.m2`, so a plain
+  `./mvnw test` resolves them locally and never touches the remote (this is how the
+  build was verified green).
 - **CI / Docker:** the committed [`settings.xml`](settings.xml) declares the
   `gitlab-maven` group registry, authenticated by the GitLab `CI_JOB_TOKEN`
   (`${env.CI_JOB_TOKEN}` — injected by GitLab, never committed). The
@@ -452,9 +509,11 @@ identity) + truststore (the cluster CA) and flips on **server-side** client-auth
 not deployed+signed by our Vault/ESO PKI process holds no chaining cert and its TLS
 handshake is rejected before it can read or call the API at all. The **client-side**
 half (`snapdragon.mtls.client.enabled`, `FederationHttpClientSsl`) presents this
-BFF's client identity on its OUTBOUND federation-api calls when federation-api flips
-its server-side client-auth to `need`. Both reuse one mounted `/stores` layout.
-Defaults keep local/dev/CI plaintext (`SSL_ENABLED=false`, client-auth `none`).
+BFF's client identity on its OUTBOUND federation-api calls (and is the same mechanism
+used for the admin-bff `/bff/internal` account/session leg — mTLS + `X-Internal-Token`)
+when the upstream flips its server-side client-auth to `need`. Both reuse one mounted
+`/stores` layout. Defaults keep local/dev/CI plaintext (`SSL_ENABLED=false`,
+client-auth `none`).
 
 ### Multi-tenancy / domain-scoping ✅ shipped
 The platform is multi-brand: one Casdoor per brand, so a token's
@@ -464,14 +523,15 @@ BFF to match the gateway, and is the in-data defence-in-depth layer **beneath** 
 authoritative cross-domain boundary (per-domain namespace + mTLS isolation; 1
 admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
-- The JWT→authority mapping uses a shared `CasdoorAuthorities` converter COPIED
-  (logic) from the gateway so the BFF and gateway emit **byte-identical** authorities.
-  It stamps exactly one issuer-derived `DOMAIN_<x>` authority (resolved through a
-  `DomainRegistry` issuer→domain map; unknown issuer → `default`), and **strips any
-  `permissions` entry carrying a reserved `ROLE_`/`DOMAIN_` prefix** — those
-  authorities come ONLY from controlled logic (roles claim / validated issuer), so a
-  brand-X token cannot inject `permissions:["DOMAIN_brandy"]` (forged tenant) or
-  `permissions:["ROLE_SUPERADMIN"]` (forged super-role) to escalate cross-domain.
+- The JWT→authority mapping uses a shared `CasdoorAuthorities` converter (logic
+  shared with the gateway via `snapdragon-commons`) so the BFF and gateway emit
+  **byte-identical** authorities. It stamps exactly one issuer-derived `DOMAIN_<x>`
+  authority (resolved through a `DomainRegistry` issuer→domain map; unknown issuer →
+  `default`), and **strips any `permissions` entry carrying a reserved `ROLE_`/
+  `DOMAIN_` prefix** — those authorities come ONLY from controlled logic (roles claim
+  / validated issuer), so a brand-X token cannot inject `permissions:["DOMAIN_brandy"]`
+  (forged tenant) or `permissions:["ROLE_SUPERADMIN"]` (forged super-role) to escalate
+  cross-domain.
 - A single-issuer cluster (today's default) resolves `DOMAIN_default` for every
   token and nothing else changes (back-compat). When `app.tenancy.issuers`
   (`${APP_TENANCY_ISSUERS:}`) carries `issuerUri=domain` pairs, the
@@ -513,6 +573,8 @@ Native: `native` profile + native-maven-plugin, surefire `argLine
 -Dnet.bytebuddy.experimental=true`, `NativeHintsConfig` with reflection hints for the
 JSON-bound DTOs + swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps
 Postgres/H2 timestamp types → `Instant` deterministically (JVM + native).
+Data-access standard: Spring Data R2DBC reactive repositories (no raw SQL strings /
+inline `@Query`).
 
 ## Build / test
 
@@ -523,12 +585,15 @@ Postgres/H2 timestamp types → `Instant` deterministically (JVM + native).
   owner+id-scoped; repo slices assert owner isolation at the SQL layer); the
   platform-role / external-client-role gates; the username/displayName confusable +
   reserved-name + screen-reader-name guards; the self-silence distinctness
-  (no role/suspension/revocation) + round-trip; the media-proxy sniff/poison/survival
-  flow; the home-guide dismiss round-trip; the federation / Casdoor / Matrix /
-  Mastodon clients + the JWT-forwarding filter against a mocked `ExchangeFunction`;
-  the **domain-scoping** layer (the `CasdoorAuthorities` reserved-prefix injection
-  guard, `PrincipalDomain` scope resolution, `DomainRegistry` issuer→domain mapping,
-  and a per-table repository domain-isolation slice for every owner-keyed table); the
+  (no role/suspension/revocation) + round-trip + the atomic/idempotent activate
+  upsert; the media-proxy sniff/poison/survival flow; the home-guide dismiss
+  round-trip; the federation / Casdoor / Matrix / Mastodon clients + the
+  JWT-forwarding filter against a mocked `ExchangeFunction`; the **domain-scoping**
+  layer (the `CasdoorAuthorities` reserved-prefix injection guard, `PrincipalDomain`
+  scope resolution, `DomainRegistry` issuer→domain mapping, the multi-issuer
+  unknown-iss 401 fail-closed security-slice, and a per-table repository
+  domain-isolation slice for every owner-keyed table); the wave-2 controller/filter
+  HTTP authz (cross-domain DENY + owner==subject + role matrix); the
   **account-status** polling endpoint; the **notifications** floor (inbox + per-category
   prefs + the SERVICE-only idempotent deliver + the `account-restriction` forced-on
   coercion + per-table domain isolation); and a full-context load test.
@@ -556,6 +621,11 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 
 ## Honest deferrals
 
+- **SSO code→token exchange + `bff_` session custody is landing, not yet on `main`.**
+  The JWT-only `/bff/user/**` resource-server surfaces are shipped; the server-side
+  authorization-code exchange, the per-session JWT custody/refresh, the `bff_`
+  opaque-session, and the admin-bff `/bff/internal` account/session data calls are the
+  in-flight relocation slice. Until merged, registration/login stay owned by admin-bff.
 - **External Matrix / Mastodon block push is STUBBED.** The clients implement the
   documented shapes (Matrix `PUT .../account_data/m.ignored_user_list`; Mastodon
   `GET /api/v1/accounts/lookup` then `POST /api/v1/accounts/{id}/block`) and the
@@ -606,11 +676,50 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 - **Paired `snapdragon-user-ui`** is built later, NOT here; this BFF's
   `/v3/api-docs` spec is the contract its ng-openapi-gen typed client will consume.
 
+## Current State
+
+State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or landing) ·
+🔭 planned (design-complete, no code here).
+
+- ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.2 / Spring Cloud
+  2025.1, Java 21, WebFlux + R2DBC + Liquibase (001–012), Spring Native hints,
+  springdoc OpenAPI.
+- ✅ **Casdoor JWT resource server + owner-enforcement** across every `/bff/user/**`
+  surface; the canonical `CasdoorAuthorities` converter; `ROLE_SERVICE`-exclusive
+  `/bff/user/internal/**`.
+- ✅ **Issuer-keyed multi-tenancy / domain-scoping** (per-query `domain` predicate,
+  fail-closed unknown-issuer 401, SUPERADMIN cross-domain unscoped).
+- ✅ **Shipped feature surfaces:** profile (+confusable/reserved/screen-reader guards),
+  home-guide, durable preferences, cards proxy, self-block + instance-block
+  recommendation, self-silence (atomic activate), connected-clients audit, AI-cloak
+  media proxy (dark), account-status polling, in-app notifications floor (dark).
+- ✅ **Org artifact adoption:** `snapdragon-parent:2.0.0` + `snapdragon-commons:2.0.0`
+  (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
+- ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
+  outbound calls), config-gated, plaintext in local/dev/CI.
+- 🚧 **SSO relocation** (the headline this cycle): server-side OIDC code→token
+  exchange, per-session JWT custody/refresh, the browser-side opaque `bff_` session,
+  and the admin-bff `/bff/internal` account/session data calls — moving the
+  user-facing login/session/account slice from admin-bff into this BFF.
+- 🚧 **`snapdragon-auth-core:2.0.0` adoption** — the shared account/session/MFA/
+  Casdoor-admin core (depends on commons; consumed by user-bff + admin-bff only),
+  landing with the relocation.
+- 🚧 **Edge authz alignment:** the gateway is a pure Casdoor-JWT RS that swaps
+  `bff_` → the internal custody JWT (pre-security filter) and gates routes from the
+  `gateway_route_access` Postgres table via `GatewayRouteAccessFilter`; SCG-5 moved
+  route config to `spring.cloud.gateway.server.webflux.routes` (gateway/generator
+  templates corrected). This BFF participates as the JWT custodian behind that edge.
+
 ## Roadmap
 
-State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR, not merged) ·
-🔭 planned (design-complete, no code). Everything in the sections above is ✅ shipped on
-`main` unless explicitly marked otherwise; the items below are NOT yet shipped here.
+Everything in the sections above is ✅ shipped on `main` unless explicitly marked
+otherwise; the items below are NOT yet shipped here.
+
+### SSO end-to-end + e2e 🚧 in-flight
+The relocation slice above is the active work: complete the code→token exchange +
+`bff_` session custody + admin-bff `/bff/internal` legs and prove SSO login
+end-to-end (including a browser e2e through `login-ui` → gateway → this BFF), with
+Cloudflare fronting prod.
 
 <a id="notifications-roadmap"></a>
 ### Notifications — external channels 🚧 in-flight
@@ -624,15 +733,24 @@ User-facing notification silencing/preferences that land in THIS BFF will be doc
 as shipped only once merged to `main`.
 
 ### Casdoor MFA / step-up 🔭 planned
-Platform MFA (WebAuthn + TOTP + recovery) is design-complete (admin-bff Liquibase
-150-band, a 9-PR plan): per-role defaults (superadmin/admin required, mod relaxable,
-user optional) enforced via `amr`/`acr` → `MFA_SATISFIED` + `gateway_route_access
-.mfa_required` (fail-closed) + generalized step-up. This BFF participates as a JWT
-resource server; if any step-up surface ever lands here it will be marked 🚧/✅ at that
-time. None is present today.
+Platform MFA (WebAuthn + TOTP + recovery) is design-complete (a 9-PR plan): per-role
+defaults (superadmin/admin required, mod relaxable, user optional) enforced via
+`amr`/`acr` → `MFA_SATISFIED` + `gateway_route_access.mfa_required` (fail-closed) +
+generalized step-up. With the auth relocation, the MFA challenge/step-up stamping into
+the opaque `bff_` session lands in THIS BFF (the shared infra in `snapdragon-auth-core`),
+while the gateway keeps enforcing `amr`→`MFA_SATISFIED` for the JWT world. None is
+present today; surfaces will be marked 🚧/✅ as they land.
 
 ### Generator supply-chain hardening 🚧 in-flight + CI pen-test completion 🔭 planned
 Stage3 GPG/sha + headscale/tailscale checksum verification + de-defaulted baked creds
 are in-flight in `snapdragon-generator`; for this repo, **k6 load testing** is the
 remaining pen-test-standard tool not yet wired into `.gitlab-ci.yml` (nuclei already
 runs via the shared `.pentest-*` jobs).
+
+### Platform roadmap (other repos, context) 🔭 planned
+Encrypted versioned backups (Velero + kopia/restic), egress VPN (.conf drop-in),
+per-node attached storage, desktop app governance (SSO sudo + curated Plasma Discover),
+workload console (pod mgmt + live logs), device-license registry, per-brand
+superadmin multi-tenancy provisioning (ArgoCD ApplicationSet), games app-store, and
+A/V via coturn/TURN (currently LAN-only). This BFF participates only where a
+`/bff/user/**` surface is implied; the heavy lifting lives in the named repos.
