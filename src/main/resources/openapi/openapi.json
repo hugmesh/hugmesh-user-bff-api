@@ -1,5 +1,5 @@
 {
-  "openapi" : "3.1.0",
+  "openapi" : "3.0.1",
   "info" : {
     "title" : "snapdragon-user-bff-api",
     "description" : "User BFF API (/bff/user/**) — owner-scoped profile, home-guide preferences, federation-bundle cards, self-blocking, and instance-block recommendation. Every endpoint is keyed to the caller's Casdoor JWT subject.",
@@ -222,8 +222,8 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -233,7 +233,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -249,8 +251,8 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -260,7 +262,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -286,7 +290,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -304,8 +310,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -334,25 +340,25 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
           }
         }, {
           "name" : "entryFile",
           "in" : "query",
           "required" : false,
           "schema" : {
-            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
         }, {
           "name" : "visibility",
           "in" : "query",
           "required" : false,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^(public|internal)$"
+            "pattern" : "^(public|internal)$",
+            "type" : "string"
           }
         }, {
           "name" : "manifest",
@@ -395,8 +401,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -428,7 +434,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -499,7 +507,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -529,7 +539,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -559,7 +571,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -577,8 +591,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -598,6 +612,7 @@
           "content" : {
             "multipart/form-data" : {
               "schema" : {
+                "required" : [ "file", "platform" ],
                 "type" : "object",
                 "properties" : {
                   "file" : {
@@ -616,8 +631,7 @@
                   "description" : {
                     "type" : "string"
                   }
-                },
-                "required" : [ "file", "platform" ]
+                }
               }
             }
           }
@@ -629,7 +643,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -708,7 +724,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -746,7 +764,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -783,11 +803,11 @@
           "in" : "query",
           "required" : false,
           "schema" : {
+            "maximum" : 100,
+            "minimum" : 1,
             "type" : "integer",
             "format" : "int32",
-            "default" : 50,
-            "maximum" : 100,
-            "minimum" : 1
+            "default" : 50
           }
         } ],
         "responses" : {
@@ -846,7 +866,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -864,8 +886,8 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -875,7 +897,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -938,8 +962,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -1021,8 +1045,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -1032,7 +1056,9 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : { }
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -1050,8 +1076,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "type" : "string",
-            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type" : "string"
           }
         } ],
         "responses" : {
@@ -1215,28 +1241,28 @@
             "type" : "string"
           },
           "gender" : {
-            "type" : "string",
             "maxLength" : 64,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "pronouns" : {
-            "type" : "string",
             "maxLength" : 64,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "timezone" : {
-            "type" : "string",
             "maxLength" : 64,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "displayName" : {
-            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "visibility" : {
-            "type" : "string",
-            "pattern" : "^(public|internal)$"
+            "pattern" : "^(public|internal)$",
+            "type" : "string"
           },
           "vanitySubdomainEnabled" : {
             "type" : "boolean"
@@ -1246,28 +1272,28 @@
             "readOnly" : true
           },
           "screenReaderName" : {
-            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
         }
       },
       "PreferenceUpsert" : {
+        "required" : [ "key" ],
         "type" : "object",
         "properties" : {
           "key" : {
-            "type" : "string",
             "maxLength" : 128,
             "minLength" : 0,
-            "pattern" : "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
+            "pattern" : "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$",
+            "type" : "string"
           },
           "value" : {
-            "type" : "string",
             "maxLength" : 1024,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
-        },
-        "required" : [ "key" ]
+        }
       },
       "UserModuleCard" : {
         "type" : "object",
@@ -1308,13 +1334,14 @@
         "type" : "object",
         "properties" : {
           "reason" : {
-            "type" : "string",
             "maxLength" : 2048,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
         }
       },
       "ActivateRequest" : {
+        "required" : [ "expiresAt" ],
         "type" : "object",
         "properties" : {
           "expiresAt" : {
@@ -1322,12 +1349,11 @@
             "format" : "date-time"
           },
           "reason" : {
-            "type" : "string",
             "maxLength" : 2048,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
-        },
-        "required" : [ "expiresAt" ]
+        }
       },
       "SelfSilence" : {
         "type" : "object",
@@ -1357,90 +1383,90 @@
         }
       },
       "RecommendRequest" : {
+        "required" : [ "instance" ],
         "type" : "object",
         "properties" : {
           "instance" : {
-            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "reason" : {
-            "type" : "string",
             "maxLength" : 2048,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
-        },
-        "required" : [ "instance" ]
+        }
       },
       "PasswordChangeRequest" : {
+        "required" : [ "newPassword" ],
         "type" : "object",
         "properties" : {
           "oldPassword" : {
             "type" : "string"
           },
           "newPassword" : {
-            "type" : "string",
             "maxLength" : 256,
-            "minLength" : 1
+            "minLength" : 1,
+            "type" : "string"
           }
-        },
-        "required" : [ "newPassword" ]
+        }
       },
       "EmailChangeRequest" : {
+        "required" : [ "email" ],
         "type" : "object",
         "properties" : {
           "email" : {
-            "type" : "string",
-            "format" : "email",
             "maxLength" : 320,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string",
+            "format" : "email"
           }
-        },
-        "required" : [ "email" ]
+        }
       },
       "DeliverRequest" : {
+        "required" : [ "category", "domain", "sourceId", "sourceTable", "title", "userSubject" ],
         "type" : "object",
         "properties" : {
           "domain" : {
-            "type" : "string",
             "maxLength" : 64,
             "minLength" : 0,
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+            "type" : "string"
           },
           "userSubject" : {
-            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "category" : {
-            "type" : "string",
             "maxLength" : 64,
             "minLength" : 0,
-            "pattern" : "^[a-z][a-z-]{0,63}$"
+            "pattern" : "^[a-z][a-z-]{0,63}$",
+            "type" : "string"
           },
           "title" : {
-            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "body" : {
-            "type" : "string",
             "maxLength" : 100000,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "sourceTable" : {
-            "type" : "string",
             "maxLength" : 128,
             "minLength" : 0,
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type" : "string"
           },
           "sourceId" : {
-            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           }
-        },
-        "required" : [ "category", "domain", "sourceId", "sourceTable", "title", "userSubject" ]
+        }
       },
       "DeliveryResult" : {
         "type" : "object",
@@ -1457,19 +1483,19 @@
         }
       },
       "BlockRequest" : {
+        "required" : [ "target" ],
         "type" : "object",
         "properties" : {
           "target" : {
-            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0
+            "minLength" : 0,
+            "type" : "string"
           },
           "platform" : {
-            "type" : "string",
-            "pattern" : "^(matrix|mastodon|internal)$"
+            "pattern" : "^(matrix|mastodon|internal)$",
+            "type" : "string"
           }
-        },
-        "required" : [ "target" ]
+        }
       },
       "UserNotification" : {
         "type" : "object",
