@@ -2,7 +2,8 @@ package systems.snapdragon.userbff.hsproxy;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.context.ApplicationContext;
+import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
@@ -21,6 +22,7 @@ import java.util.List;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 /**
  * Security + SHIPS-DARK surface tests for the D6 proxy controllers via
@@ -41,7 +43,17 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 @Import({SecurityConfig.class, HsProxyControllerSecurityTest.StubClients.class})
 class HsProxyControllerSecurityTest {
 
-    @Autowired WebTestClient client;
+    @Autowired ApplicationContext context;
+    WebTestClient client;
+
+    // Spring Security 7: the mockJwt()/mock* reactive mutators only inject the
+    // SecurityContext when the springSecurity() configurer's MutatorFilter is in the
+    // chain. A @WebFluxTest-autowired client lacks it (mutator dropped -> 401), so build
+    // the client from the ApplicationContext with .apply(springSecurity()).
+    @org.junit.jupiter.api.BeforeEach
+    void setUpSecuredWebTestClient() {
+        client = WebTestClient.bindToApplicationContext(context).apply(springSecurity()).build();
+    }
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean HsTokenCustody custody;

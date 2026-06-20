@@ -2,8 +2,11 @@ package systems.snapdragon.userbff.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * Minimal OpenAPI document metadata for the user BFF spec served by
@@ -16,6 +19,13 @@ import org.springframework.context.annotation.Configuration;
  * (rather than the {@code @OpenAPIDefinition} annotation) so the metadata is plain
  * bean wiring — no annotation reflection scan, which keeps the GraalVM native
  * build hint surface minimal.
+ *
+ * <p>A single relative {@code ""} server is pinned so the spec is DETERMINISTIC: under
+ * Spring Boot 4 / springdoc-3.1, the auto-derived "Generated server url" otherwise
+ * resolves to the live (random) port when the spec is dumped from a RANDOM_PORT test,
+ * which would make the committed openapi.json non-byte-stable across runs. The relative
+ * server keeps every path resolving against whatever host the UI/docs pipeline reads the
+ * committed spec from.
  */
 @Configuration(proxyBeanMethods = false)
 public class OpenApiConfig {
@@ -23,6 +33,7 @@ public class OpenApiConfig {
     @Bean
     OpenAPI userBffOpenApi() {
         return new OpenAPI()
+                .servers(List.of(new Server().url("")))
                 .info(new Info()
                         .title("snapdragon-user-bff-api")
                         .version("0.1.0")

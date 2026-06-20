@@ -5,15 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
+import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -47,15 +46,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * CI verify lane to fail a build whose committed spec is stale. Default (no flag) is
  * write-and-pass so a developer just re-runs the test to refresh the spec.
  *
- * <p>Mirrors {@link UserBffApplicationContextTest}: same {@code test} profile,
- * {@link TestDatabaseConfig} H2-PG schema, and a mocked {@link ReactiveJwtDecoder}
- * (no live Casdoor issuer is contacted).
+ * <p>Mirrors {@link UserBffApplicationContextTest}: same {@code test} profile, the
+ * {@link PostgresTestSupport} Testcontainers Postgres schema, and a mocked
+ * {@link ReactiveJwtDecoder} (no live Casdoor issuer is contacted).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureWebTestClient
 @ActiveProfiles("test")
-@Import(TestDatabaseConfig.class)
-class OpenApiSpecDumpTest {
+class OpenApiSpecDumpTest extends PostgresTestSupport {
 
     /** Committed spec path (repo-relative; the test runs with cwd = module root). */
     private static final Path SPEC_PATH = Path.of("src", "main", "resources", "openapi", "openapi.json");

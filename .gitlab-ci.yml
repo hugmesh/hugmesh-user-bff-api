@@ -18,23 +18,38 @@ stages: [test, security, dast, build, pentest]
 test:
   stage: test
   tags: [snapdragon-x86, privileged]
+  # Spring Boot 4 upgrade: the full-context tests now run against a REAL Postgres via
+  # Testcontainers (systems.snapdragon.commons.testsupport.PostgresTestSupport), so the
+  # job needs a Docker daemon. Run Maven directly in a maven image with a docker:dind
+  # SERVICE supplying the daemon (mirrors snapdragon-federation-api #43) instead of the
+  # old `docker run` wrapper. snapdragon-commons / snapdragon-parent are PRIVATE (GitLab
+  # Maven registry, not Central); the committed settings.xml resolves them with the
+  # GitLab-injected CI_JOB_TOKEN (no secret committed). CI_API_V4_URL / GITLAB_GROUP_ID
+  # are GitLab-provided / group variables read by settings.xml.
+  image: maven:3.9-eclipse-temurin-21
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    # docker:dind over TLS; Testcontainers talks to the dind daemon at this DOCKER_HOST.
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_TLS_VERIFY: "1"
+    # Containers started by Testcontainers are reachable at the dind alias host.
+    TESTCONTAINERS_HOST_OVERRIDE: "docker"
+    # Ryuk (the resource reaper) needs extra privileges; disable it on the dind runner.
+    TESTCONTAINERS_RYUK_DISABLED: "true"
+    # This box's docker-java needs the pinned API version as a SYSPROP (env
+    # DOCKER_API_VERSION does NOT work) — push it onto every JVM Maven forks via
+    # MAVEN_OPTS so surefire's forked test JVMs inherit it.
+    MAVEN_OPTS: "-Dapi.version=1.43"
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_TAG'
   script:
-    # snapdragon-commons / snapdragon-parent are PRIVATE (GitLab Maven registry, not
-    # Central). The throwaway build container has an empty ~/.m2, so Maven must use
-    # the committed settings.xml (gitlab-maven repo, ${env.CI_JOB_TOKEN} auth). The
-    # CI_JOB_TOKEN + the registry-coordinate env vars are passed INTO the container;
-    # no secret is committed (the token is a short-lived GitLab-injected job cred).
-    - |
-      docker run --rm \
-        -v "${CI_PROJECT_DIR}:/workspace:ro" -w /workspace \
-        -e CI_JOB_TOKEN="$CI_JOB_TOKEN" \
-        -e CI_API_V4_URL="$CI_API_V4_URL" \
-        -e GITLAB_GROUP_ID="$GITLAB_GROUP_ID" \
-        eclipse-temurin:21-jdk-noble ./mvnw -B -s settings.xml verify
+    - ./mvnw -B -s settings.xml verify
   artifacts:
     when: always
     reports:

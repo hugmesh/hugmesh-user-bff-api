@@ -4,7 +4,7 @@ Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with t
 (later) `snapdragon-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
 resource-server + springdoc + Spring Native, scaffolded from the
 `snapdragon-admin-bff-api` template (same stack, same conventions). Java 21,
-Spring Boot 3.5.5.
+Spring Boot 4.0.2.
 
 ## Where it sits
 
@@ -379,8 +379,8 @@ UI are public (so `gen:fetch` can curl `/v3/api-docs` tokenless); in prod they n
 
 This service adopts the org's shared Maven artifacts. Two de-duplication moves:
 
-1. **Parent POM →** `systems.snapdragon:snapdragon-parent:1.0.0` (itself a child of
-   `spring-boot-starter-parent:3.5.5`, so the whole Spring Boot dependency/plugin
+1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.0.0` (itself a child of
+   `spring-boot-starter-parent:4.0.2`, so the whole Spring Boot dependency/plugin
    management is inherited transitively). The parent consolidates the reactive-BFF
    `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
    R2DBC + Liquibase + JDBC, springdoc, the full test stack) and the

@@ -2,7 +2,8 @@ package systems.snapdragon.userbff.status;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.context.ApplicationContext;
+import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
@@ -21,6 +22,7 @@ import org.springframework.test.context.TestPropertySource;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 /**
  * FEAT-04 — account status polling endpoint contract tests.
@@ -41,7 +43,17 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 @TestPropertySource(properties = "spring.security.oauth2.resourceserver.jwt.issuer-uri=")
 class AccountStatusControllerTest {
 
-    @Autowired WebTestClient client;
+    @Autowired ApplicationContext context;
+    WebTestClient client;
+
+    // Spring Security 7: the mockJwt()/mock* reactive mutators only inject the
+    // SecurityContext when the springSecurity() configurer's MutatorFilter is in the
+    // chain. A @WebFluxTest-autowired client lacks it (mutator dropped -> 401), so build
+    // the client from the ApplicationContext with .apply(springSecurity()).
+    @org.junit.jupiter.api.BeforeEach
+    void setUpSecuredWebTestClient() {
+        client = WebTestClient.bindToApplicationContext(context).apply(springSecurity()).build();
+    }
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean SelfSilenceRepository silenceRepo;

@@ -5,19 +5,19 @@
 # posture (OpenAPI spec gated to ROLE_ADMIN, not permitAll). This profile name is
 # neither `dev` nor `test`, so the `filterChain` (prod) bean is selected.
 #
-# It otherwise mirrors application-test.yml's wiring so the full @SpringBootTest boots
-# in CI with NO live Postgres / Casdoor: TestDatabaseConfig supplies an H2-PG-compat
-# ConnectionFactory + DatabaseClient + the real Liquibase changelog, and the real
-# multi-issuer resource server validates tokens against the in-process TestIssuer JWKS
-# servers (issuer-uri + app.tenancy.issuers are injected via @DynamicPropertySource).
+# The DB is a REAL Postgres container wired by the shared
+# systems.snapdragon.commons.testsupport.PostgresTestSupport base (the test extends
+# it): spring.r2dbc.url / spring.liquibase.url + credentials come from the base via
+# @DynamicPropertySource, so the production R2dbcAutoConfiguration +
+# LiquibaseAutoConfiguration run and Liquibase migrates the DB. The real multi-issuer
+# resource server validates tokens against the in-process TestIssuer JWKS servers
+# (issuer-uri + app.tenancy.issuers are injected via @DynamicPropertySource on the
+# test). That is why the old autoconfigure-exclude block + liquibase.enabled:false are
+# GONE.
 spring:
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.r2dbc.R2dbcAutoConfiguration
-      - org.springframework.boot.autoconfigure.r2dbc.R2dbcTransactionManagerAutoConfiguration
-      - org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration
   liquibase:
-    enabled: false
+    enabled: true
+    change-log: "classpath:db/changelog/db.changelog-master.xml"
 
 casdoor:
   account:

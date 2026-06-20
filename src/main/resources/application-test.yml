@@ -1,23 +1,23 @@
-# Test profile overrides. Slice tests provide their own H2-PG-compat DataSource +
-# R2DBC ConnectionFactory + Liquibase via TestDatabaseConfig (mirroring admin-bff /
-# federation-api), so the production Postgres R2DBC + Liquibase auto-config is
-# disabled here. The context-load test runs a JWT-decoder mock so no live Casdoor
-# is needed. External Matrix/Mastodon + Casdoor account writes stay STUBBED.
+# Full-context test profile. The DB (R2DBC for the app + JDBC for Liquibase) is a
+# REAL Postgres container wired by the shared
+# systems.snapdragon.commons.testsupport.PostgresTestSupport base (per-class db over a
+# session-shared postgres:16 container). NO H2 here for the full @SpringBootTest tests
+# — the @DataR2dbcTest slices still use H2 via TestDatabaseConfig and do NOT load this
+# profile.
 #
-# R2dbcDataAutoConfiguration is intentionally NOT excluded: it builds the
-# r2dbcEntityTemplate / mapping-context the Spring Data R2DBC repositories need, over
-# the H2-PG-compat ConnectionFactory TestDatabaseConfig supplies (R2dbcAutoConfiguration
-# — the production Postgres ConnectionFactory from spring.r2dbc.url — STAYS excluded).
-# The custom R2dbcCustomConversions bean (R2dbcConvertersConfig) still overrides that
-# auto-config's conversions.
+# spring.r2dbc.url / spring.liquibase.url + credentials are supplied by the base via
+# @DynamicPropertySource (pointed at the SAME container), so the production
+# R2dbcAutoConfiguration + LiquibaseAutoConfiguration run normally and Liquibase
+# migrates the DB the app then reads — that is why the old autoconfigure-exclude block
+# and liquibase.enabled:false are GONE.
+#
+# The context-load test mocks the reactive JWT decoder (@MockitoBean) so no live
+# Casdoor issuer is contacted. External Matrix/Mastodon + Casdoor account writes stay
+# STUBBED.
 spring:
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.r2dbc.R2dbcAutoConfiguration
-      - org.springframework.boot.autoconfigure.r2dbc.R2dbcTransactionManagerAutoConfiguration
-      - org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration
   liquibase:
-    enabled: false
+    enabled: true
+    change-log: "classpath:db/changelog/db.changelog-master.xml"
 
 casdoor:
   account:

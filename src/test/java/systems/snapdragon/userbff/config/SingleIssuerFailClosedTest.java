@@ -10,7 +10,7 @@ import com.nimbusds.jwt.SignedJWT;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
+import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -19,7 +19,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.support.TestPropertySourceUtils;
 import org.springframework.test.web.reactive.server.WebTestClient;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
 import systems.snapdragon.userbff.testsupport.TestIssuer;
 
 import java.time.Instant;
@@ -84,9 +84,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 @AutoConfigureWebTestClient
 @ActiveProfiles("test")
-@Import({TestDatabaseConfig.class, SingleIssuerFailClosedTest.ProbeRoutes.class})
+@Import(SingleIssuerFailClosedTest.ProbeRoutes.class)
 @ContextConfiguration(initializers = SingleIssuerFailClosedTest.TrustedIssuerInitializer.class)
-class SingleIssuerFailClosedTest {
+class SingleIssuerFailClosedTest extends PostgresTestSupport {
 
     /** The TRUSTED issuer — its issuer-uri is injected as the lone configured
      *  {@code spring.security.oauth2.resourceserver.jwt.issuer-uri} so Boot's

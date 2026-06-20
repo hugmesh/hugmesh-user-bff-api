@@ -3,7 +3,8 @@ package systems.snapdragon.userbff.prefstore;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.context.ApplicationContext;
+import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.method.configuration.EnableReactiveMethodSecurity;
@@ -26,6 +27,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 /**
  * Slice test for {@link UserPreferencesController} via {@link WebTestClient}, importing
@@ -46,7 +48,17 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 @EnableReactiveMethodSecurity
 class UserPreferencesControllerTest {
 
-    @Autowired WebTestClient client;
+    @Autowired ApplicationContext context;
+    WebTestClient client;
+
+    // Spring Security 7: the mockJwt()/mock* reactive mutators only inject the
+    // SecurityContext when the springSecurity() configurer's MutatorFilter is in the
+    // chain. A @WebFluxTest-autowired client lacks it (mutator dropped -> 401), so build
+    // the client from the ApplicationContext with .apply(springSecurity()).
+    @org.junit.jupiter.api.BeforeEach
+    void setUpSecuredWebTestClient() {
+        client = WebTestClient.bindToApplicationContext(context).apply(springSecurity()).build();
+    }
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean UserPreferencesService service;

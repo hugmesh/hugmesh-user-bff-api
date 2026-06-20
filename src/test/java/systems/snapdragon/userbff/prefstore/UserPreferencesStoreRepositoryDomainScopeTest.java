@@ -3,7 +3,7 @@ package systems.snapdragon.userbff.prefstore;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest;
+import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
 import reactor.core.publisher.Flux;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;

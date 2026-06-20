@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
+import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -18,7 +18,7 @@ import systems.snapdragon.userbff.notification.UserNotification;
 import systems.snapdragon.userbff.notification.UserNotificationRepository;
 import systems.snapdragon.userbff.profile.UserProfile;
 import systems.snapdragon.userbff.profile.UserProfileRepository;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
 import systems.snapdragon.userbff.testsupport.TestIssuer;
 
 import java.util.List;
@@ -30,15 +30,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * RAW-API-DENY negative security matrix for the user BFF — OWNER-SCOPED IDOR / BOLA,
  * cross-tenant isolation, privilege containment, and authentication fail-closed,
  * driven through the FULL production stack (real {@code SecurityConfig} resource
- * server + the real controllers/services + a real H2 schema) over HTTP.
+ * server + the real controllers/services + a real Postgres schema) over HTTP.
  *
  * <p><b>Pattern (the federation-api gold exemplar).</b> Two in-process
  * {@link TestIssuer} JWKS servers ({@code brandx}, {@code brandy}) mint real RS256
  * tokens with arbitrary {@code sub}/roles/issuer — wired into
  * {@code app.tenancy.issuers} via {@link DynamicPropertySource} so multi-issuer mode
  * is genuinely active (each brand validates its own tokens; an unlisted issuer 401s).
- * The DB is the real Liquibase-applied schema over H2 ({@link TestDatabaseConfig}). A
- * third issuer ({@code rogue}) is deliberately NOT listed.
+ * The DB is the real Liquibase-applied schema over a Testcontainers Postgres (the test
+ * extends {@link PostgresTestSupport}). A third issuer ({@code rogue}) is deliberately
+ * NOT listed.
  *
  * <p><b>MUTATION-RESISTANT verification.</b> Every negative MUTATION test seeds the
  * VICTIM's row directly through the repository, drives the attacker's denied request
@@ -58,10 +59,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * tampered-signature 401.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureWebTestClient
 @ActiveProfiles("prod-deny-slice")
-@Import(TestDatabaseConfig.class)
 @DisplayName("Raw-API-deny: owner-scoped IDOR / cross-tenant / privilege / fail-closed")
-class RawApiDenyOwnerScopedIdorTest {
+class RawApiDenyOwnerScopedIdorTest extends PostgresTestSupport {
 
     // ── in-process issuers (started before the context so the dynamic props resolve) ──
     private static final TestIssuer BRANDX = new TestIssuer();

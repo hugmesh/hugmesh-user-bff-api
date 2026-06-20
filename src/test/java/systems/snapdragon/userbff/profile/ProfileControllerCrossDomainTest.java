@@ -3,7 +3,8 @@ package systems.snapdragon.userbff.profile;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.context.ApplicationContext;
+import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -29,6 +30,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 /**
  * Cross-domain DENY + owner==subject HTTP-boundary test for {@link ProfileController},
@@ -76,7 +78,17 @@ class ProfileControllerCrossDomainTest {
     private static final String BRANDX = "https://id.brandx.example";
     private static final String BRANDY = "https://id.brandy.example";
 
-    @Autowired WebTestClient client;
+    @Autowired ApplicationContext context;
+    WebTestClient client;
+
+    // Spring Security 7: the mockJwt()/mock* reactive mutators only inject the
+    // SecurityContext when the springSecurity() configurer's MutatorFilter is in the
+    // chain. A @WebFluxTest-autowired client lacks it (mutator dropped -> 401), so build
+    // the client from the ApplicationContext with .apply(springSecurity()).
+    @org.junit.jupiter.api.BeforeEach
+    void setUpSecuredWebTestClient() {
+        client = WebTestClient.bindToApplicationContext(context).apply(springSecurity()).build();
+    }
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean ProfileService profiles;

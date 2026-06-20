@@ -1,10 +1,10 @@
 package systems.snapdragon.userbff.web;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
@@ -13,10 +13,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
 import systems.snapdragon.userbff.block.BlockService;
 import systems.snapdragon.userbff.federation.FederationApiClient;
 import systems.snapdragon.userbff.profile.ProfileService;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
 
 import java.util.Map;
 
@@ -27,6 +27,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 /**
  * END-TO-END validation coverage over the HTTP layer (the only layer where jakarta
@@ -42,12 +43,15 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * so the assertion is the VALIDATION outcome, not an auth 401/403.
  */
 @SpringBootTest
-@AutoConfigureWebTestClient
 @ActiveProfiles("test")
-@Import(TestDatabaseConfig.class)
-class ValidationEndpointTest {
+class ValidationEndpointTest extends PostgresTestSupport {
 
-    @Autowired WebTestClient web;
+    // Spring Security 7: the mockJwt() reactive mutator only injects the SecurityContext
+    // when the springSecurity() configurer's MutatorFilter is in the chain. An
+    // @AutoConfigureWebTestClient-autowired client lacks it (mutator dropped -> 401), so
+    // build the client from the ApplicationContext with .apply(springSecurity()).
+    @Autowired ApplicationContext context;
+    WebTestClient web;
 
     /** No live Casdoor issuer — mock the decoder so oauth2 wiring is satisfied. */
     @MockitoBean ReactiveJwtDecoder reactiveJwtDecoder;
@@ -55,6 +59,11 @@ class ValidationEndpointTest {
     @MockitoBean BlockService blockService;
     @MockitoBean ProfileService profileService;
     @MockitoBean FederationApiClient federationApiClient;
+
+    @BeforeEach
+    void setUpClient() {
+        web = WebTestClient.bindToApplicationContext(context).apply(springSecurity()).build();
+    }
 
     private WebTestClient user() {
         return web.mutateWith(mockJwt().authorities(new SimpleGrantedAuthority("ROLE_USER")));
@@ -138,9 +147,15 @@ class ValidationEndpointTest {
 
     @Test
     void upsertProfile_badVisibility_is400() {
+        // Send a COMPLETE profile body (incl. the primitive vanitySubdomainEnabled) so it
+        // binds into the UserProfile record and the @Pattern(visibility) constraint is the
+        // thing that fails. Under Spring Boot 4 / Jackson 3 record-creator binding, omitting
+        // a primitive component fails to deserialize (a 400 "Failed to read HTTP message"
+        // ServerWebInputException) BEFORE @Valid runs — which would 400 without a per-field
+        // error. A well-formed body keeps the assertion on the visibility field error intact.
         user().put().uri("/bff/user/profile")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"visibility\":\"secret\"}")
+                .bodyValue("{\"visibility\":\"secret\",\"vanitySubdomainEnabled\":false}")
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.visibility").exists();

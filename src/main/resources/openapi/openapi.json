@@ -1,13 +1,12 @@
 {
-  "openapi" : "3.0.1",
+  "openapi" : "3.1.0",
   "info" : {
     "title" : "snapdragon-user-bff-api",
     "description" : "User BFF API (/bff/user/**) — owner-scoped profile, home-guide preferences, federation-bundle cards, self-blocking, and instance-block recommendation. Every endpoint is keyed to the caller's Casdoor JWT subject.",
     "version" : "0.1.0"
   },
   "servers" : [ {
-    "url" : "",
-    "description" : "Generated server url"
+    "url" : ""
   } ],
   "tags" : [ {
     "name" : "Mastodon proxy (D6)",
@@ -223,8 +222,8 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
           }
         } ],
         "responses" : {
@@ -234,9 +233,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -252,8 +249,8 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
           }
         } ],
         "responses" : {
@@ -263,9 +260,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -291,9 +286,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -311,8 +304,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
           }
         } ],
         "responses" : {
@@ -341,25 +334,25 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
           }
         }, {
           "name" : "entryFile",
           "in" : "query",
           "required" : false,
           "schema" : {
+            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
         }, {
           "name" : "visibility",
           "in" : "query",
           "required" : false,
           "schema" : {
-            "pattern" : "^(public|internal)$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^(public|internal)$"
           }
         }, {
           "name" : "manifest",
@@ -402,8 +395,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
           }
         } ],
         "responses" : {
@@ -435,9 +428,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -508,9 +499,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -540,9 +529,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -572,9 +559,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -592,8 +577,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
           }
         } ],
         "responses" : {
@@ -613,7 +598,6 @@
           "content" : {
             "multipart/form-data" : {
               "schema" : {
-                "required" : [ "file", "platform" ],
                 "type" : "object",
                 "properties" : {
                   "file" : {
@@ -632,7 +616,8 @@
                   "description" : {
                     "type" : "string"
                   }
-                }
+                },
+                "required" : [ "file", "platform" ]
               }
             }
           }
@@ -644,9 +629,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -725,9 +708,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -765,9 +746,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -804,11 +783,11 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "maximum" : 100,
-            "minimum" : 1,
             "type" : "integer",
             "format" : "int32",
-            "default" : 50
+            "default" : 50,
+            "maximum" : 100,
+            "minimum" : 1
           }
         } ],
         "responses" : {
@@ -867,9 +846,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -887,8 +864,8 @@
           "in" : "query",
           "required" : false,
           "schema" : {
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
           }
         } ],
         "responses" : {
@@ -898,9 +875,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -963,8 +938,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$"
           }
         } ],
         "responses" : {
@@ -1046,8 +1021,8 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
           }
         } ],
         "responses" : {
@@ -1057,9 +1032,7 @@
               "*/*" : {
                 "schema" : {
                   "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "additionalProperties" : { }
                 }
               }
             }
@@ -1077,10 +1050,154 @@
           "in" : "path",
           "required" : true,
           "schema" : {
-            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
           }
         } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/user/matrix/**" : {
+      "get" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_2",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_3",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "options" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_6",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "head" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_5",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "patch" : {
+        "tags" : [ "Matrix proxy (D6)" ],
+        "summary" : "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_4",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/user/mastodon/**" : {
+      "get" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_7",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_9",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_8",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_10",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "options" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_13",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "head" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_12",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      },
+      "patch" : {
+        "tags" : [ "Mastodon proxy (D6)" ],
+        "summary" : "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.",
+        "operationId" : "proxy_11",
         "responses" : {
           "200" : {
             "description" : "OK"
@@ -1098,28 +1215,28 @@
             "type" : "string"
           },
           "gender" : {
+            "type" : "string",
             "maxLength" : 64,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "pronouns" : {
+            "type" : "string",
             "maxLength" : 64,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "timezone" : {
+            "type" : "string",
             "maxLength" : 64,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "displayName" : {
+            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "visibility" : {
-            "pattern" : "^(public|internal)$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^(public|internal)$"
           },
           "vanitySubdomainEnabled" : {
             "type" : "boolean"
@@ -1129,28 +1246,28 @@
             "readOnly" : true
           },
           "screenReaderName" : {
+            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
         }
       },
       "PreferenceUpsert" : {
-        "required" : [ "key" ],
         "type" : "object",
         "properties" : {
           "key" : {
+            "type" : "string",
             "maxLength" : 128,
             "minLength" : 0,
-            "pattern" : "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$",
-            "type" : "string"
+            "pattern" : "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
           },
           "value" : {
+            "type" : "string",
             "maxLength" : 1024,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
-        }
+        },
+        "required" : [ "key" ]
       },
       "UserModuleCard" : {
         "type" : "object",
@@ -1191,14 +1308,13 @@
         "type" : "object",
         "properties" : {
           "reason" : {
+            "type" : "string",
             "maxLength" : 2048,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
         }
       },
       "ActivateRequest" : {
-        "required" : [ "expiresAt" ],
         "type" : "object",
         "properties" : {
           "expiresAt" : {
@@ -1206,11 +1322,12 @@
             "format" : "date-time"
           },
           "reason" : {
+            "type" : "string",
             "maxLength" : 2048,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
-        }
+        },
+        "required" : [ "expiresAt" ]
       },
       "SelfSilence" : {
         "type" : "object",
@@ -1240,89 +1357,90 @@
         }
       },
       "RecommendRequest" : {
-        "required" : [ "instance" ],
         "type" : "object",
         "properties" : {
           "instance" : {
+            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "reason" : {
+            "type" : "string",
             "maxLength" : 2048,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
-        }
+        },
+        "required" : [ "instance" ]
       },
       "PasswordChangeRequest" : {
-        "required" : [ "newPassword" ],
         "type" : "object",
         "properties" : {
           "oldPassword" : {
             "type" : "string"
           },
           "newPassword" : {
+            "type" : "string",
             "maxLength" : 256,
-            "minLength" : 1,
-            "type" : "string"
+            "minLength" : 1
           }
-        }
+        },
+        "required" : [ "newPassword" ]
       },
       "EmailChangeRequest" : {
-        "required" : [ "email" ],
         "type" : "object",
         "properties" : {
           "email" : {
+            "type" : "string",
+            "format" : "email",
             "maxLength" : 320,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
-        }
+        },
+        "required" : [ "email" ]
       },
       "DeliverRequest" : {
-        "required" : [ "category", "domain", "sourceId", "sourceTable", "title", "userSubject" ],
         "type" : "object",
         "properties" : {
           "domain" : {
+            "type" : "string",
             "maxLength" : 64,
             "minLength" : 0,
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
-            "type" : "string"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
           },
           "userSubject" : {
+            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "category" : {
+            "type" : "string",
             "maxLength" : 64,
             "minLength" : 0,
-            "pattern" : "^[a-z][a-z-]{0,63}$",
-            "type" : "string"
+            "pattern" : "^[a-z][a-z-]{0,63}$"
           },
           "title" : {
+            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "body" : {
+            "type" : "string",
             "maxLength" : 100000,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "sourceTable" : {
+            "type" : "string",
             "maxLength" : 128,
             "minLength" : 0,
-            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
-            "type" : "string"
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
           },
           "sourceId" : {
+            "type" : "string",
             "maxLength" : 255,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           }
-        }
+        },
+        "required" : [ "category", "domain", "sourceId", "sourceTable", "title", "userSubject" ]
       },
       "DeliveryResult" : {
         "type" : "object",
@@ -1339,19 +1457,19 @@
         }
       },
       "BlockRequest" : {
-        "required" : [ "target" ],
         "type" : "object",
         "properties" : {
           "target" : {
+            "type" : "string",
             "maxLength" : 512,
-            "minLength" : 0,
-            "type" : "string"
+            "minLength" : 0
           },
           "platform" : {
-            "pattern" : "^(matrix|mastodon|internal)$",
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^(matrix|mastodon|internal)$"
           }
-        }
+        },
+        "required" : [ "target" ]
       },
       "UserNotification" : {
         "type" : "object",

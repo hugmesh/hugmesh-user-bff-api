@@ -157,7 +157,7 @@ public class HsReverseProxy {
         // Inject the homeserver-native bearer (replaces the stripped Casdoor bearer).
         out.set(HttpHeaders.AUTHORIZATION, "Bearer " + nativeToken);
         // Propagate Connection: Upgrade for the WS/streaming sidecar leg.
-        if (in.containsKey(HttpHeaders.UPGRADE)) {
+        if (in.containsHeader(HttpHeaders.UPGRADE)) {
             out.put(HttpHeaders.UPGRADE, in.get(HttpHeaders.UPGRADE));
             out.set(HttpHeaders.CONNECTION, "Upgrade");
         }

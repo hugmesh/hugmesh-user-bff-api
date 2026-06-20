@@ -1,7 +1,7 @@
 package systems.snapdragon.userbff.config;
 
 import io.r2dbc.spi.ConnectionFactory;
-import org.springframework.boot.autoconfigure.data.r2dbc.R2dbcDataAutoConfiguration;
+import org.springframework.boot.data.r2dbc.autoconfigure.DataR2dbcAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
@@ -31,7 +31,7 @@ import java.util.List;
 public class R2dbcConvertersConfig {
 
     /** Replaces the auto-configured {@link R2dbcCustomConversions} bean
-     *  (see {@link R2dbcDataAutoConfiguration}) with the two timestamp converters
+     *  (see {@link DataR2dbcAutoConfiguration}) with the two timestamp converters
      *  added on top of the dialect defaults. */
     @Bean
     public R2dbcCustomConversions r2dbcCustomConversions(ConnectionFactory connectionFactory) {
