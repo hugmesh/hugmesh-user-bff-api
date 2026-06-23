@@ -168,6 +168,19 @@ app:
     internal:
       base-url: "${ADMIN_BFF_INTERNAL_BASE_URL:http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080}"
 
+  # ── ACTIVE SESSION MANAGEMENT (/bff/user/sessions) — SHIPS LIVE ──────────────
+  # The user-facing "list/revoke MY login sessions" feature. UNLIKE the OIDC-login
+  # internal client (a fail-closed stub until app.bff.oidc.enabled flips), session
+  # management is an always-on user feature that works in the live gateway-forwarded-JWT
+  # world today, so its SessionsInternalClient is wired UNCONDITIONALLY (reusing the same
+  # mTLS connector + X-Internal-Token stamp + app.admin-bff.internal.base-url as the OIDC
+  # client). It targets admin-bff's GET/DELETE /bff/internal/sessions/** surface (admin-bff
+  # owns the bff_session table). enabled=false ⇒ the client is a GRACEFUL stub (empty list
+  # / no-op revoke) — non-destructive degradation, never a 500. Default ON.
+  sessions:
+    management:
+      enabled: "${APP_SESSIONS_MANAGEMENT_ENABLED:true}"
+
   # ── D6 Matrix/Mastodon BFF-proxy (custody store + mint + reactive proxy) ──────
   # SHIPS DARK: enabled=false ⇒ every /bff/user/{matrix,mastodon}/** endpoint 503s
   # and nothing reads/writes the hs_service_token custody table. The legacy admin-bff
