@@ -105,7 +105,7 @@ class HsReverseProxyStreamingTest {
                 .bindNow();
         servers.add(upstream);
 
-        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream), "matrix");
+        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream));
         WebClient client = proxyClient(proxy, Mono.just("NATIVE-MATRIX-TOKEN"), Mono.just("REMINTED"));
 
         String body = client.get().uri("/proxy/_matrix/client/v3/sync")
@@ -132,7 +132,7 @@ class HsReverseProxyStreamingTest {
                 .bindNow();
         servers.add(upstream);
 
-        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream), "matrix");
+        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream));
         WebClient client = proxyClient(proxy, Mono.just("STALE"), Mono.just("FRESH"));
 
         String body = client.get().uri("/proxy/_matrix/client/v3/account/whoami")
@@ -154,7 +154,7 @@ class HsReverseProxyStreamingTest {
                 .bindNow();
         servers.add(upstream);
 
-        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream), "matrix");
+        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream));
         WebClient client = proxyClient(proxy, Mono.just("STALE"), Mono.just("FRESH"));
 
         Integer status = client.get().uri("/proxy/_matrix/client/v3/account/whoami")

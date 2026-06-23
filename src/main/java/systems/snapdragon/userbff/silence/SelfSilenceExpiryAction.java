@@ -98,7 +98,7 @@ public class SelfSilenceExpiryAction {
      * wired this defaults to {@code false} (not banned). Kept as a method so the wire-
      * up is a single, audited change.
      */
-    private Mono<Boolean> isBanned(String userId) {
+    private Mono<Boolean> isBanned(String ignored) {
         return Mono.just(false);
     }
 

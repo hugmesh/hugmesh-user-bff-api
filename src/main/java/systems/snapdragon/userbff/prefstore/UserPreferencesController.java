@@ -75,7 +75,7 @@ public class UserPreferencesController {
     @Operation(summary = "Upsert one of my durable preferences (returns the resolved view).")
     @PutMapping
     public Mono<Map<String, String>> put(@AuthenticationPrincipal Jwt jwt,
-                                         @org.springframework.web.bind.annotation.RequestBody
+                                         @RequestBody
                                          @jakarta.validation.Valid PreferenceUpsert body) {
         return service.put(jwt.getSubject(), body.key(), body.value(), principalDomain.forScope(jwt));
     }

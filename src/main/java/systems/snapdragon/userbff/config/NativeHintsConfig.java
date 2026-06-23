@@ -14,8 +14,8 @@ import systems.snapdragon.userbff.profile.UserProfile;
 import systems.snapdragon.userbff.silence.SelfSilence;
 
 /**
- * GraalVM native-image / AOT reachability hints for the bits the static analyzer
- * cannot see through on its own — mirrors snapdragon-admin-bff-api / federation-api
+ * GraalVM native-image / AOT reachability hints for the bits the static
+ * analyzer cannot see through on its own — mirrors snapdragon-admin-bff-api /
  * {@code NativeHintsConfig}.
  *
  * <p>Spring Boot's own AOT processing covers the framework surface (the WebFlux

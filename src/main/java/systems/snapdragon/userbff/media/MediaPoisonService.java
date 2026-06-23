@@ -178,11 +178,11 @@ public class MediaPoisonService {
         String sniffed = ImageSniffer.detect(bytes);
         boolean isImage = sniffed != null;
         String contentType = sniffed != null ? sniffed
-                : (declaredContentType == null ? "application/octet-stream" : declaredContentType);
+                : declaredContentType == null ? "application/octet-stream" : declaredContentType;
 
         // Opt-out / feature-off / non-image ⇒ forward through UNCHANGED, status=none.
         if ("none".equals(mode) || !props.isEnabled() || !isImage) {
-            String why = !isImage ? "non-image" : ("none".equals(mode) ? "opt-out" : "feature-off");
+            String why = !isImage ? "non-image" : "none".equals(mode) ? "opt-out" : "feature-off";
             log.info("[media] forward-through ({}) platform={} owner={}", why, platform, owner);
             return forwardThrough(owner, platform, mode, "none", null, bytes, filename, contentType, domain);
         }

@@ -74,7 +74,7 @@ public class NotificationPreferenceController {
             + "resolved view). account-restriction enabled=false is coerced to true.")
     @PutMapping
     public Mono<Map<String, Boolean>> put(@AuthenticationPrincipal Jwt jwt,
-                                          @org.springframework.web.bind.annotation.RequestBody
+                                          @RequestBody
                                           @jakarta.validation.Valid PreferenceUpsert body) {
         return service.put(jwt.getSubject(), body.category(), body.enabled(),
                 principalDomain.forScope(jwt));

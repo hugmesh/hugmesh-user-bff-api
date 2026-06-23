@@ -181,7 +181,7 @@ public class BlockService {
 
     private static Map<String, Object> result(UserBlock b, boolean pushed) {
         return Map.of("block", b, "pushed", pushed,
-                "external", pushed ? "live" : ("internal".equals(b.platform()) ? "n/a" : "stubbed"));
+                "external", pushed ? "live" : "internal".equals(b.platform()) ? "n/a" : "stubbed");
     }
 
     private static void requireOwner(String owner) {

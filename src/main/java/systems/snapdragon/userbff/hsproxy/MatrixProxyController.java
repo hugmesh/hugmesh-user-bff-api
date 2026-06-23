@@ -51,7 +51,7 @@ public class MatrixProxyController {
         this.enabled = enabled;
         this.custody = custody;
         this.broker = broker;
-        this.proxy = new HsReverseProxy(matrixProxyWebClient, HsServiceTokenRow.PLATFORM_MATRIX);
+        this.proxy = new HsReverseProxy(matrixProxyWebClient);
     }
 
     @Operation(summary = "Reverse-proxy any Matrix client-API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.")
