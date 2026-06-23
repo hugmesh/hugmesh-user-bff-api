@@ -110,22 +110,41 @@ public class OidcCallbackController {
         String redirectUri = (flow.redirectUri() == null || flow.redirectUri().isBlank())
                 ? defaultRedirectUri : flow.redirectUri();
 
-        // 2) PKCE code -> tokens. 3) ensure account. 4) mint session. 5) custody-stamp.
+        // 2) PKCE code -> tokens. 3-5) provision account + session + custody-stamp (named
+        // helper flattens the former 3-deep ensure/createSession/stamp ladder). 6) cookie.
         return client.exchangeCode(code, flow.verifier(), redirectUri)
-                .flatMap(tokens -> adminBff.ensureAccount("casdoor", subjectOf(tokens))
-                        .flatMap(account -> adminBff.createSession(account.id())
-                                .flatMap(session -> stamp(session.token(), tokens)
-                                        .thenReturn(session.token()))))
-                .flatMap(bffToken -> {
-                    // 6) opaque bff_ cookie (only when enabled) + 302 back to the UI.
-                    exchange.getResponse().setStatusCode(HttpStatus.FOUND);
-                    exchange.getResponse().getHeaders().setLocation(URI.create(redirectUri));
-                    if (cookies.enabled()) {
-                        ResponseCookie cookie = cookies.mint(exchange.getRequest(), bffToken);
-                        exchange.getResponse().addCookie(cookie);
-                    }
-                    return exchange.getResponse().setComplete();
-                });
+                .flatMap(this::provisionAndStamp)
+                .flatMap(bffToken -> completeRedirect(exchange, redirectUri, bffToken));
+    }
+
+    /**
+     * Provision the account, mint the opaque {@code bff_} session, and custody-stamp the
+     * exchanged tokens onto it — yielding the opaque session token. Extracted from {@link
+     * #callback} so the former 3-deep {@code ensureAccount → createSession → stamp} nested
+     * lambda ladder reads as a flat named chain (behaviour identical).
+     */
+    private Mono<String> provisionAndStamp(OidcTokens tokens) {
+        // 3) ensure the account exists (admin-bff owns the account/allowlist tables).
+        return adminBff.ensureAccount("casdoor", subjectOf(tokens))
+                // 4) mint the opaque bff_ session row for that account.
+                .flatMap(account -> adminBff.createSession(account.id()))
+                // 5) AES-GCM-stamp the tokens onto the session, then yield its opaque token.
+                .flatMap(session -> stamp(session.token(), tokens).thenReturn(session.token()));
+    }
+
+    /**
+     * Mint the opaque {@code bff_} cookie (only when {@code app.session.cookie.enabled})
+     * and 302 the browser back to the UI. Extracted from {@link #callback} so the final
+     * response-writing leg is a named step rather than a trailing inline lambda.
+     */
+    private Mono<Void> completeRedirect(ServerWebExchange exchange, String redirectUri, String bffToken) {
+        exchange.getResponse().setStatusCode(HttpStatus.FOUND);
+        exchange.getResponse().getHeaders().setLocation(URI.create(redirectUri));
+        if (cookies.enabled()) {
+            ResponseCookie cookie = cookies.mint(exchange.getRequest(), bffToken);
+            exchange.getResponse().addCookie(cookie);
+        }
+        return exchange.getResponse().setComplete();
     }
 
     /**

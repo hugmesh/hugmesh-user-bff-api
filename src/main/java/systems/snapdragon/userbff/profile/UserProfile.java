@@ -52,8 +52,11 @@ public record UserProfile(
         @Size(max = 255, message = "screenReaderName must be at most 255 chars")
         @SafeScreenReaderName String screenReaderName) {
 
-    /** Default visibility floor — private to the platform unless the user opts in. */
-    public static final String DEFAULT_VISIBILITY = "internal";
+    /** Default visibility floor — private to the platform unless the user opts in. The
+     *  closed {@code public|internal} vocabulary is modelled by {@link Visibility}; this
+     *  constant is sourced from {@link Visibility#INTERNAL} so the literal lives in ONE
+     *  place (wire token byte-identical). */
+    public static final String DEFAULT_VISIBILITY = Visibility.INTERNAL.value();
 
     /** Back-compat constructor (no explicit vanityUsername / screenReaderName → null).
      *  The vanity username is always server-derived; the screen-reader name is
@@ -84,7 +87,11 @@ public record UserProfile(
      *  {@code screenReaderName} is preserved (defaulting is applied separately by the
      *  service via {@link #withDefaultedScreenReaderName()}). */
     public UserProfile withOwner(String userId) {
-        String vis = ("public".equals(visibility)) ? "public" : DEFAULT_VISIBILITY;
+        // Normalize to the closed Visibility set: PUBLIC stays public, everything else
+        // (including null / unknown) floors to the default — byte-identical to the prior
+        // "public".equals(...) ? "public" : "internal".
+        String pub = Visibility.PUBLIC.value();
+        String vis = pub.equals(visibility) ? pub : DEFAULT_VISIBILITY;
         return new UserProfile(userId, gender, pronouns, timezone, displayName, vis,
                 vanitySubdomainEnabled, vanityUsername, screenReaderName);
     }

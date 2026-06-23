@@ -1,6 +1,7 @@
 package systems.snapdragon.userbff.media;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import systems.snapdragon.userbff.web.PlatformKind;
 
 import java.time.Instant;
 
@@ -38,16 +39,24 @@ public record MediaPoisonDecision(
         String backend,
         Instant createdAt) {
 
+    /** Accept iff {@code p} is a valid external platform token — the closed
+     *  {@code matrix|mastodon} set is now modelled by {@link PlatformKind}; this guard
+     *  delegates to it so there is ONE source of truth (behaviour byte-identical). */
     public static boolean validPlatform(String p) {
-        return "matrix".equals(p) || "mastodon".equals(p);
+        return PlatformKind.isValid(p);
     }
 
+    /** Accept iff {@code m} is a valid cloak-mode token — the closed
+     *  {@code glaze|nightshade|light|none} set is now modelled by {@link CloakMode};
+     *  this guard delegates to it so there is ONE source of truth. */
     public static boolean validMode(String m) {
-        return "glaze".equals(m) || "nightshade".equals(m) || "light".equals(m) || "none".equals(m);
+        return CloakMode.isValid(m);
     }
 
+    /** Accept iff {@code s} is a valid status token — the closed
+     *  {@code protected|degraded|skipped|none|pending|failed} set is now modelled by
+     *  {@link PoisonStatus}; this guard delegates to it so there is ONE source of truth. */
     public static boolean validStatus(String s) {
-        return "protected".equals(s) || "degraded".equals(s) || "skipped".equals(s)
-                || "none".equals(s) || "pending".equals(s) || "failed".equals(s);
+        return PoisonStatus.isValid(s);
     }
 }

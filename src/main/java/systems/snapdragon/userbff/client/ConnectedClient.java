@@ -1,6 +1,7 @@
 package systems.snapdragon.userbff.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import systems.snapdragon.userbff.web.PlatformKind;
 
 import java.time.Instant;
 
@@ -37,15 +38,23 @@ public record ConnectedClient(
         Instant createdAt,
         Instant revokedAt) {
 
-    public static final String KIND_OAUTH_APP = "oauth-app";
-    public static final String KIND_DEVICE = "device";
+    /** The {@code oauth-app} client-kind token — retained constant, now sourced from the
+     *  {@link ClientKind#OAUTH_APP} enum value so the literal lives in ONE place. */
+    public static final String KIND_OAUTH_APP = ClientKind.OAUTH_APP.value();
+    /** The {@code device} client-kind token — retained constant, sourced from
+     *  {@link ClientKind#DEVICE}. */
+    public static final String KIND_DEVICE = ClientKind.DEVICE.value();
 
+    /** Accept iff {@code p} is a valid external platform token — delegates to the shared
+     *  {@link PlatformKind} lens so there is ONE source of truth (behaviour identical). */
     public static boolean validPlatform(String p) {
-        return "matrix".equals(p) || "mastodon".equals(p);
+        return PlatformKind.isValid(p);
     }
 
+    /** Accept iff {@code k} is a valid client-kind token — the closed {@code oauth-app|device}
+     *  set is now modelled by {@link ClientKind}; this guard delegates to it. */
     public static boolean validKind(String k) {
-        return KIND_OAUTH_APP.equals(k) || KIND_DEVICE.equals(k);
+        return ClientKind.isValid(k);
     }
 
     public boolean active() {

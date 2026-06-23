@@ -21,8 +21,10 @@ public record UserBlock(
         String platform,
         Instant ts) {
 
-    /** Allowed external platforms (plus 'internal' for platform-local blocks). */
+    /** Allowed external platforms (plus 'internal' for platform-local blocks). The closed
+     *  {@code matrix|mastodon|internal} set is now modelled by {@link BlockPlatform}; this
+     *  guard delegates to it so there is ONE source of truth (behaviour byte-identical). */
     public static boolean validPlatform(String p) {
-        return "matrix".equals(p) || "mastodon".equals(p) || "internal".equals(p);
+        return BlockPlatform.isValid(p);
     }
 }

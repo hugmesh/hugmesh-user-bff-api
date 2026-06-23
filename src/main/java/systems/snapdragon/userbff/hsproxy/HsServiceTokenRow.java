@@ -6,6 +6,7 @@ import org.springframework.data.annotation.Transient;
 import org.springframework.data.domain.Persistable;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
+import systems.snapdragon.userbff.web.PlatformKind;
 
 import java.time.Instant;
 
@@ -40,10 +41,11 @@ public record HsServiceTokenRow(
         @Column("minted_at") Instant mintedAt,
         @Transient boolean isNew) implements Persistable<String> {
 
-    /** Matrix platform discriminator. */
-    public static final String PLATFORM_MATRIX = "matrix";
-    /** Mastodon platform discriminator. */
-    public static final String PLATFORM_MASTODON = "mastodon";
+    /** Matrix platform discriminator — sourced from the shared {@link PlatformKind#MATRIX}
+     *  lens so the {@code matrix} literal lives in ONE place (wire/DB token byte-identical). */
+    public static final String PLATFORM_MATRIX = PlatformKind.MATRIX.value();
+    /** Mastodon platform discriminator — sourced from {@link PlatformKind#MASTODON}. */
+    public static final String PLATFORM_MASTODON = PlatformKind.MASTODON.value();
 
     @PersistenceCreator
     public HsServiceTokenRow(String id, String ownerSubject, String platform,

@@ -150,26 +150,66 @@ public class MediaPoisonService {
                                                  Backend probed, byte[] bytes, String filename,
                                                  String contentType, String domain) {
         return worker.poison(bytes, mode, filename, contentType, props.getThumbnailSizes())
-                .flatMap(result -> {
-                    if (result == null || !result.ok() || result.poisonedOriginal() == null) {
-                        log.warn("[media] worker poison failed/empty ⇒ forward original, status=failed");
-                        return forwardThrough(owner, platform, mode, "failed",
-                                backendOf(result, probed), bytes, filename, contentType, domain);
-                    }
-                    Backend ran = Backend.parse(result.backend());
-                    Backend backend = ran.present() ? ran : probed;
-                    byte[] poisoned = result.poisonedOriginal();
-                    return homeserver.upload(platform, poisoned, filename, contentType)
-                            .flatMap(hs -> survivalGate(platform, mode, poisoned, result, hs)
-                                    .flatMap(survived -> record(owner, platform, mediaRef(platform, hs),
-                                            mode, survived ? "protected" : "degraded", backend.wire(), domain)
-                                            .map(dec -> new UploadOutcome(hs, dec))));
-                })
+                // route the worker result: a failed/empty cloak forwards the ORIGINAL,
+                // a good cloak runs the upload+gate+record ladder (extracted helper).
+                .flatMap(result -> onPoisonResult(result, owner, platform, mode, probed,
+                        bytes, filename, contentType, domain))
                 // poison() emitted empty (no worker wired despite a present probe) ⇒ skip
                 // honestly. DEFERRED so the forward-through upload only runs on the empty
                 // path (not eagerly at assembly time).
                 .switchIfEmpty(Mono.defer(() -> forwardThrough(owner, platform, mode, "skipped",
                         probed.wire(), bytes, filename, contentType, domain)));
+    }
+
+    /**
+     * Dispatch on the worker's poison result. A {@code null}/{@code !ok}/empty result
+     * forwards the ORIGINAL with {@code status=failed} (never a false "protected"); a good
+     * result resolves the backend that ran and runs {@link #uploadAndGate} on the poisoned
+     * bytes. Extracted from {@link #cloakThenForward} so the 3-deep upload→gate→record
+     * ladder is a named step, not an inline nested lambda.
+     */
+    private Mono<UploadOutcome> onPoisonResult(PoisonResult result, String owner, String platform,
+                                               String mode, Backend probed, byte[] bytes,
+                                               String filename, String contentType, String domain) {
+        if (result == null || !result.ok() || result.poisonedOriginal() == null) {
+            log.warn("[media] worker poison failed/empty ⇒ forward original, status=failed");
+            return forwardThrough(owner, platform, mode, "failed",
+                    backendOf(result, probed), bytes, filename, contentType, domain);
+        }
+        // the backend the worker actually ran (fall back to the probed tier if it didn't say).
+        Backend ran = Backend.parse(result.backend());
+        Backend backend = ran.present() ? ran : probed;
+        return uploadAndGate(owner, platform, mode, backend, result, filename, contentType, domain);
+    }
+
+    /**
+     * Upload the POISONED original via the mTLS proxy, run the round-trip survival gate,
+     * and record the honest decision — the inner ladder de-nested out of {@link
+     * #cloakThenForward}. {@code status=protected} ONLY when the gate passes, else
+     * {@code degraded}. Behaviour is identical to the prior inline chain.
+     */
+    private Mono<UploadOutcome> uploadAndGate(String owner, String platform, String mode,
+                                              Backend backend, PoisonResult result,
+                                              String filename, String contentType, String domain) {
+        byte[] poisoned = result.poisonedOriginal();
+        // 1) real homeserver upload of the poisoned bytes.
+        return homeserver.upload(platform, poisoned, filename, contentType)
+                // 2) re-fetch the served artifacts and run the perturbation-survival gate.
+                .flatMap(hs -> survivalGate(platform, mode, poisoned, result, hs)
+                        // 3) record the honest decision and pair it with the homeserver response.
+                        .flatMap(survived -> recordOutcome(owner, platform, mode, backend, domain,
+                                survived, hs)));
+    }
+
+    /** Record the honest decision for an uploaded+gated artifact and pair it with the
+     *  verbatim homeserver response. {@code protected} iff the gate passed, else {@code
+     *  degraded}. Split out so {@link #uploadAndGate} stays a flat 3-operator chain. */
+    private Mono<UploadOutcome> recordOutcome(String owner, String platform, String mode,
+                                              Backend backend, String domain, boolean survived,
+                                              Map<String, Object> hs) {
+        String status = survived ? "protected" : "degraded";
+        return record(owner, platform, mediaRef(platform, hs), mode, status, backend.wire(), domain)
+                .map(dec -> new UploadOutcome(hs, dec));
     }
 
     /**

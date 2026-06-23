@@ -1,6 +1,8 @@
 package systems.snapdragon.userbff.media;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonValue;
 
 import java.util.List;
 
@@ -14,10 +16,56 @@ public final class PoisonModels {
 
     private PoisonModels() {}
 
-    /** The compute backend the worker reports it is running (capability + honesty). */
+    /**
+     * The compute backend the worker reports it is running (capability + honesty) — the
+     * closed {@code cuda|rocm|cpu|none} set the worker {@code /health} probe reports.
+     *
+     * <p>This enum PREDATES the federation #46 {@code ScopeKind} convention and already
+     * served as the code-side lens over the {@code String backend} wire/DB token; it is
+     * now ALIGNED to that shape — {@link #value()} ({@link JsonValue}) and
+     * {@link #fromWire(String)} ({@link JsonCreator}) emit/parse the IDENTICAL lowercase
+     * tokens. The pre-existing {@link #parse(String)} / {@link #wire()} are kept as
+     * BEHAVIOUR-PRESERVING aliases so every call site is unchanged: {@code parse} keeps
+     * its NONE-default-and-trim leniency (the worker /health string may be padded /
+     * absent), whereas {@code fromWire} is the strict null-on-unknown JSON creator
+     * matching the sibling enums. Wire/DB tokens stay byte-identical either way.
+     */
     public enum Backend {
-        CUDA, ROCM, CPU, NONE;
+        CUDA("cuda"), ROCM("rocm"), CPU("cpu"), NONE("none");
 
+        private final String value;
+
+        Backend(String value) {
+            this.value = value;
+        }
+
+        /** The exact lowercase wire token ({@code cuda|rocm|cpu|none}) — equals {@link #wire()}. */
+        @JsonValue
+        public String value() {
+            return value;
+        }
+
+        /**
+         * Strict JSON parse: an exact lowercase token to its {@link Backend}, or
+         * {@code null} for null / unrecognised — the #46-shaped creator (mirrors the
+         * sibling {@code CloakMode}/{@code PoisonStatus}/{@code PlatformKind}). For the
+         * lenient worker-/health path use {@link #parse(String)} instead.
+         */
+        @JsonCreator
+        public static Backend fromWire(String wire) {
+            if (wire == null) {
+                return null;
+            }
+            for (Backend b : values()) {
+                if (b.value.equals(wire)) {
+                    return b;
+                }
+            }
+            return null;
+        }
+
+        /** Lenient parse for the worker {@code /health} string: null / unknown / padded
+         *  ⇒ {@link #NONE} (heavy tier absent). Behaviour unchanged from the original. */
         public static Backend parse(String s) {
             if (s == null) return NONE;
             return switch (s.trim().toLowerCase()) {
@@ -28,7 +76,8 @@ public final class PoisonModels {
             };
         }
 
-        public String wire() { return name().toLowerCase(); }
+        /** The lowercase wire token — retained alias of {@link #value()}. */
+        public String wire() { return value; }
 
         /** Whether the worker can actually run a cloak (any backend but NONE). */
         public boolean present() { return this != NONE; }
