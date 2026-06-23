@@ -60,6 +60,7 @@ class ProfileControllerTest {
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean ProfileService profiles;
+    @MockitoBean AvatarService avatars;
     @MockitoBean PrincipalDomain principalDomain;
 
     private static UserProfile stubProfile(String userId) {

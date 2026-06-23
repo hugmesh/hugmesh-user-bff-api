@@ -587,6 +587,41 @@
         }
       }
     },
+    "/bff/user/profile/avatar" : {
+      "post" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Upload my profile picture (multipart 'file'). The bytes are stored on the Matrix homeserver media repo (stub-gated) and the mxc:// URL is saved on my profile; the refreshed profile is returned. Owner = JWT subject.",
+        "operationId" : "uploadAvatar",
+        "requestBody" : {
+          "content" : {
+            "multipart/form-data" : {
+              "schema" : {
+                "required" : [ "file" ],
+                "type" : "object",
+                "properties" : {
+                  "file" : {
+                    "type" : "string",
+                    "format" : "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/notifications/{id}/read" : {
       "post" : {
         "tags" : [ "Notifications (in-app floor)" ],
@@ -1406,6 +1441,10 @@
             "maxLength" : 255,
             "minLength" : 0,
             "type" : "string"
+          },
+          "avatarUrl" : {
+            "type" : "string",
+            "readOnly" : true
           }
         }
       },

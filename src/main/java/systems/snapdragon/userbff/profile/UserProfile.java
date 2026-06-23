@@ -33,6 +33,13 @@ import systems.snapdragon.userbff.web.ValidationPatterns;
  *        otherwise). NULL when not yet set + the display name is ASCII (the read side
  *        defaults from the display name). The aria-label UI consumption is a later
  *        UI-wave task — this carries the field + validation only.
+ * @param avatarUrl the user's profile picture as a Matrix media ({@code mxc://}) URL.
+ *        SERVER-DERIVED (set ONLY by the dedicated avatar endpoint from the homeserver
+ *        media-upload result) — never accepted from the profile PUT body and never
+ *        cleared by a profile save (exactly like {@code vanityUsername}). READ_ONLY on
+ *        the wire so a client cannot supply it; NULL when the user has no picture. The
+ *        live homeserver upload is stub-gated (a stub {@code mxc://} is stored when
+ *        disabled), so the field is the durable source of truth either way.
  */
 public record UserProfile(
         @JsonProperty("userId") String userId,
@@ -50,7 +57,8 @@ public record UserProfile(
         boolean vanitySubdomainEnabled,
         @JsonProperty(access = JsonProperty.Access.READ_ONLY) String vanityUsername,
         @Size(max = 255, message = "screenReaderName must be at most 255 chars")
-        @SafeScreenReaderName String screenReaderName) {
+        @SafeScreenReaderName String screenReaderName,
+        @JsonProperty(access = JsonProperty.Access.READ_ONLY) String avatarUrl) {
 
     /** Default visibility floor — private to the platform unless the user opts in. The
      *  closed {@code public|internal} vocabulary is modelled by {@link Visibility}; this
@@ -58,34 +66,47 @@ public record UserProfile(
      *  place (wire token byte-identical). */
     public static final String DEFAULT_VISIBILITY = Visibility.INTERNAL.value();
 
-    /** Back-compat constructor (no explicit vanityUsername / screenReaderName → null).
-     *  The vanity username is always server-derived; the screen-reader name is
-     *  defaulted/prompted by the service. Callers that don't supply them get null,
-     *  which the DB CHECK's {@code IS NULL} branch accepts. */
+    /** Back-compat constructor (no explicit vanityUsername / screenReaderName /
+     *  avatarUrl → null). The vanity username is always server-derived; the
+     *  screen-reader name is defaulted/prompted by the service; the avatar URL is set
+     *  only by the avatar endpoint. Callers that don't supply them get null, which the
+     *  DB CHECK's {@code IS NULL} branch accepts. */
     public UserProfile(String userId, String gender, String pronouns, String timezone,
                        String displayName, String visibility, boolean vanitySubdomainEnabled) {
         this(userId, gender, pronouns, timezone, displayName, visibility,
-                vanitySubdomainEnabled, null, null);
+                vanitySubdomainEnabled, null, null, null);
     }
 
-    /** Back-compat constructor (explicit vanityUsername, no screenReaderName → null). */
+    /** Back-compat constructor (explicit vanityUsername, no screenReaderName /
+     *  avatarUrl → null). */
     public UserProfile(String userId, String gender, String pronouns, String timezone,
                        String displayName, String visibility, boolean vanitySubdomainEnabled,
                        String vanityUsername) {
         this(userId, gender, pronouns, timezone, displayName, visibility,
-                vanitySubdomainEnabled, vanityUsername, null);
+                vanitySubdomainEnabled, vanityUsername, null, null);
+    }
+
+    /** Back-compat constructor (explicit vanityUsername + screenReaderName, no
+     *  avatarUrl → null). Keeps the pre-014 9-arg call sites (which set the screen-
+     *  reader name but not the avatar) compiling unchanged. */
+    public UserProfile(String userId, String gender, String pronouns, String timezone,
+                       String displayName, String visibility, boolean vanitySubdomainEnabled,
+                       String vanityUsername, String screenReaderName) {
+        this(userId, gender, pronouns, timezone, displayName, visibility,
+                vanitySubdomainEnabled, vanityUsername, screenReaderName, null);
     }
 
     /** An empty (not-yet-created) profile for the given owner. */
     public static UserProfile empty(String userId) {
-        return new UserProfile(userId, null, null, null, null, DEFAULT_VISIBILITY, false, null, null);
+        return new UserProfile(userId, null, null, null, null, DEFAULT_VISIBILITY, false, null, null, null);
     }
 
     /** A copy with the owner forced to {@code userId} and visibility normalized.
      *  {@code vanityUsername} is NOT set here — {@link #withVanityUsername(String)}
      *  is applied by the service once the JWT username is known + validated.
      *  {@code screenReaderName} is preserved (defaulting is applied separately by the
-     *  service via {@link #withDefaultedScreenReaderName()}). */
+     *  service via {@link #withDefaultedScreenReaderName()}). {@code avatarUrl} is
+     *  preserved verbatim — a profile save must never clear an existing picture. */
     public UserProfile withOwner(String userId) {
         // Normalize to the closed Visibility set: PUBLIC stays public, everything else
         // (including null / unknown) floors to the default — byte-identical to the prior
@@ -93,7 +114,7 @@ public record UserProfile(
         String pub = Visibility.PUBLIC.value();
         String vis = pub.equals(visibility) ? pub : DEFAULT_VISIBILITY;
         return new UserProfile(userId, gender, pronouns, timezone, displayName, vis,
-                vanitySubdomainEnabled, vanityUsername, screenReaderName);
+                vanitySubdomainEnabled, vanityUsername, screenReaderName, avatarUrl);
     }
 
     /**
@@ -106,12 +127,23 @@ public record UserProfile(
                 ? username.trim().toLowerCase()
                 : null;
         return new UserProfile(userId, gender, pronouns, timezone, displayName, visibility,
-                vanitySubdomainEnabled, vu, screenReaderName);
+                vanitySubdomainEnabled, vu, screenReaderName, avatarUrl);
     }
 
     public UserProfile withScreenReaderName(String screenReaderName) {
         return new UserProfile(userId, gender, pronouns, timezone, displayName, visibility,
-                vanitySubdomainEnabled, vanityUsername, screenReaderName);
+                vanitySubdomainEnabled, vanityUsername, screenReaderName, avatarUrl);
+    }
+
+    /**
+     * A copy with the {@code avatarUrl} set to the given Matrix media ({@code mxc://})
+     * URL — the SERVER-DERIVED profile picture written ONLY by the avatar endpoint
+     * from the homeserver media-upload result (never from the profile PUT body).
+     * Mirrors {@link #withScreenReaderName(String)}.
+     */
+    public UserProfile withAvatarUrl(String avatarUrl) {
+        return new UserProfile(userId, gender, pronouns, timezone, displayName, visibility,
+                vanitySubdomainEnabled, vanityUsername, screenReaderName, avatarUrl);
     }
 
     /**

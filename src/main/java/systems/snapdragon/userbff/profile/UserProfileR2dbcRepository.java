@@ -92,4 +92,32 @@ public interface UserProfileR2dbcRepository extends ReactiveCrudRepository<UserP
                          @Param("vanityUsername") String vanityUsername,
                          @Param("screenReaderName") String screenReaderName,
                          @Param("domain") String domain);
+
+    // ---- AVATAR (@Query — avatar-only UPDATE, server-side now()) ----
+    //
+    // The profile picture (mxc:// URL) is written by the dedicated avatar endpoint
+    // ONLY — its own UPDATE that touches avatar_url alone, so it never disturbs the
+    // other profile columns and the main upsert never clears it. Scoped (owner AND
+    // domain) + unscoped (owner only, SUPERADMIN bypass) variants, mirroring the
+    // UPDATE_SCOPED / UPDATE_UNSCOPED pair above.
+
+    /** SCOPED avatar UPDATE (owner AND domain). */
+    String UPDATE_AVATAR_SCOPED =
+            "UPDATE user_profile SET avatar_url = :avatarUrl, updated_at = now() "
+            + "WHERE user_id = :userId AND domain = :domain";
+
+    /** UNSCOPED avatar UPDATE (owner only — SUPERADMIN bypass). */
+    String UPDATE_AVATAR_UNSCOPED =
+            "UPDATE user_profile SET avatar_url = :avatarUrl, updated_at = now() "
+            + "WHERE user_id = :userId";
+
+    @Modifying
+    @Query(UPDATE_AVATAR_SCOPED)
+    Mono<Long> updateAvatarUrlScoped(@Param("userId") String userId, @Param("domain") String domain,
+                                     @Param("avatarUrl") String avatarUrl);
+
+    @Modifying
+    @Query(UPDATE_AVATAR_UNSCOPED)
+    Mono<Long> updateAvatarUrlUnscoped(@Param("userId") String userId,
+                                       @Param("avatarUrl") String avatarUrl);
 }

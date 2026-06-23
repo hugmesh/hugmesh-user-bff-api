@@ -50,6 +50,13 @@
               plaintext / NEVER returned to a client. SHIPS DARK: read/written only
               when app.hs-token.enabled=true (default false); the legacy admin-bff
               /bff/provision/* browser-token path stays the live fallback.
+        014 — user_profile.avatar_url (the profile picture as a Matrix mxc:// URL).
+              Server-derived by the dedicated avatar endpoint from the homeserver
+              media-upload result, NEVER from the profile PUT body, and never cleared
+              by a profile save (the main upsert omits the column). SHIPS DARK: the
+              live Matrix media upload is stub-gated (avatar.matrix.enabled, default
+              false) — a stub mxc:// is returned so storage works without a live
+              homeserver; the column is the durable source of truth either way.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -65,4 +72,5 @@
     <include file="db/changelog/011-user-preferences-store.xml"/>
     <include file="db/changelog/012-notifications.xml"/>
     <include file="db/changelog/013-hs-service-token.xml"/>
+    <include file="db/changelog/014-user-profile-avatar.xml"/>
 </databaseChangeLog>

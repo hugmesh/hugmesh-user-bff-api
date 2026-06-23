@@ -398,6 +398,17 @@ external channels that build on top.
   external self-block push. Base URLs grounded in the snapdragon-generator
   manifests: tuwunel `:8008` (`MATRIX_URL`), Akkoma `:4000` (`MASTODON_URL`).
   Gated by `block.matrix.enabled` / `block.mastodon.enabled`.
+- `MatrixMediaClient` (wired by `MatrixMediaConfig`) — reactive WebClient that
+  uploads a user's PROFILE PICTURE bytes to the tuwunel media repository
+  (`POST /_matrix/media/v1/upload`) and returns the resulting `mxc://` URL, which
+  `AvatarService` persists onto `user_profile.avatar_url`. STUB-GATED by
+  `avatar.matrix.enabled` (default false): when disabled a deterministic
+  `mxc://stub.invalid/<id>` is returned (never an error) so avatar storage works +
+  ships dark; flip the flag once the per-user Matrix media-token brokering is
+  validated. The image bytes are never logged. Base URL `MATRIX_URL` / tuwunel
+  `:8008`. The avatar endpoint is `POST /bff/user/profile/avatar` (multipart
+  `file`, image/* only, 5 MB cap); the column is server-derived and a profile save
+  never clears it.
 - `MatrixHideClient` / `MastodonHideClient` (behind the `HomeserverHideClient` /
   `HomeserverHideConfig` abstraction seam) — reactive WebClients for the
   self-silence directory/discovery hide seams. Gated by `external.{matrix,mastodon}

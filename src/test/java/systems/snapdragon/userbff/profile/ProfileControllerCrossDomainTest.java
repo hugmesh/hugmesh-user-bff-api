@@ -92,6 +92,7 @@ class ProfileControllerCrossDomainTest {
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean ProfileService profiles;
+    @MockitoBean AvatarService avatars;
 
     private static Collection<GrantedAuthority> authorities(String... names) {
         List<GrantedAuthority> out = new ArrayList<>();

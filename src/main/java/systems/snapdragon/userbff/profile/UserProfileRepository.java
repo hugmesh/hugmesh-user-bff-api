@@ -28,7 +28,8 @@ public class UserProfileRepository {
     private static UserProfile toWire(UserProfileEntity e) {
         return new UserProfile(
                 e.userId(), e.gender(), e.pronouns(), e.timezone(), e.displayName(),
-                e.visibility(), e.vanitySubdomainEnabled(), e.vanityUsername(), e.screenReaderName());
+                e.visibility(), e.vanitySubdomainEnabled(), e.vanityUsername(),
+                e.screenReaderName(), e.avatarUrl());
     }
 
     /** Back-compat overload — scopes to the platform {@code default} domain. */
@@ -79,6 +80,46 @@ public class UserProfileRepository {
                             nz(p.displayName()), p.visibility(), p.vanitySubdomainEnabled(),
                             p.vanityUsername(), nz(p.screenReaderName()), dom)
                         .thenReturn(p));
+    }
+
+    /**
+     * Set ONLY the owner's {@code avatar_url} (the profile picture mxc:// URL) in
+     * their domain — never touching the other profile columns, so a picture change
+     * can't disturb (or be disturbed by) a profile edit. UPDATE-first / INSERT-if-
+     * absent, mirroring {@link #save(UserProfile, String)}: the UPDATE targets the
+     * existing row (owner AND domain scoped); if no row was updated the avatar was set
+     * before any profile existed, so a MINIMAL owner row is inserted (all text "" via
+     * {@code nz()}, default visibility, vanity OFF, no avatar yet) and the avatar
+     * UPDATE is retried against it.
+     *
+     * <p>Owner is always the caller's JWT subject (set by the service) and the domain
+     * predicate pins the brand, so this can never write another user's / brand's row.
+     * The main profile upsert deliberately does NOT carry {@code avatar_url}, so a
+     * later profile save will never clear the picture this method set.
+     *
+     * @return the number of rows the (final) avatar UPDATE matched (1 in practice).
+     */
+    public Mono<Long> updateAvatarUrl(String userId, String avatarUrl, String domain) {
+        Mono<Long> update = updateAvatarOnce(userId, avatarUrl, domain);
+        return update.flatMap(updated -> updated > 0
+                ? Mono.just(updated)
+                : insertMinimalRow(userId, domain)
+                        .then(updateAvatarOnce(userId, avatarUrl, domain)));
+    }
+
+    /** The avatar-only UPDATE leg, scoped or unscoped from a nullable {@code domain}. */
+    private Mono<Long> updateAvatarOnce(String userId, String avatarUrl, String domain) {
+        return DomainScope.isUnscoped(domain)
+                ? repo.updateAvatarUrlUnscoped(userId, avatarUrl)
+                : repo.updateAvatarUrlScoped(userId, domain, avatarUrl);
+    }
+
+    /** Create a MINIMAL owner row (no avatar_url yet — the caller updates it next) so
+     *  an avatar set before any profile exists has a row to land on. */
+    private Mono<Long> insertMinimalRow(String userId, String domain) {
+        String dom = DomainScope.isUnscoped(domain) ? DomainRegistry.DEFAULT_DOMAIN : domain;
+        return repo.insertRow(userId, nz(null), nz(null), nz(null), nz(null),
+                UserProfile.DEFAULT_VISIBILITY, false, null, nz(null), dom);
     }
 
     /** Delete the owner's profile (own data only; owner AND domain scoped). */

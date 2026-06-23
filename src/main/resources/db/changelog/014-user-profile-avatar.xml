@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        user_profile.avatar_url — the user's PROFILE PICTURE, stored as a Matrix
+        media (mxc://) URL. A user uploads an image to the BFF avatar endpoint; the
+        BFF uploads the bytes to the in-cluster Matrix homeserver media repository
+        (tuwunel) and persists the returned {@code mxc://server/mediaId} reference
+        here. The read side returns it on the profile so the UIs can resolve it to a
+        thumbnail/download URL.
+
+        SERVER-DERIVED (never client-supplied): like vanity_username, this column is
+        set ONLY by the dedicated avatar endpoint from the upload result — it is NEVER
+        accepted from the profile PUT body, and a profile save NEVER clears it (the
+        main upsert deliberately omits avatar_url so a profile edit can't wipe the
+        picture).
+
+        STUB-GATED HOMESERVER PUSH: the live Matrix media upload is gated OFF by
+        default (a stub mxc:// is returned when {@code avatar.matrix.enabled=false}),
+        so storage works + the feature ships dark + is unit-testable. The column is
+        the durable source of truth in either mode.
+
+        Nullable text (an absent avatar is valid — the user simply has no picture yet).
+        Owner-keyed via the table PK; no new CHECK is added because the value is an
+        opaque URL the API layer owns (same posture as display_name / screen_reader_name,
+        which are validator-guarded with no DB CHECK). Changeset id 014 follows the
+        current max (013 on main).
+    -->
+
+    <changeSet id="014-user-profile-avatar" author="snapdragon">
+        <addColumn tableName="user_profile">
+            <!-- Matrix media (mxc://) URL of the profile picture; NULL when not set.
+                 Server-derived by the avatar endpoint, never from the profile PUT. -->
+            <column name="avatar_url" type="varchar(512)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>
