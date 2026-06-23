@@ -93,23 +93,28 @@ public class ServiceTokenBroker {
      */
     public Mono<MintedToken> mintMatrix(String ownerSubject, String localpart) {
         String user = localpart(localpart);
+        // Register (or fall through to login if already registered), then persist the token.
         return matrixRegister(user, null)
-                .flatMap(reg -> {
-                    if (reg.hasNonNull("access_token")) {
-                        return Mono.just(reg);
-                    }
-                    String session = reg.path("session").asText(null);
-                    Mono<JsonNode> stage2 = (session != null)
-                            ? matrixRegister(user, Map.of("type", "m.login.dummy", "session", session))
-                            : Mono.empty();
-                    return stage2.filter(r -> r.hasNonNull("access_token"))
-                            // Already registered → password login.
-                            .switchIfEmpty(matrixLogin(user).flatMap(login -> login.hasNonNull("access_token")
-                                    ? Mono.just(login)
-                                    : Mono.error(new IllegalStateException("matrix mint: no access_token"))));
-                })
+                .flatMap(reg -> resolveMatrixToken(reg, user))
                 .map(node -> new MintedToken(node.path("access_token").asText(), null, null, user))
                 .flatMap(token -> persist(ownerSubject, HsServiceTokenRow.PLATFORM_MATRIX, token));
+    }
+
+    /** Stage-2 register (dummy UIA) or password-login if the account already exists. */
+    private Mono<JsonNode> resolveMatrixToken(JsonNode reg, String user) {
+        if (reg.hasNonNull("access_token")) {
+            // Register succeeded in one step — token is already in the response.
+            return Mono.just(reg);
+        }
+        String session = reg.path("session").asText(null);
+        Mono<JsonNode> stage2 = (session != null)
+                ? matrixRegister(user, Map.of("type", "m.login.dummy", "session", session))
+                : Mono.empty();
+        // Already registered → password login.
+        return stage2.filter(r -> r.hasNonNull("access_token"))
+                .switchIfEmpty(matrixLogin(user).flatMap(login -> login.hasNonNull("access_token")
+                        ? Mono.just(login)
+                        : Mono.error(new IllegalStateException("matrix mint: no access_token"))));
     }
 
     /**
@@ -124,19 +129,23 @@ public class ServiceTokenBroker {
         body.put("grant_type", "password");
         body.put("username", user);
         body.put("password", svcPassword);
+        // Post the password grant and persist the returned token into the custody store.
         return postJson(mastodon, "/oauth/token", body)
-                .flatMap(node -> {
-                    if (!node.hasNonNull("access_token")) {
-                        return Mono.error(new IllegalStateException("mastodon mint: no access_token"));
-                    }
-                    String access = node.path("access_token").asText();
-                    String refresh = node.hasNonNull("refresh_token") ? node.path("refresh_token").asText() : null;
-                    Instant expiresAt = node.hasNonNull("expires_in")
-                            ? Instant.now().plus(node.path("expires_in").asLong(), ChronoUnit.SECONDS)
-                            : null;
-                    return persist(ownerSubject, HsServiceTokenRow.PLATFORM_MASTODON,
-                            new MintedToken(access, refresh, expiresAt, user));
-                });
+                .flatMap(node -> buildMastodonToken(node, ownerSubject, user));
+    }
+
+    /** Extract access/refresh/expiry from the Mastodon OAuth response and persist the token. */
+    private Mono<MintedToken> buildMastodonToken(JsonNode node, String ownerSubject, String user) {
+        if (!node.hasNonNull("access_token")) {
+            return Mono.error(new IllegalStateException("mastodon mint: no access_token"));
+        }
+        String access = node.path("access_token").asText();
+        String refresh = node.hasNonNull("refresh_token") ? node.path("refresh_token").asText() : null;
+        Instant expiresAt = node.hasNonNull("expires_in")
+                ? Instant.now().plus(node.path("expires_in").asLong(), ChronoUnit.SECONDS)
+                : null;
+        return persist(ownerSubject, HsServiceTokenRow.PLATFORM_MASTODON,
+                new MintedToken(access, refresh, expiresAt, user));
     }
 
     /** Encrypt + upsert the custody row AND write the gateway revocation hash, then

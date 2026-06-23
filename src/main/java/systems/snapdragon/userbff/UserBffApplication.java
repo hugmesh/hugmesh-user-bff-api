@@ -31,6 +31,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *
  * <p>{@code @EnableScheduling} powers the {@code SelfSilenceExpiryAction} wake.
  */
+@SuppressWarnings("checkstyle:HideUtilityClassConstructor")
 @SpringBootApplication
 @EnableScheduling
 public class UserBffApplication {

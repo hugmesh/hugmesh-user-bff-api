@@ -59,19 +59,24 @@ public class UserNotificationService {
         if (id == null || id.isBlank()) {
             return Mono.error(ApiException.notFound("notification not found"));
         }
+        // Mark the row read; if nothing was updated, check ownership to distinguish 200 vs 404.
         return repo.markRead(id, owner, domain)
-                .flatMap(updated -> {
-                    if (updated > 0) {
-                        return Mono.empty();                 // marked this run
-                    }
-                    // 0 rows: either the row is already read (own row → idempotent OK)
-                    // or the id is not the caller's own owner+domain row (→ 404).
-                    return repo.existsForOwner(id, owner, domain)
-                            .flatMap(exists -> exists
-                                    ? Mono.empty()
-                                    : Mono.error(ApiException.notFound("notification not found")));
-                })
+                .flatMap(updated -> resolveMarkRead(updated, id, owner, domain))
                 .then();
+    }
+
+    /** If update touched 0 rows, check if the row exists for this owner (idempotent OK) or 404. */
+    private Mono<Void> resolveMarkRead(long updated, String id, String owner, String domain) {
+        if (updated > 0) {
+            // Row was marked read on this call — done.
+            return Mono.empty();
+        }
+        // 0 rows: either the row is already read (own row → idempotent OK)
+        // or the id is not the caller's own owner+domain row (→ 404).
+        return repo.existsForOwner(id, owner, domain)
+                .flatMap(exists -> exists
+                        ? Mono.empty()
+                        : Mono.error(ApiException.notFound("notification not found")));
     }
 
     private static void requireOwner(String owner) {

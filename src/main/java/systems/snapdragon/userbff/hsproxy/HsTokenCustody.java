@@ -65,21 +65,29 @@ public class HsTokenCustody {
         String accessEnc = cipher.encrypt(accessToken);
         String refreshEnc = (refreshToken == null || refreshToken.isBlank())
                 ? null : cipher.encrypt(refreshToken);
+        // Attempt an UPDATE first; if no rows were touched, INSERT instead.
         return repo.upsertUpdate(ownerSubject, platform, accessEnc, refreshEnc, expiresAt, localpart)
-                .flatMap(updated -> {
-                    if (updated != null && updated > 0) {
-                        return Mono.empty();
-                    }
-                    // Fresh row: the id is DB-generated (changelog 015 column DEFAULT) — the
-                    // INSERT omits it and RETURNING id hands the generated UUID back, which we
-                    // consume (the upsert returns Void; cross-user isolation is the
-                    // owner-scoped (owner_subject, platform) predicate, unchanged).
-                    return repo.upsertInsertReturningId(ownerSubject, platform,
-                            accessEnc, refreshEnc, expiresAt, localpart).then();
-                })
+                .flatMap(updated -> insertIfAbsent(updated, ownerSubject, platform,
+                        accessEnc, refreshEnc, expiresAt, localpart))
                 .doOnSuccess(v -> log.debug("[hs-custody] upserted custody row owner={} platform={}",
                         ownerSubject, platform))
                 .then();
+    }
+
+    /** If the UPDATE touched 0 rows the custody row is new — INSERT it, returning its generated id. */
+    private Mono<Void> insertIfAbsent(Long updated, String ownerSubject, String platform,
+                                      String accessEnc, String refreshEnc,
+                                      java.time.Instant expiresAt, String localpart) {
+        if (updated != null && updated > 0) {
+            // Row already existed and was updated — nothing more to do.
+            return Mono.empty();
+        }
+        // Fresh row: the id is DB-generated (changelog 015 column DEFAULT) — the
+        // INSERT omits it and RETURNING id hands the generated UUID back, which we
+        // consume (the upsert returns Void; cross-user isolation is the
+        // owner-scoped (owner_subject, platform) predicate, unchanged).
+        return repo.upsertInsertReturningId(ownerSubject, platform,
+                accessEnc, refreshEnc, expiresAt, localpart).then();
     }
 
     /** Owner-scoped delete of the owner's custody row for a platform (used by tests /

@@ -47,20 +47,24 @@ public class NotificationPreferenceService {
      */
     public Mono<Map<String, Boolean>> get(String owner, String domain) {
         requireOwner(owner);
-        return repo.findAll(owner, domain).map(stored -> {
-            Map<String, Boolean> out = new LinkedHashMap<>(defaults());
-            for (Map.Entry<String, Boolean> e : stored.entrySet()) {
-                // ignore any stored category the BFF no longer recognises (fail-closed
-                // on vocabulary drift), and never let a stored value override a default
-                // category we don't expose.
-                if (NotificationCategory.isValid(e.getKey())) {
-                    out.put(e.getKey(), e.getValue());
-                }
+        // Load all stored rows and merge them on top of the all-enabled defaults.
+        return repo.findAll(owner, domain).map(stored -> mergeWithDefaults(stored));
+    }
+
+    /** Merge stored preference rows onto the all-enabled default map; force account-restriction on. */
+    private Map<String, Boolean> mergeWithDefaults(Map<String, Boolean> stored) {
+        Map<String, Boolean> out = new LinkedHashMap<>(defaults());
+        for (Map.Entry<String, Boolean> e : stored.entrySet()) {
+            // ignore any stored category the BFF no longer recognises (fail-closed
+            // on vocabulary drift), and never let a stored value override a default
+            // category we don't expose.
+            if (NotificationCategory.isValid(e.getKey())) {
+                out.put(e.getKey(), e.getValue());
             }
-            // FORCED-ON: account-restriction is always enabled regardless of any row.
-            out.put(NotificationCategory.ACCOUNT_RESTRICTION, Boolean.TRUE);
-            return out;
-        });
+        }
+        // FORCED-ON: account-restriction is always enabled regardless of any row.
+        out.put(NotificationCategory.ACCOUNT_RESTRICTION, Boolean.TRUE);
+        return out;
     }
 
     /** Back-compat overload — operates on the platform {@code default} domain. */

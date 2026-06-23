@@ -109,21 +109,28 @@ public class ConnectedClientsService {
                                             String domain, Set<String> callerRoles) {
         requireOwner(owner);
         Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
+        // Locate the audit row, guard it, then execute the three-step revocation sequence.
         return repo.find(owner, id, domain)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no such connected client for this user")))
-                .flatMap(client -> {
-                    if (!client.active()) {
-                        return Mono.error(ApiException.notFound("connected client already revoked"));
-                    }
-                    ApiException forbidden = externalClientRoleForbidden(client.platform(), roles);
-                    if (forbidden != null) {
-                        return Mono.error(forbidden);
-                    }
-                    return revocations.revokeConnectedClient(client.platform(), localpart, client.externalRef())
-                            .flatMap(keyWritten -> revokeUpstream(localpart, bearer, client)
-                                    .flatMap(upstream -> repo.revoke(owner, id, domain)
-                                            .map(stamped -> result(client, keyWritten, upstream, stamped))));
-                });
+                .flatMap(client -> revokeClient(client, owner, id, localpart, bearer, domain, roles));
+    }
+
+    /** Guard active+role, then write the revocation key, upstream DELETE, and audit stamp. */
+    private Mono<Map<String, Object>> revokeClient(ConnectedClient client, String owner, String id,
+                                                   String localpart, String bearer,
+                                                   String domain, Set<String> roles) {
+        if (!client.active()) {
+            return Mono.error(ApiException.notFound("connected client already revoked"));
+        }
+        ApiException forbidden = externalClientRoleForbidden(client.platform(), roles);
+        if (forbidden != null) {
+            return Mono.error(forbidden);
+        }
+        // Write the gateway revocation key first, then best-effort upstream DELETE, then stamp the audit row.
+        return revocations.revokeConnectedClient(client.platform(), localpart, client.externalRef())
+                .flatMap(keyWritten -> revokeUpstream(localpart, bearer, client)
+                        .flatMap(upstream -> repo.revoke(owner, id, domain)
+                                .map(stamped -> result(client, keyWritten, upstream, stamped))));
     }
 
     /**

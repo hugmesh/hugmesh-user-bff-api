@@ -82,21 +82,27 @@ public class HsReverseProxy {
         String query = req.getURI().getRawQuery();
         String fullPath = (query == null || query.isBlank()) ? upstreamPath : upstreamPath + "?" + query;
 
+        // Load the native token, forward the request, and refresh-on-401 if needed.
         return loadToken
                 .switchIfEmpty(Mono.error(unauthorized("no custody token for this user/platform")))
                 .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
-                        .flatMap(relayed -> {
-                            if (Boolean.TRUE.equals(relayed)) {
-                                return Mono.empty();
-                            }
-                            // Refresh-on-401: re-mint once, retry once, then fail closed.
-                            return remint
-                                    .switchIfEmpty(Mono.error(unauthorized("re-mint failed (fail-closed)")))
-                                    .flatMap(fresh -> exchangeAndRelay(exchange, fullPath, fresh))
-                                    .flatMap(retryRelayed -> Boolean.TRUE.equals(retryRelayed)
-                                            ? Mono.empty()
-                                            : Mono.error(unauthorized("upstream 401 after re-mint (fail-closed)")));
-                        }));
+                        .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint)));
+    }
+
+    /** If the upstream returned 401, re-mint once and retry; any second 401 is fail-closed. */
+    private Mono<Void> handleRelayResult(Boolean relayed, ServerWebExchange exchange,
+                                         String fullPath, Mono<String> remint) {
+        if (Boolean.TRUE.equals(relayed)) {
+            // First attempt succeeded — nothing more to do.
+            return Mono.empty();
+        }
+        // Refresh-on-401: re-mint once, retry once, then fail closed.
+        return remint
+                .switchIfEmpty(Mono.error(unauthorized("re-mint failed (fail-closed)")))
+                .flatMap(fresh -> exchangeAndRelay(exchange, fullPath, fresh))
+                .flatMap(retryRelayed -> Boolean.TRUE.equals(retryRelayed)
+                        ? Mono.empty()
+                        : Mono.error(unauthorized("upstream 401 after re-mint (fail-closed)")));
     }
 
     /**
@@ -128,18 +134,24 @@ public class HsReverseProxy {
         } else {
             headersSpec = built;
         }
-        return headersSpec.exchangeToMono(resp -> {
-            if (resp.statusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
-                // Let the caller re-mint + retry; release this body first.
-                return resp.releaseBody().thenReturn(Boolean.FALSE);
-            }
-            ServerHttpResponse out = exchange.getResponse();
-            out.setStatusCode(resp.statusCode());
-            copyResponseHeaders(resp.headers().asHttpHeaders(), out.getHeaders());
-            // STREAM the upstream body verbatim (no buffering, no read-timeout cap) —
-            // long-poll/SSE/WS-upgrade pass through. Consumed inside the callback.
-            return out.writeWith(resp.bodyToFlux(DataBuffer.class)).thenReturn(Boolean.TRUE);
-        });
+        // Relay the upstream response to the caller; signal false on 401 for the re-mint path.
+        return headersSpec.exchangeToMono(resp -> relayResponse(resp, exchange));
+    }
+
+    /** Relay one upstream response: copy status + headers + body. Returns false on 401 for re-mint. */
+    private Mono<Boolean> relayResponse(
+            org.springframework.web.reactive.function.client.ClientResponse resp,
+            ServerWebExchange exchange) {
+        if (resp.statusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
+            // Let the caller re-mint + retry; release this body first.
+            return resp.releaseBody().thenReturn(Boolean.FALSE);
+        }
+        ServerHttpResponse out = exchange.getResponse();
+        out.setStatusCode(resp.statusCode());
+        copyResponseHeaders(resp.headers().asHttpHeaders(), out.getHeaders());
+        // STREAM the upstream body verbatim (no buffering, no read-timeout cap) —
+        // long-poll/SSE/WS-upgrade pass through. Consumed inside the callback.
+        return out.writeWith(resp.bodyToFlux(DataBuffer.class)).thenReturn(Boolean.TRUE);
     }
 
     private void copyRequestHeaders(HttpHeaders in, HttpHeaders out, String nativeToken) {

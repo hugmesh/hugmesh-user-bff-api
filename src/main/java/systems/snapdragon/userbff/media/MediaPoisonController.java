@@ -77,37 +77,45 @@ public class MediaPoisonController {
         MediaType partType = file.headers().getContentType();
         String declaredType = partType == null ? null : partType.toString();
 
+        // Read the file into memory (bounded), upload through the cloak service, then shape the response.
         return readBounded(file, props.getMaxUploadBytes())
                 .flatMap(bytes -> service.upload(owner, platform, mode, bytes, filename, declaredType, domain))
-                .map(outcome -> {
-                    // Return the homeserver body EXACTLY as the homeserver would (UI compose
-                    // logic untouched) + a server-owned cloak block the badge reads from.
-                    Map<String, Object> body = new LinkedHashMap<>(outcome.homeserver());
-                    var d = outcome.decision();
-                    body.put("cloak", Map.of(
-                            "status", d.status(),
-                            "mode", d.mode(),
-                            "backend", d.backend() == null ? "none" : d.backend(),
-                            "mediaRef", d.mediaRef() == null ? "" : d.mediaRef()));
-                    return body;
-                });
+                .map(MediaPoisonController::buildUploadResponse);
+    }
+
+    /** Merge the homeserver body with the server-owned cloak decision block for the UI badge. */
+    private static Map<String, Object> buildUploadResponse(MediaPoisonService.UploadOutcome outcome) {
+        // Return the homeserver body EXACTLY as the homeserver would (UI compose
+        // logic untouched) + a server-owned cloak block the badge reads from.
+        Map<String, Object> body = new LinkedHashMap<>(outcome.homeserver());
+        var d = outcome.decision();
+        body.put("cloak", Map.of(
+                "status", d.status(),
+                "mode", d.mode(),
+                "backend", d.backend() == null ? "none" : d.backend(),
+                "mediaRef", d.mediaRef() == null ? "" : d.mediaRef()));
+        return body;
     }
 
     @Operation(summary = "AI-cloak capability (worker backend + modes + ETA) for the shield state.")
     @GetMapping("/capability")
     public Mono<Map<String, Object>> capability(@AuthenticationPrincipal Jwt jwt) {
-        return service.capability().map(h -> {
-            Map<String, Object> out = new LinkedHashMap<>();
-            String backend = h.backend() == null ? "none" : h.backend();
-            out.put("backend", backend);
-            out.put("available", !"none".equals(backend));
-            out.put("modes", h.modes() == null ? java.util.List.of() : h.modes());
-            out.put("etaSeconds", h.etaSeconds());
-            out.put("defaultMode", props.getDefaultMode());
-            out.put("fallbackMode", props.fallback().name().toLowerCase());
-            out.put("featureEnabled", props.isEnabled());
-            return out;
-        });
+        // Map the worker health response to the UI-facing capability document.
+        return service.capability().map(this::buildCapabilityResponse);
+    }
+
+    /** Shape the worker health into the UI-facing capability document (backend/modes/ETA/policy). */
+    private Map<String, Object> buildCapabilityResponse(PoisonModels.Health h) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String backend = h.backend() == null ? "none" : h.backend();
+        out.put("backend", backend);
+        out.put("available", !"none".equals(backend));
+        out.put("modes", h.modes() == null ? java.util.List.of() : h.modes());
+        out.put("etaSeconds", h.etaSeconds());
+        out.put("defaultMode", props.getDefaultMode());
+        out.put("fallbackMode", props.fallback().name().toLowerCase());
+        out.put("featureEnabled", props.isEnabled());
+        return out;
     }
 
     @Operation(summary = "My cloak decision for a media ref (badge polling), owner-scoped.")

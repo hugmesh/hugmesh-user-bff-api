@@ -76,20 +76,24 @@ public class SelfSilenceExpiryAction {
 
     /** Un-hide + clear one overdue silence (or skip it if the user is banned). Returns 1 if cleared, else 0. */
     private Mono<Long> wake(SelfSilence s) {
-        return isBanned(s.userId()).flatMap(banned -> {
-            if (banned) {
-                log.info("[self-silence] skipping wake for {} — active ban dominates (not un-hiding)", s.userId());
-                return Mono.just(0L);
-            }
-            // localpart == user_id fallback on the scheduled path (no request JWT /
-            // stored localpart); the homeserver un-hide seams are best-effort + gated.
-            return silence.clearHides(s.userId())
-                    // SYSTEM clear (unscoped): the expiry sweep auto-clears overdue
-                    // silences across ALL brands — it is a platform task, not a
-                    // per-principal mutation. See SelfSilenceRepository.clearSystem.
-                    .then(repo.clearSystem(s.userId()))
-                    .doOnSuccess(c -> { if (c > 0) log.info("[self-silence] auto-cleared expired silence for {}", s.userId()); });
-        });
+        // Check ban dominance before un-hiding; a banned user's silence must not be lifted.
+        return isBanned(s.userId()).flatMap(banned -> performWake(banned, s.userId()));
+    }
+
+    /** Skip the wake if the user is actively banned; otherwise un-hide all legs then stamp cleared_at. */
+    private Mono<Long> performWake(boolean banned, String userId) {
+        if (banned) {
+            log.info("[self-silence] skipping wake for {} — active ban dominates (not un-hiding)", userId);
+            return Mono.just(0L);
+        }
+        // localpart == user_id fallback on the scheduled path (no request JWT /
+        // stored localpart); the homeserver un-hide seams are best-effort + gated.
+        return silence.clearHides(userId)
+                // SYSTEM clear (unscoped): the expiry sweep auto-clears overdue
+                // silences across ALL brands — it is a platform task, not a
+                // per-principal mutation. See SelfSilenceRepository.clearSystem.
+                .then(repo.clearSystem(userId))
+                .doOnSuccess(c -> { if (c > 0) log.info("[self-silence] auto-cleared expired silence for {}", userId); });
     }
 
     /**

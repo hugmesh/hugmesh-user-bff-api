@@ -51,6 +51,9 @@
     "name" : "Notifications (in-app floor)",
     "description" : "The caller's OWN in-app notifications (owner = JWT subject, domain-scoped). The always-on in-app channel — read + mark-read only; the actions reconciler writes them."
   }, {
+    "name" : "Sessions",
+    "description" : "The caller's OWN active login sessions (owner = JWT-derived account). List + revoke."
+  }, {
     "name" : "Connected clients",
     "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."
   }, {
@@ -508,7 +511,59 @@
         },
         "responses" : {
           "200" : {
-            "description" : "OK",
+            "description" : "Instance-block recommendation submitted to federation-api. Starts the USER->MOD->ADMIN chain.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Missing instance.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Caller lacks ROLE_MATRIX or ROLE_MASTODON (API leg + service leg re-check).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "federation-api unreachable or returned an error.",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -730,7 +785,33 @@
         "operationId" : "mine",
         "responses" : {
           "200" : {
-            "description" : "OK",
+            "description" : "The caller's own self-blocks (may be empty).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserBlock"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserBlock"
+                  }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Principal lacks ROLE_USER.",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -747,6 +828,7 @@
       "post" : {
         "tags" : [ "Self-block" ],
         "summary" : "Create a self-block (durable row + best-effort external push). Platform-role gated.",
+        "description" : "Records a durable <code>user_block</code> row under the JWT subject,\nthen best-effort pushes to the external homeserver (Matrix/Mastodon; STUBBED by default).\nThe row is the source of truth even if the external push is stubbed or fails.\n\n<h4>Caller-role access matrix</h4>\n<table>\n  <tr><th>Platform</th><th>Required role (API leg + service leg)</th></tr>\n  <tr><td>internal (or absent)</td><td>ROLE_USER floor — no platform role needed</td></tr>\n  <tr><td>matrix</td><td>ROLE_MATRIX (platform access role)</td></tr>\n  <tr><td>mastodon</td><td>ROLE_MASTODON (platform access role)</td></tr>\n</table>\nThe rule is enforced by <code>@PreAuthorize</code> (API leg) AND re-checked in\n<code>BlockService</code> (service leg / defence-in-depth).\n",
         "operationId" : "block",
         "requestBody" : {
           "content" : {
@@ -760,7 +842,59 @@
         },
         "responses" : {
           "200" : {
-            "description" : "OK",
+            "description" : "Block recorded. 'pushed' indicates whether a live external push ran. 'external' is 'live', 'stubbed', or 'n/a'.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Missing target, blank platform, or platform not in matrix|mastodon|internal.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "ROLE_MATRIX required for platform=matrix; ROLE_MASTODON for platform=mastodon (API leg + service leg re-check).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "500" : {
+            "description" : "Database error writing the block row.",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -871,6 +1005,28 @@
                   "type" : "object",
                   "additionalProperties" : {
                     "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/sessions" : {
+      "get" : {
+        "tags" : [ "Sessions" ],
+        "summary" : "List my active login sessions (owner = JWT-derived account; ids are opaque fingerprints, never the raw session token).",
+        "operationId" : "listMine",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/UserSession"
                   }
                 }
               }
@@ -1019,7 +1175,33 @@
         "operationId" : "mine_1",
         "responses" : {
           "200" : {
-            "description" : "OK",
+            "description" : "The caller's connected apps + device sessions. Merges durable audit rows with live homeserver read (best-effort, may be empty when seams are stubbed).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ConnectedClient"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ConnectedClient"
+                  }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Caller lacks ROLE_MATRIX_EXTERNAL_CLIENT or ROLE_MASTODON_EXTERNAL_CLIENT.",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -1189,10 +1371,31 @@
         }
       }
     },
+    "/bff/user/sessions/{id}" : {
+      "delete" : {
+        "tags" : [ "Sessions" ],
+        "summary" : "Revoke one of my sessions by its opaque id. A foreign/unknown id is a generic 404 (anti-enumeration). Revoking my own current session is allowed.",
+        "operationId" : "revokeMine",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
     "/bff/user/connected-clients/{id}" : {
       "delete" : {
         "tags" : [ "Connected clients" ],
         "summary" : "Revoke one of my connected clients (per-credential gateway key + best-effort homeserver delete + audit stamp).",
+        "description" : "Revokes one of the caller's own connected clients by its audit-row id.\nRevocation order: (1) write the per-credential gateway key\n<code>hs:<platform>:<localpart>:<externalRef></code> (gateway denies future use within &#x2264;5s),\n(2) best-effort DELETE at the homeserver, (3) stamp <code>revoked_at</code> on the audit row.\nAll three steps are owner+domain scoped. Steps 2 and 3 are best-effort; the gateway key is\nthe durable enforcement.\n",
         "operationId" : "revoke",
         "parameters" : [ {
           "name" : "id",
@@ -1205,7 +1408,72 @@
         } ],
         "responses" : {
           "200" : {
-            "description" : "OK",
+            "description" : "Client revoked. 'revocationKey' is 'written' or 'stubbed'; 'upstream' is 'live' or 'stubbed'.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "id is not a valid UUID.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Caller lacks the external-client role for the client's platform (service leg re-check).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "No such active connected client for this user.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
+          "500" : {
+            "description" : "Database error.",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -1235,8 +1503,20 @@
           }
         } ],
         "responses" : {
-          "200" : {
-            "description" : "OK"
+          "204" : {
+            "description" : "Block removed."
+          },
+          "400" : {
+            "description" : "id is not a valid UUID."
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT."
+          },
+          "404" : {
+            "description" : "No such block for this user (or wrong domain)."
+          },
+          "500" : {
+            "description" : "Database error."
           }
         }
       }
@@ -1706,6 +1986,22 @@
             "maxLength" : 64,
             "minLength" : 0,
             "type" : "string"
+          }
+        }
+      },
+      "UserSession" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "expiresAt" : {
+            "type" : "string",
+            "format" : "date-time"
           }
         }
       },
