@@ -1,7 +1,5 @@
 package systems.snapdragon.userbff.hsproxy;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -43,8 +41,6 @@ import java.util.function.BiFunction;
  */
 public class HsReverseProxy {
 
-    private static final Logger log = LoggerFactory.getLogger(HsReverseProxy.class);
-
     /** Hop-by-hop + identity headers we never forward inbound→upstream. The inbound
      *  Authorization (the Casdoor bearer) is dropped here — the native token replaces it. */
     private static final Set<String> STRIP_REQUEST_HEADERS = Set.of(
@@ -69,11 +65,9 @@ public class HsReverseProxy {
             Set.of(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE);
 
     private final WebClient upstream;
-    private final String platform;
 
-    public HsReverseProxy(WebClient upstream, String platform) {
+    public HsReverseProxy(WebClient upstream) {
         this.upstream = upstream;
-        this.platform = platform;
     }
 
     /**

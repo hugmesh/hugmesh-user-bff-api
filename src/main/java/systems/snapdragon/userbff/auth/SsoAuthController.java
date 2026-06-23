@@ -92,7 +92,7 @@ public class SsoAuthController {
         if (token == null) {
             return Mono.just(ResponseEntity.noContent().build());
         }
-        return adminBff.deleteSession(token).thenReturn(expireCookie(exchange));
+        return adminBff.deleteSession(token).thenReturn(expireCookie());
     }
 
     @Operation(summary = "The caller's account view (from admin-bff). Authenticated. "
@@ -139,7 +139,7 @@ public class SsoAuthController {
         return builder.body(body);
     }
 
-    private ResponseEntity<Void> expireCookie(ServerWebExchange exchange) {
+    private ResponseEntity<Void> expireCookie() {
         if (cookies.enabled()) {
             ResponseCookie expired = cookies.expire();
             return ResponseEntity.noContent().header("Set-Cookie", expired.toString()).build();

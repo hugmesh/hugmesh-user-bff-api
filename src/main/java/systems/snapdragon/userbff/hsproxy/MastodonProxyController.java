@@ -50,7 +50,7 @@ public class MastodonProxyController {
         this.enabled = enabled;
         this.custody = custody;
         this.broker = broker;
-        this.proxy = new HsReverseProxy(mastodonProxyWebClient, HsServiceTokenRow.PLATFORM_MASTODON);
+        this.proxy = new HsReverseProxy(mastodonProxyWebClient);
     }
 
     @Operation(summary = "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.")
