@@ -92,11 +92,17 @@ for the user-facing slice of it. Ground truth as of 2026-06-20:
 
 > ✅ Already on `main` here: the JWT-only `/bff/user/**` surfaces, the Casdoor
 > resource-server config, the canonical `CasdoorAuthorities` converter, and
-> issuer-keyed domain-scoping. 🚧 In-flight / landing: the server-side code→token
-> exchange + `bff_` session custody + the admin-bff `/bff/internal` account/session
-> data calls + the `snapdragon-auth-core` adoption. Until that lands, the historical
-> note still holds: registration is owned by admin-bff and there is no `/login` or
-> `/register` route here.
+> issuer-keyed domain-scoping. ✅ Also on `main` but **shipped DARK** (default-off
+> flags, fail-closed-stubbed, byte-identical runtime when off): the server-side
+> code→token exchange (`OidcCallbackController`, PKCE), the `bff_` session custody
+> (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
+> admin-bff `/bff/internal` account/session client (`AdminBffInternalClient`), and
+> the `snapdragon-auth-core` adoption. 🚧 What genuinely remains is the **live
+> flag-flip** (gating off `app.bff.oidc.enabled` / `app.bff.custody-key` /
+> `app.internal.token`, pinning the admin-bff #112 contract + the cross-repo egress
+> NetworkPolicy) and **SSO e2e**. Until that flip, login stays operationally owned by
+> admin-bff: the new `/bff/login` + `/bff/register` routes exist but 503 / are inert
+> while the flags are off.
 
 ## The core invariant: owner-enforcement
 
@@ -621,11 +627,16 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 
 ## Honest deferrals
 
-- **SSO code→token exchange + `bff_` session custody is landing, not yet on `main`.**
-  The JWT-only `/bff/user/**` resource-server surfaces are shipped; the server-side
+- **SSO code→token exchange + `bff_` session custody are on `main` but ship DARK.**
+  The JWT-only `/bff/user/**` resource-server surfaces are live; the server-side
   authorization-code exchange, the per-session JWT custody/refresh, the `bff_`
-  opaque-session, and the admin-bff `/bff/internal` account/session data calls are the
-  in-flight relocation slice. Until merged, registration/login stay owned by admin-bff.
+  opaque-session, and the admin-bff `/bff/internal` account/session data calls are
+  **merged and inert** behind default-off flags (`app.bff.oidc.enabled`,
+  `app.bff.custody-key`, `app.internal.token`) — fail-closed-stubbed, with a
+  byte-identical runtime when off. What remains is the **live flag-flip** (pin the
+  admin-bff #112 contract + the cross-repo egress NetworkPolicy) and **SSO e2e**, not
+  a code merge. Until the flip, registration/login stay operationally owned by
+  admin-bff.
 - **External Matrix / Mastodon block push is STUBBED.** The clients implement the
   documented shapes (Matrix `PUT .../account_data/m.ignored_user_list`; Mastodon
   `GET /api/v1/accounts/lookup` then `POST /api/v1/accounts/{id}/block`) and the
@@ -697,13 +708,16 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI.
-- 🚧 **SSO relocation** (the headline this cycle): server-side OIDC code→token
-  exchange, per-session JWT custody/refresh, the browser-side opaque `bff_` session,
-  and the admin-bff `/bff/internal` account/session data calls — moving the
-  user-facing login/session/account slice from admin-bff into this BFF.
-- 🚧 **`snapdragon-auth-core:2.0.0` adoption** — the shared account/session/MFA/
-  Casdoor-admin core (depends on commons; consumed by user-bff + admin-bff only),
-  landing with the relocation.
+- ✅ **SSO relocation — on `main`, ships DARK** (the headline this cycle): server-side
+  OIDC code→token exchange, per-session JWT custody/refresh, the browser-side opaque
+  `bff_` session, the `/bff/login,/register,/session,/me` surface, and the admin-bff
+  `/bff/internal` account/session client — merged and inert behind default-off flags
+  (`app.bff.oidc.enabled` / `app.bff.custody-key` / `app.internal.token`),
+  fail-closed-stubbed, byte-identical runtime when off. The **live flag-flip + SSO
+  e2e** is the only remaining work (🚧, see Roadmap) — the code itself is merged.
+- ✅ **`snapdragon-auth-core:2.0.0` adoption — on `main`** — the shared account/session/
+  MFA/Casdoor-admin core (depends on commons; consumed by user-bff + admin-bff only),
+  pinned in `pom.xml` and `@Import`ed (active under the SSO flags above).
 - 🚧 **Edge authz alignment:** the gateway is a pure Casdoor-JWT RS that swaps
   `bff_` → the internal custody JWT (pre-security filter) and gates routes from the
   `gateway_route_access` Postgres table via `GatewayRouteAccessFilter`; SCG-5 moved
@@ -716,10 +730,13 @@ Everything in the sections above is ✅ shipped on `main` unless explicitly mark
 otherwise; the items below are NOT yet shipped here.
 
 ### SSO end-to-end + e2e 🚧 in-flight
-The relocation slice above is the active work: complete the code→token exchange +
-`bff_` session custody + admin-bff `/bff/internal` legs and prove SSO login
-end-to-end (including a browser e2e through `login-ui` → gateway → this BFF), with
-Cloudflare fronting prod.
+The relocation **code** is merged on `main` but ships DARK (see *Auth model* +
+*Current State*). The active work is now the **live flag-flip + e2e**, not a code
+merge: pin the admin-bff #112 internal contract, add the cross-repo egress
+NetworkPolicy peer, flip the default-off flags (`app.bff.oidc.enabled` /
+`app.bff.custody-key` / `app.internal.token`), and prove SSO login end-to-end
+(including a browser e2e through `login-ui` → gateway → this BFF), with Cloudflare
+fronting prod.
 
 <a id="notifications-roadmap"></a>
 ### Notifications — external channels 🚧 in-flight
