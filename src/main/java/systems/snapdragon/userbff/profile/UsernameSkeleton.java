@@ -61,7 +61,7 @@ public final class UsernameSkeleton {
     private static final Set<String> RESERVED_SKELETONS = buildReservedSkeletons();
 
     private static Set<String> buildReservedSkeletons() {
-        Set<String> out = new HashSet<>();
+        var out = new HashSet<String>();
         for (String label : ReservedNames.RESERVED) {
             // Reserved labels are ASCII and free of invisibles, so skeleton() never
             // throws here; guard anyway so a future list addition can't break load.
@@ -75,10 +75,14 @@ public final class UsernameSkeleton {
     }
 
     /**
-     * Whether {@code s} contains a forbidden invisible / direction-control code point
-     * — default-ignorable, format (Cf), zero-width, or bidi-control. These are
+     * Whether {@code s} contains a forbidden invisible or direction-control code
+     * point — default-ignorable, format (Cf), zero-width, or bidi-control. These are
      * rejected outright (a name is never allowed to carry them), independent of any
      * confusable fold. Used by the displayName charset guard.
+     *
+     * @param s the string to inspect (may be {@code null})
+     * @return {@code true} when at least one forbidden code point is found;
+     *         {@code false} when the string is {@code null} or contains none
      */
     public static boolean hasForbiddenInvisible(String s) {
         if (s == null) {
@@ -110,10 +114,15 @@ public final class UsernameSkeleton {
     }
 
     /**
-     * The canonical confusable skeleton of {@code candidate}.
+     * The canonical confusable skeleton of {@code candidate} using the 6-step
+     * algorithm (lowercase → forbiddenInvisible check → NFKD+stripMn → leet-map →
+     * ICU getSkeleton → stripSeparators → collapseRepeats≥3).
      *
-     * @throws ConfusableException if the candidate carries a forbidden invisible /
-     *         bidi-control code point (it cannot be safely folded and is rejected).
+     * @param candidate the username or display-name candidate (may be {@code null})
+     * @return the normalised skeleton string (never {@code null}; empty for
+     *         {@code null} input)
+     * @throws ConfusableException if the candidate carries a forbidden invisible or
+     *         bidi-control code point (it cannot be safely folded and is rejected)
      */
     public static String skeleton(String candidate) {
         if (candidate == null) {
@@ -204,9 +213,16 @@ public final class UsernameSkeleton {
         return out.toString();
     }
 
-    /** Whether {@code candidate}'s skeleton equals a reserved-label skeleton. Used to
-     *  reject reserved-confusables ({@code 4dmin~admin}, {@code akk0ma~akkoma}) — this
-     *  NEVER weakens the exact {@link ReservedNames#isReserved} rule, only widens it. */
+    /**
+     * Whether {@code candidate}'s skeleton equals a reserved-label skeleton. Used to
+     * reject reserved-confusables ({@code 4dmin~admin}, {@code akk0ma~akkoma}) — this
+     * NEVER weakens the exact {@link ReservedNames#isReserved} rule, only widens it.
+     *
+     * @param candidate the username or display-name candidate (may be {@code null})
+     * @return {@code true} when the candidate's skeleton matches a pre-computed
+     *         reserved-label skeleton; {@code false} when null/blank, when carrying
+     *         a forbidden invisible (skeleton rejected), or when no reserved match
+     */
     public static boolean isReservedConfusable(String candidate) {
         if (candidate == null || candidate.isBlank()) {
             return false;

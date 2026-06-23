@@ -24,37 +24,63 @@ import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 
 /**
- * Casdoor-aware OAuth2 resource-server security for the user BFF (reactive
- * WebFlux). {@code @EnableReactiveMethodSecurity} activates any {@code @PreAuthorize}
- * gates on the controllers. The JWT→authority mapping is delegated to the shared
- * {@link CasdoorAuthorities} converter — COPIED (logic) from the adversarially-
- * verified-safe snapdragon-gateway so the BFF and the gateway emit BYTE-IDENTICAL
- * authorities, including the reserved-prefix injection guard on {@code permissions}
- * and exactly one issuer-derived {@code DOMAIN_<x>} tenant authority.
+ * Casdoor-aware OAuth2 resource-server security for the user BFF (reactive WebFlux).
  *
- * <p>This BFF's floor is {@code ROLE_USER}: the converter adds {@code ROLE_USER} to
- * every authenticated principal, so the entire {@code /bff/user/**} surface is gated
- * to "any authenticated caller" (i.e. ROLE_USER). Owner-enforcement (owner = JWT
- * subject) is applied IN the controllers/services — the security layer only proves
- * authentication, the service layer proves ownership AND domain-scope (a principal
- * only sees/mutates rows in its own {@code DOMAIN_<x>}; SUPERADMIN is unscoped).
+ * <h2>Responsibilities</h2>
  *
- * <p><b>SSO LOGIN RELOCATION.</b> user-bff now OWNS the login leg: the OIDC redirect
- * callback ({@code /bff/auth/callback}) plus the {@code /bff/login} / {@code /bff/register}
- * / {@code /bff/session} entrypoints are PRE-AUTH ({@code permitAll}) — they are how a
- * caller obtains the opaque {@code bff_} session in the first place, so they cannot
+ * <ul>
+ *   <li>Validates inbound Casdoor JWTs (single or per-brand multi-issuer mode).</li>
+ *   <li>Maps JWT claims to Spring {@code GrantedAuthority} instances via
+ *       {@link CasdoorAuthorities} — the SAME logic as the gateway so the BFF and
+ *       the gateway emit byte-identical authorities, including the
+ *       reserved-prefix injection guard and the issuer-derived {@code DOMAIN_<x>}
+ *       tenant authority.</li>
+ *   <li>Publishes the {@link RoleHierarchy} bean that lets {@code @PreAuthorize}
+ *       and the spec-path gate treat {@code ROLE_SUPERADMIN} as a strict superset
+ *       of every other role.</li>
+ * </ul>
+ *
+ * <h2>Authorization floor</h2>
+ *
+ * <p>The floor for the entire {@code /bff/user/**} surface is "any authenticated
+ * caller" ({@code .authenticated()}), which is equivalent to {@code ROLE_USER} because
+ * the converter always adds that authority.  Owner-enforcement (owner = JWT subject)
+ * and domain-scope enforcement ({@code DOMAIN_<x>}) are applied in the service layer —
+ * not here.
+ *
+ * <h2>SSO login relocation</h2>
+ *
+ * <p>user-bff now OWNS the login leg: the OIDC redirect callback
+ * ({@code /bff/auth/callback}) plus the {@code /bff/login} / {@code /bff/register}
+ * / {@code /bff/session} entrypoints are PRE-AUTH ({@code permitAll}) — they are how
+ * a caller obtains the opaque {@code bff_} session in the first place, so they cannot
  * require the JWT they have not yet got. This whole surface SHIPS DARK behind
- * {@code app.bff.oidc.enabled=false} (every handler 503s / fail-closes when the flag is
- * off), so {@code permitAll} only EXPOSES the routes — it authenticates no one. The
- * authenticated read-back ({@code /bff/me}) deliberately stays behind the floor
- * (matches admin-bff).
+ * {@code app.bff.oidc.enabled=false} (every handler 503s / fail-closes when the flag
+ * is off), so {@code permitAll} only EXPOSES the routes — it authenticates no one.
  *
- * <p><b>Multi-issuer is OPT-IN + backward-compatible.</b> When
- * {@code app.tenancy.issuers} carries per-brand issuer=domain pairs
- * ({@link TenancyResourceServerConfig} contributes a resolver AND the registry is
- * {@link DomainRegistry#isMultiIssuer()}), each trusted per-brand Casdoor validates
- * its own tokens (unknown {@code iss} → 401). Otherwise the resource server stays on
- * the existing single {@code o.jwt(...)} issuer-uri path — byte-for-byte unchanged.
+ * <h2>Multi-issuer is OPT-IN and backward-compatible</h2>
+ *
+ * <p>When {@code app.tenancy.issuers} carries per-brand issuer=domain pairs,
+ * {@link TenancyResourceServerConfig} contributes a per-issuer resolver and the
+ * {@link DomainRegistry#isMultiIssuer()} check ensures the swap only happens for a
+ * genuine multi-brand deployment.  A single-issuer cluster keeps the existing
+ * {@code o.jwt(...)} issuer-uri path byte-for-byte unchanged.
+ *
+ * <h2>Caller-role access matrix (spec + user surface)</h2>
+ *
+ * <pre>
+ *  Path                          │ dev/test profile  │ prod profile (default)
+ *  ──────────────────────────────┼───────────────────┼───────────────────────
+ *  /actuator/health[/**], /info  │ public            │ public
+ *  /bff/user/**                  │ authenticated     │ authenticated
+ *  /v3/api-docs/**, /swagger-ui/** │ public          │ ROLE_ADMIN or SUPERADMIN
+ *  everything else               │ authenticated     │ authenticated
+ * </pre>
+ *
+ * @see CasdoorAuthorities
+ * @see DomainRegistry
+ * @see TenancyResourceServerConfig
+ * @see PrincipalDomain
  */
 @Configuration
 @EnableWebFluxSecurity
@@ -269,10 +295,11 @@ public class SecurityConfig {
      */
     @Bean
     RoleHierarchy roleHierarchy() {
-        return RoleHierarchyImpl.fromHierarchy(
-                "ROLE_SUPERADMIN > ROLE_ADMIN\n" +
-                "ROLE_SUPERADMIN > ROLE_MOD\n" +
-                "ROLE_SUPERADMIN > ROLE_USER");
+        return RoleHierarchyImpl.fromHierarchy("""
+                ROLE_SUPERADMIN > ROLE_ADMIN
+                ROLE_SUPERADMIN > ROLE_MOD
+                ROLE_SUPERADMIN > ROLE_USER
+                """);
     }
 
     private ReactiveJwtAuthenticationConverter jwtConverter() {

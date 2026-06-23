@@ -16,35 +16,63 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Orchestrates POISON-BEFORE-INGEST: the server-owned media-proxy that the UIs route
- * uploads through so bytes are AI-cloaked before any homeserver sees them, owning every
- * served size, with the policy recorded server-side. EVERY method takes the owner (the
- * JWT subject) and records the decision under that owner — the badge/repost source of
- * truth can never be set by the client.
+ * Orchestrates POISON-BEFORE-INGEST — the server-owned media-proxy.
  *
- * <p>The flow for an image with {@code mode != none} (and the feature enabled):
- * <ol>
- *   <li>magic-byte sniff (server-side, never the client Content-Type): a NON-image is
- *       forwarded through unchanged with {@code status=none};</li>
- *   <li>probe the worker {@code /health}: ABSENT (backend none) ⇒ the LEAN FALLBACK
- *       (forward-through + {@code status=skipped}, or the light-CPU path if configured
- *       and the worker offers CPU) so the post is never blocked and the UI can warn
- *       "not cloaked";</li>
- *   <li>PRESENT ⇒ submit the poison job (original + every pinned served size); on
- *       worker failure record {@code failed} + forward the ORIGINAL through (honest:
- *       no false "protected");</li>
- *   <li>do the REAL homeserver upload of the POISONED bytes via the mTLS proxy and
- *       capture the {@code media_id}/{@code mxc};</li>
- *   <li>ROUND-TRIP SURVIVAL GATE: re-fetch the served original + thumbnails and run the
- *       perturbation-presence check; persist {@code protected} ONLY if it survived, else
- *       {@code degraded};</li>
- *   <li>record the {@code media_poison_decision} row and return the homeserver response
- *       EXACTLY as the homeserver would (so the UI compose logic is untouched) + the
- *       server-owned status.</li>
- * </ol>
+ * <h2>Responsibility</h2>
+ *
+ * <p>The UIs route image uploads through this service so bytes are AI-cloaked before
+ * any homeserver sees them. The cloak policy and honest outcome are recorded
+ * server-side. EVERY method takes the owner (the JWT subject) and records the
+ * decision under that owner — the badge/repost source of truth can never be set by
+ * the client.
+ *
+ * <h2>End-to-end reactive pipeline (image upload, mode != none, feature enabled)</h2>
+ *
+ * <pre>
+ *   upload(owner, platform, requestedMode, bytes, ...)
+ *       │
+ *       ├─ [non-image by magic bytes OR mode=none OR feature-off]
+ *       │        ▼
+ *       │   forwardThrough(status="none")           ← upload unchanged + record
+ *       │
+ *       └─ [image, mode != none, feature on]
+ *                │
+ *                ▼
+ *           worker.capability()                     ← GET /health
+ *                │  Mono&lt;Health&gt;
+ *                ├─ [backend = NONE  → heavy tier absent]
+ *                │        ▼
+ *                │   leanFallback(status="skipped") ← upload original + record
+ *                │
+ *                └─ [backend present]
+ *                         ▼
+ *                    worker.poison(bytes, mode, ...)     ← POST /poison
+ *                         │  Mono&lt;PoisonResult&gt;
+ *                         ├─ [empty/ok=false]
+ *                         │       ▼
+ *                         │   forwardThrough(status="failed") ← upload original + record
+ *                         │
+ *                         └─ [ok=true, poisonedOriginal present]
+ *                                  ▼
+ *                             homeserver.upload(platform, poisonedOriginal, ...)
+ *                                  │  Mono&lt;Map&gt;  (homeserver response: id/url/mxc)
+ *                                  ▼
+ *                             survivalGate(platform, mode, poisoned, result, hs)
+ *                                  │  Mono&lt;Boolean&gt;  (all served sizes still carry cloak)
+ *                                  ▼
+ *                             record(owner, ..., survived ? "protected" : "degraded")
+ *                                  │  Mono&lt;MediaPoisonDecision&gt;
+ *                                  ▼
+ *                             UploadOutcome(homeserverResponse, decision)
+ * </pre>
  *
  * <p>{@code mode=none} (opt-out) and a disabled feature forward straight through with
  * {@code status=none}. The expensive cloak only ever runs server-side, pre-ingest.
+ *
+ * @see MediaPoisonDecisionRepository
+ * @see PoisonWorkerClient
+ * @see HomeserverMediaClient
+ * @see MediaPoisoningProperties
  */
 @Service
 public class MediaPoisonService {
@@ -66,22 +94,67 @@ public class MediaPoisonService {
         this.props = props;
     }
 
-    /** The result the controller returns to the UI: the homeserver response verbatim +
-     *  the server-owned decision. */
+    // -------------------------------------------------------------------------
+    // Public API
+    // -------------------------------------------------------------------------
+
+    /**
+     * The result the controller returns to the UI: the homeserver response verbatim
+     * (so the compose logic is untouched) + the server-owned AI-cloak decision.
+     *
+     * @param homeserver the raw homeserver upload response ({@code id}/{@code url}/
+     *                   {@code content_uri} — whatever the platform returned)
+     * @param decision   the durable {@code media_poison_decision} row, with the
+     *                   honest {@code status} ({@code protected|degraded|skipped|
+     *                   none|failed})
+     */
     public record UploadOutcome(Map<String, Object> homeserver, MediaPoisonDecision decision) {}
 
     /**
-     * Poison-then-forward (or forward-through) one upload. {@code owner} is the JWT
-     * subject (never a body field). {@code requestedMode} is the UI's choice; the
-     * service resolves the effective mode + honest status server-side.
+     * Back-compat overload — stamps the decision in the platform {@code default} domain.
+     *
+     * @param owner               the caller's JWT subject
+     * @param platform            {@code matrix|mastodon}
+     * @param requestedMode       the UI's requested cloak mode ({@code glaze|
+     *                            nightshade|light|none}); {@code null}/blank defaults
+     *                            to the server's configured {@code defaultMode}
+     * @param bytes               the raw upload bytes; must be non-empty and within
+     *                            {@code maxUploadBytes}
+     * @param filename            original filename (advisory; used as a worker hint)
+     * @param declaredContentType the client-supplied Content-Type (advisory only;
+     *                            the real type is sniffed from magic bytes)
+     * @return a {@code Mono} emitting the {@link UploadOutcome}
      */
-    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
     public Mono<UploadOutcome> upload(String owner, String platform, String requestedMode,
                                       byte[] bytes, String filename, String declaredContentType) {
         return upload(owner, platform, requestedMode, bytes, filename, declaredContentType,
                 DomainRegistry.DEFAULT_DOMAIN);
     }
 
+    /**
+     * Poison-then-forward (or forward-through) one upload.
+     *
+     * <p>{@code owner} is the JWT subject (never a body field).
+     * {@code requestedMode} is the UI's choice; the service resolves the effective
+     * mode + honest status server-side (sniffs bytes, probes worker, runs gate).
+     *
+     * @param owner               the caller's JWT subject (never a request field)
+     * @param platform            {@code matrix|mastodon}
+     * @param requestedMode       the UI's requested cloak mode; defaults to
+     *                            {@link MediaPoisoningProperties#getDefaultMode()}
+     *                            when null/blank
+     * @param bytes               raw upload bytes; must be non-empty and within
+     *                            the configured {@code maxUploadBytes}
+     * @param filename            original filename (advisory; forwarded to the
+     *                            worker and the homeserver)
+     * @param declaredContentType advisory client Content-Type; the actual type is
+     *                            always re-sniffed from magic bytes server-side
+     * @param domain              the caller's validated-issuer brand; {@code null}
+     *                            = SUPERADMIN cross-domain bypass
+     * @return a {@code Mono} emitting the {@link UploadOutcome}
+     * @throws ApiException 400 on invalid {@code platform}, invalid {@code mode},
+     *                      empty bytes, or bytes exceeding the max size
+     */
     public Mono<UploadOutcome> upload(String owner, String platform, String requestedMode,
                                       byte[] bytes, String filename, String declaredContentType,
                                       String domain) {
@@ -124,12 +197,26 @@ public class MediaPoisonService {
         });
     }
 
+    // -------------------------------------------------------------------------
+    // Pipeline stages
+    // -------------------------------------------------------------------------
+
     /**
-     * The lean fallback when the heavy tier is absent. Default {@code skip}: forward the
-     * ORIGINAL through with {@code status=skipped} (UI warns "not cloaked"). {@code light}/
-     * {@code queue} also forward-through here (the light-CPU/queue paths attach to a
-     * present worker; an ABSENT worker can do neither) — but the configured intent is
-     * recorded so telemetry distinguishes the gap.
+     * The lean fallback when the heavy tier is absent. Default behaviour ({@code skip}):
+     * forward the ORIGINAL through with {@code status=skipped} so the UI can warn
+     * "not cloaked". {@code light}/{@code queue} also forward-through here — the
+     * light-CPU/queue paths attach to a PRESENT worker; an ABSENT worker can do
+     * neither — but the configured intent is recorded so telemetry distinguishes the gap.
+     *
+     * @param owner       the caller's JWT subject (for the decision row)
+     * @param platform    target homeserver platform
+     * @param mode        the originally-requested cloak mode (recorded in the row)
+     * @param bytes       the upload bytes (forwarded unchanged)
+     * @param filename    original filename
+     * @param contentType sniffed content type
+     * @param domain      caller's tenant domain
+     * @return a {@code Mono} emitting the {@link UploadOutcome} with
+     *         {@code status=skipped}
      */
     private Mono<UploadOutcome> leanFallback(String owner, String platform, String mode,
                                              byte[] bytes, String filename, String contentType,
@@ -142,9 +229,21 @@ public class MediaPoisonService {
     }
 
     /**
-     * Poison the bytes (original + every pinned size), upload the POISONED original via
-     * the mTLS proxy, then run the survival gate. On worker failure: record {@code failed}
-     * and forward the ORIGINAL through (never a false "protected").
+     * Poison the bytes (original + every pinned served size), upload the POISONED
+     * original via the mTLS proxy, then run the survival gate. On worker failure:
+     * record {@code failed} and forward the ORIGINAL through (never a false
+     * {@code protected}).
+     *
+     * @param owner    the caller's JWT subject
+     * @param platform target homeserver platform
+     * @param mode     the cloak mode ({@code glaze|nightshade|light})
+     * @param probed   the worker backend reported by the {@code /health} probe
+     * @param bytes    the raw original upload bytes
+     * @param filename original filename
+     * @param contentType sniffed content type
+     * @param domain   caller's tenant domain
+     * @return a {@code Mono} emitting the {@link UploadOutcome} with
+     *         {@code status=protected|degraded|failed|skipped}
      */
     private Mono<UploadOutcome> cloakThenForward(String owner, String platform, String mode,
                                                  Backend probed, byte[] bytes, String filename,
@@ -213,13 +312,24 @@ public class MediaPoisonService {
     }
 
     /**
-     * The ROUND-TRIP SURVIVAL GATE. Re-fetch the served original + each thumbnail size
-     * and run the perturbation-presence check; the cloak counts as surviving ONLY if
-     * the original AND every re-fetched thumbnail still carry it. A thumbnail we could
-     * not re-fetch is treated as not-surviving (fail-honest). If the homeserver response
-     * exposes no re-fetchable served URLs, fall back to checking the poisoned-original we
-     * just uploaded (still a real perturbation check, just not post-transcode) so the gate
-     * never silently passes.
+     * ROUND-TRIP SURVIVAL GATE: re-fetch the served original + each pinned thumbnail
+     * size and run the perturbation-presence check ({@link PoisonWorkerClient#checkSurvival}).
+     * The cloak is counted as surviving ONLY if the original AND every re-fetched
+     * thumbnail still carry the perturbation.
+     *
+     * <p>Fail-honest: a thumbnail we could not re-fetch counts as
+     * not-surviving (the gate never auto-passes on a fetch error). If the homeserver
+     * response exposes no re-fetchable served URLs, the gate falls back to checking
+     * the poisoned bytes we hold (pre-transcode) — still a real check, not a skip.
+     *
+     * @param platform        target platform ({@code matrix} or {@code mastodon});
+     *                        used to derive served URL paths from the HS response
+     * @param mode            the cloak mode that was applied (forwarded to the check)
+     * @param poisonedOriginal the poisoned bytes from the worker (used if no HS URLs)
+     * @param result          the poison result returned by the worker
+     * @param hs              the homeserver upload response (contains served URL hints)
+     * @return a {@code Mono<true>} when every served artifact still carries the
+     *         perturbation, {@code Mono<false>} when any artifact failed the check
      */
     Mono<Boolean> survivalGate(String platform, String mode, byte[] poisonedOriginal,
                                PoisonResult result, Map<String, Object> hs) {
@@ -261,27 +371,68 @@ public class MediaPoisonService {
         return worker.capability();
     }
 
-    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    /**
+     * Back-compat overload — scopes to the platform {@code default} domain.
+     *
+     * @param owner    the caller's JWT subject
+     * @param mediaRef the homeserver media reference ({@code content_uri} / akkoma id)
+     * @return a {@code Mono} emitting the most-recent decision, or 404
+     */
     public Mono<MediaPoisonDecision> status(String owner, String mediaRef) {
         return status(owner, mediaRef, DomainRegistry.DEFAULT_DOMAIN);
     }
 
-    /** The caller's most-recent decision for a media ref (badge poll), owner-AND-domain
-     *  scoped ({@code domain} null = SUPERADMIN cross-domain bypass). */
+    /**
+     * The caller's most-recent {@code media_poison_decision} for a media reference
+     * (the badge poll + already-cloaked repost guard). Owner-AND-domain-AND-ref
+     * scoped ({@code domain} null = SUPERADMIN cross-domain bypass).
+     *
+     * @param owner    the caller's JWT subject (never a request field)
+     * @param mediaRef the homeserver media reference ({@code mxc://...} for Matrix,
+     *                 the akkoma attachment id for Mastodon)
+     * @param domain   the caller's validated-issuer brand; {@code null} = SUPERADMIN
+     *                 cross-domain bypass
+     * @return a {@code Mono} emitting the most-recent decision row
+     * @throws ApiException 404 when no decision is found for this media in this domain
+     */
     public Mono<MediaPoisonDecision> status(String owner, String mediaRef, String domain) {
         requireOwner(owner);
         return repo.findByOwnerAndRef(owner, mediaRef, domain)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no decision for this media")));
     }
 
-    // ── helpers ────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
+    // Status query
+    // -------------------------------------------------------------------------
+
+    /** The caller's capability view (worker backend + offered modes + ETA) for the
+     *  media-poison badge. See {@link PoisonWorkerClient#capability()}.
+     *
+     * @return a {@code Mono} emitting the current worker {@link PoisonModels.Health};
+     *         never errors — a missing worker resolves to {@code backend=none}
+     */
+
+    // (capability() body below)
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
 
     private static String backendOf(PoisonResult r, Backend probed) {
         Backend b = r == null ? Backend.NONE : Backend.parse(r.backend());
         return (b.present() ? b : probed).wire();
     }
 
-    /** Extract the homeserver media ref EXACTLY as the homeserver returns it. */
+    /**
+     * Extract the homeserver media reference EXACTLY as the homeserver returned it —
+     * {@code content_uri} ({@code mxc://...}) for Matrix, the attachment {@code id}
+     * field for akkoma/Mastodon.  Returns {@code null} when the response carries no
+     * recognisable ref (abnormal but non-fatal — the decision row records {@code null}).
+     *
+     * @param platform the target platform ({@code matrix} or {@code mastodon})
+     * @param hs       the homeserver upload response map
+     * @return the media ref string, or {@code null}
+     */
     static String mediaRef(String platform, Map<String, Object> hs) {
         if (hs == null) return null;
         if ("matrix".equals(platform)) {
@@ -292,10 +443,20 @@ public class MediaPoisonService {
         return id == null ? null : id.toString();
     }
 
-    /** The re-fetchable served URLs from the homeserver response (akkoma url + preview_url;
-     *  Matrix derives a download path from the mxc). */
+    /**
+     * The re-fetchable served URLs from the homeserver upload response, used by
+     * {@link #survivalGate} to verify the perturbation survived homeserver
+     * transcoding.  For Matrix: derives {@code /_matrix/media/v3/download/...} and
+     * {@code /_matrix/media/v3/thumbnail/...} from the {@code content_uri} ({@code mxc://}).
+     * For akkoma/Mastodon: extracts {@code url} (original) and {@code preview_url}
+     * (small preview).
+     *
+     * @param platform the target platform ({@code matrix} or {@code mastodon})
+     * @param hs       the homeserver upload response map
+     * @return a non-null list of re-fetchable served URL strings; empty when none
+     */
     static List<String> servedUrls(String platform, Map<String, Object> hs) {
-        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        var out = new java.util.ArrayList<String>();
         if (hs == null) return out;
         if ("matrix".equals(platform)) {
             Object uri = hs.get("content_uri");
