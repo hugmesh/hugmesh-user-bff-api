@@ -1,6 +1,5 @@
 package systems.snapdragon.userbff.block;
 
-import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
@@ -16,6 +15,13 @@ import reactor.core.publisher.Mono;
  * <p>The newest-first list preserves the original {@code ORDER BY ts DESC, id} via the
  * {@code OrderByTsDescIdAsc} suffix. SCOPED list/delete carry {@code AND domain =
  * :domain}; UNSCOPED omit it (SUPERADMIN bypass).
+ *
+ * <p>DB-GENERATED UUID PK (changelog 015): the {@code id} is NO LONGER minted in Java.
+ * The {@code user_block.id} column carries a {@code (gen_random_uuid())::text} DEFAULT,
+ * so the INSERT OMITS {@code id} and appends {@code RETURNING id} to read the
+ * database-generated UUID string back. The INSERT is therefore a plain
+ * (non-{@code @Modifying}) {@code @Query} returning {@code Mono<String>} (the new id),
+ * NOT a {@code @Modifying} row count.
  */
 public interface UserBlockR2dbcRepository extends ReactiveCrudRepository<UserBlockEntity, String> {
 
@@ -27,15 +33,19 @@ public interface UserBlockR2dbcRepository extends ReactiveCrudRepository<UserBlo
 
     Mono<Long> deleteByUserIdAndIdAndDomain(String userId, String id, String domain);
 
-    // ---- INSERT (@Query — app-assigned id + server-side now()) ----
+    // ---- INSERT (@Query — DB-generated id + server-side now()) ----
 
-    String INSERT =
-            "INSERT INTO user_block (id, user_id, target, platform, domain, ts) "
-            + "VALUES (:id, :userId, :target, :platform, :domain, now())";
+    // The id is OMITTED so Postgres fills it from its (gen_random_uuid())::text column
+    // DEFAULT (changelog 015); RETURNING id reads the generated UUID string back.
+    String INSERT_RETURNING_ID =
+            "INSERT INTO user_block (user_id, target, platform, domain, ts) "
+            + "VALUES (:userId, :target, :platform, :domain, now()) "
+            + "RETURNING id";
 
-    @Modifying
-    @Query(INSERT)
-    Mono<Long> insertRow(@Param("id") String id, @Param("userId") String userId,
-                         @Param("target") String target, @Param("platform") String platform,
-                         @Param("domain") String domain);
+    /** Plain INSERT ... RETURNING id — yields the DB-generated UUID string. */
+    @Query(INSERT_RETURNING_ID)
+    Mono<String> insertRowReturningId(@Param("userId") String userId,
+                                      @Param("target") String target,
+                                      @Param("platform") String platform,
+                                      @Param("domain") String domain);
 }

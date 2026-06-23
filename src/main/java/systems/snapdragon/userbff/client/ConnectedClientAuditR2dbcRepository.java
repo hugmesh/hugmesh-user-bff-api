@@ -29,19 +29,25 @@ public interface ConnectedClientAuditR2dbcRepository
 
     Mono<ConnectedClientAuditEntity> findByOwnerAndIdAndDomain(String owner, String id, String domain);
 
-    // ---- INSERT (app-assigned id, server-side now()) ----
+    // ---- INSERT (DB-generated id, server-side now()) ----
 
-    String INSERT =
+    // The id is OMITTED so Postgres fills it from its (gen_random_uuid())::text column
+    // DEFAULT (changelog 015); RETURNING id reads the generated UUID string back. The
+    // INSERT is therefore a plain (non-@Modifying) @Query returning Mono<String>.
+    String INSERT_RETURNING_ID =
             "INSERT INTO connected_client_audit "
-            + "(id, owner, platform, client_kind, external_ref, label, domain, created_at) "
-            + "VALUES (:id, :owner, :platform, :clientKind, :externalRef, :label, :domain, now())";
+            + "(owner, platform, client_kind, external_ref, label, domain, created_at) "
+            + "VALUES (:owner, :platform, :clientKind, :externalRef, :label, :domain, now()) "
+            + "RETURNING id";
 
-    @Modifying
-    @Query(INSERT)
-    Mono<Long> insertRow(@Param("id") String id, @Param("owner") String owner,
-                         @Param("platform") String platform, @Param("clientKind") String clientKind,
-                         @Param("externalRef") String externalRef, @Param("label") String label,
-                         @Param("domain") String domain);
+    /** Plain INSERT ... RETURNING id — yields the DB-generated UUID string. */
+    @Query(INSERT_RETURNING_ID)
+    Mono<String> insertRowReturningId(@Param("owner") String owner,
+                                      @Param("platform") String platform,
+                                      @Param("clientKind") String clientKind,
+                                      @Param("externalRef") String externalRef,
+                                      @Param("label") String label,
+                                      @Param("domain") String domain);
 
     // ---- REVOKE (active-only guard + server-side now()) ----
 

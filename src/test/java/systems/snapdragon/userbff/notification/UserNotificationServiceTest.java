@@ -5,7 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import org.springframework.test.context.ActiveProfiles;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 import systems.snapdragon.commons.web.ApiException;
 
 import java.util.List;
@@ -28,14 +30,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *       mark cannot touch a brand-Y row; SUPERADMIN (null domain) lists across brands.</li>
  * </ul>
  *
- * <p>NOTE: ONE shared H2 store across the class methods — each method uses a UNIQUE
- * owner id. Rows are seeded via the package-private {@code insertForTest} (PR1 ships
- * dark — the real writer is the later actions reconciler).
+ * <p>NOTE: ONE shared container db across the class methods — each method uses a UNIQUE
+ * owner id. Rows are seeded via the package-private {@code insertForTest}, which after
+ * changelog 015 (DB-generated UUID PK) does an id-omitted {@code INSERT ... RETURNING id}
+ * — so this slice runs on Testcontainers-Postgres (H2 has no {@code gen_random_uuid()} /
+ * {@code RETURNING}). (PR1 ships dark — the real writer is the later actions reconciler.)
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, UserNotificationRepository.class,
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, UserNotificationRepository.class,
         UserNotificationServiceTest.Cfg.class})
-class UserNotificationServiceTest {
+class UserNotificationServiceTest extends PostgresTestSupport {
 
     @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     static class Cfg {

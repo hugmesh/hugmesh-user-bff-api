@@ -6,7 +6,6 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
-import java.util.UUID;
 
 /**
  * Owner-scoped facade over {@link HsServiceTokenR2dbcRepository} + {@link HsTokenCipher}.
@@ -71,7 +70,11 @@ public class HsTokenCustody {
                     if (updated != null && updated > 0) {
                         return Mono.empty();
                     }
-                    return repo.upsertInsert(UUID.randomUUID().toString(), ownerSubject, platform,
+                    // Fresh row: the id is DB-generated (changelog 015 column DEFAULT) — the
+                    // INSERT omits it and RETURNING id hands the generated UUID back, which we
+                    // consume (the upsert returns Void; cross-user isolation is the
+                    // owner-scoped (owner_subject, platform) predicate, unchanged).
+                    return repo.upsertInsertReturningId(ownerSubject, platform,
                             accessEnc, refreshEnc, expiresAt, localpart).then();
                 })
                 .doOnSuccess(v -> log.debug("[hs-custody] upserted custody row owner={} platform={}",

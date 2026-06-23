@@ -1,6 +1,5 @@
 package systems.snapdragon.userbff.media;
 
-import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
@@ -33,17 +32,22 @@ public interface MediaPoisonDecisionR2dbcRepository
     Mono<MediaPoisonDecisionEntity> findFirstByUserIdAndMediaRefAndDomainOrderByCreatedAtDescIdAsc(
             String userId, String mediaRef, String domain);
 
-    // ---- INSERT (@Query — app-assigned id, nullable cols, server-side now()) ----
+    // ---- INSERT (@Query — DB-generated id, nullable cols, server-side now()) ----
 
-    String INSERT =
+    // The id is OMITTED so Postgres fills it from its (gen_random_uuid())::text column
+    // DEFAULT (changelog 015); RETURNING id reads the generated UUID string back. A plain
+    // (non-@Modifying) @Query returning Mono<String>.
+    String INSERT_RETURNING_ID =
             "INSERT INTO media_poison_decision "
-            + "(id, user_id, platform, media_ref, mode, status, backend, domain, created_at) "
-            + "VALUES (:id, :userId, :platform, :mediaRef, :mode, :status, :backend, :domain, now())";
+            + "(user_id, platform, media_ref, mode, status, backend, domain, created_at) "
+            + "VALUES (:userId, :platform, :mediaRef, :mode, :status, :backend, :domain, now()) "
+            + "RETURNING id";
 
-    @Modifying
-    @Query(INSERT)
-    Mono<Long> insertRow(@Param("id") String id, @Param("userId") String userId,
-                         @Param("platform") String platform, @Param("mediaRef") String mediaRef,
-                         @Param("mode") String mode, @Param("status") String status,
-                         @Param("backend") String backend, @Param("domain") String domain);
+    /** Plain INSERT ... RETURNING id — yields the DB-generated UUID string. */
+    @Query(INSERT_RETURNING_ID)
+    Mono<String> insertRowReturningId(@Param("userId") String userId,
+                                      @Param("platform") String platform,
+                                      @Param("mediaRef") String mediaRef,
+                                      @Param("mode") String mode, @Param("status") String status,
+                                      @Param("backend") String backend, @Param("domain") String domain);
 }

@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import org.springframework.test.context.ActiveProfiles;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 
 import java.util.List;
 
@@ -18,8 +20,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * known id.
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, UserBlockRepository.class})
-class UserBlockRepositoryTest {
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, UserBlockRepository.class})
+class UserBlockRepositoryTest extends PostgresTestSupport {
 
     @Autowired UserBlockRepository repo;
 

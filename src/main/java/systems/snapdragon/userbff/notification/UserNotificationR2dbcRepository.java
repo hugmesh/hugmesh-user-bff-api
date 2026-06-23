@@ -65,7 +65,11 @@ public interface UserNotificationR2dbcRepository
     @Query(MARK_READ_UNSCOPED)
     Mono<Long> markReadUnscoped(@Param("id") String id, @Param("userSubject") String userSubject);
 
-    // ---- INSERT (deterministic/app id, nullable body, server-side now()) ----
+    // ---- INSERT (deterministic/caller-supplied id, nullable body, server-side now()) ----
+    //
+    // The PRODUCTION insertIfAbsent path supplies a DETERMINISTIC id explicitly for
+    // idempotency (the existence pre-check is keyed on it), so this leg keeps the id
+    // column/bind UNCHANGED — it is NOT DB-generated. A @Modifying row count as before.
 
     String INSERT =
             "INSERT INTO user_notifications (id, domain, user_subject, category, title, body, created_at) "
@@ -76,4 +80,22 @@ public interface UserNotificationR2dbcRepository
     Mono<Long> insertRow(@Param("id") String id, @Param("domain") String domain,
                          @Param("userSubject") String userSubject, @Param("category") String category,
                          @Param("title") String title, @Param("body") String body);
+
+    // ---- INSERT (DB-generated id, nullable body, server-side now()) ----
+    //
+    // The id-OMITTED variant: Postgres fills id from its (gen_random_uuid())::text column
+    // DEFAULT (changelog 015) and RETURNING id reads the generated UUID string back. Used
+    // ONLY by the test-seed path (insertForTest) — the production deliver path keeps the
+    // deterministic-id INSERT above. A plain (non-@Modifying) @Query returning Mono<String>.
+    String INSERT_RETURNING_ID =
+            "INSERT INTO user_notifications (domain, user_subject, category, title, body, created_at) "
+            + "VALUES (:domain, :userSubject, :category, :title, :body, now()) "
+            + "RETURNING id";
+
+    /** Plain INSERT ... RETURNING id — yields the DB-generated UUID string. */
+    @Query(INSERT_RETURNING_ID)
+    Mono<String> insertRowReturningId(@Param("domain") String domain,
+                                      @Param("userSubject") String userSubject,
+                                      @Param("category") String category,
+                                      @Param("title") String title, @Param("body") String body);
 }

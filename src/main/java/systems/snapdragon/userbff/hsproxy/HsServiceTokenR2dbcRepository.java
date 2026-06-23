@@ -43,23 +43,28 @@ public interface HsServiceTokenR2dbcRepository
 
     /** Insert a fresh custody row (the first mint for this owner+platform). The
      *  (owner_subject, platform) unique constraint makes the update-first/insert-if-absent
-     *  upsert a true upsert (no find-then-insert race window). */
-    String UPSERT_INSERT =
+     *  upsert a true upsert (no find-then-insert race window).
+     *
+     *  <p>DB-GENERATED id (changelog 015): the id is OMITTED so Postgres fills it from its
+     *  (gen_random_uuid())::text column DEFAULT; RETURNING id reads the generated UUID
+     *  string back. A plain (non-{@code @Modifying}) {@code @Query} returning
+     *  {@code Mono<String>} — empty when 0 rows insert (it cannot, the update-first leg
+     *  already ran), the new id on the fresh insert. */
+    String UPSERT_INSERT_RETURNING_ID =
             "INSERT INTO hs_service_token "
-            + "(id, owner_subject, platform, access_token_enc, refresh_token_enc, "
+            + "(owner_subject, platform, access_token_enc, refresh_token_enc, "
             + "expires_at, localpart, minted_at) "
-            + "VALUES (:id, :ownerSubject, :platform, :accessEnc, :refreshEnc, "
-            + ":expiresAt, :localpart, now())";
+            + "VALUES (:ownerSubject, :platform, :accessEnc, :refreshEnc, "
+            + ":expiresAt, :localpart, now()) "
+            + "RETURNING id";
 
-    @Modifying
-    @Query(UPSERT_INSERT)
-    Mono<Long> upsertInsert(@Param("id") String id,
-                            @Param("ownerSubject") String ownerSubject,
-                            @Param("platform") String platform,
-                            @Param("accessEnc") String accessEnc,
-                            @Param("refreshEnc") String refreshEnc,
-                            @Param("expiresAt") java.time.Instant expiresAt,
-                            @Param("localpart") String localpart);
+    @Query(UPSERT_INSERT_RETURNING_ID)
+    Mono<String> upsertInsertReturningId(@Param("ownerSubject") String ownerSubject,
+                                         @Param("platform") String platform,
+                                         @Param("accessEnc") String accessEnc,
+                                         @Param("refreshEnc") String refreshEnc,
+                                         @Param("expiresAt") java.time.Instant expiresAt,
+                                         @Param("localpart") String localpart);
 
     /** Owner-scoped hard delete of a custody row — keyed on (owner, platform) so a caller
      *  can NEVER delete another subject's token. Returns rows-deleted (0 = not the

@@ -5,9 +5,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 
 import java.time.Duration;
 import java.util.List;
@@ -15,9 +17,12 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * DOMAIN-SCOPE isolation at the SQL layer for {@link UserBlockRepository} against H2
- * (PostgreSQL-compat) with the REAL Liquibase changelog (incl. 010-domain-scoping).
- * Delineated per the test standard:
+ * DOMAIN-SCOPE isolation at the SQL layer for {@link UserBlockRepository} against a
+ * Testcontainers-Postgres store with the REAL Liquibase changelog (incl.
+ * 010-domain-scoping AND 015 DB-generated-UUID-PK). Moved off the H2 PostgreSQL-compat
+ * store because changelog 015 needs pgcrypto/{@code gen_random_uuid()} +
+ * {@code INSERT ... RETURNING id}, neither of which H2 provides. Delineated per the test
+ * standard:
  *
  * <ul>
  *   <li><b>MULTIUSER-SITUATIONAL</b> — the SAME owner id existing in two brands sees
@@ -30,13 +35,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       brand's row.</li>
  * </ul>
  *
- * <p>NOTE: {@code @DataR2dbcTest} reuses ONE H2 store across the methods of this
+ * <p>NOTE: {@code @DataR2dbcTest} reuses ONE container db across the methods of this
  * class, so each method uses a UNIQUE owner id to stay isolated from the others
  * (the same convention as {@code UserBlockRepositoryTest}).
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, UserBlockRepository.class})
-class UserBlockRepositoryDomainScopeTest {
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, UserBlockRepository.class})
+class UserBlockRepositoryDomainScopeTest extends PostgresTestSupport {
 
     @Autowired UserBlockRepository repo;
 

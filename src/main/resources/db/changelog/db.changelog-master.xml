@@ -57,6 +57,13 @@
               live Matrix media upload is stub-gated (avatar.matrix.enabled, default
               false) — a stub mxc:// is returned so storage works without a live
               homeserver; the column is the durable source of truth either way.
+        015 — DB-generated UUID primary keys (adopt mod-bff #36 / admin-bff #133):
+              add a (gen_random_uuid())::text column DEFAULT to the five varchar(36/64)
+              String-PK tables (user_block, connected_client_audit, media_poison_decision,
+              user_notifications, hs_service_token) so Postgres mints the id; the app stops
+              calling UUID.randomUUID() and reads the id back via INSERT ... RETURNING id.
+              pgcrypto is gated to Postgres; the DEFAULT changeSets are harmless under H2
+              (never evaluated by the non-migrated H2 slices).
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -73,4 +80,5 @@
     <include file="db/changelog/012-notifications.xml"/>
     <include file="db/changelog/013-hs-service-token.xml"/>
     <include file="db/changelog/014-user-profile-avatar.xml"/>
+    <include file="db/changelog/015-db-generated-uuid-pks.xml"/>
 </databaseChangeLog>

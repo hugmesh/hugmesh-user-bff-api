@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import org.springframework.test.context.ActiveProfiles;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,8 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * to / revocable by another user's id.
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, ConnectedClientAuditRepository.class})
-class ConnectedClientAuditRepositoryTest {
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, ConnectedClientAuditRepository.class})
+class ConnectedClientAuditRepositoryTest extends PostgresTestSupport {
 
     @Autowired ConnectedClientAuditRepository repo;
 

@@ -11,7 +11,9 @@ import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.federation.FederationApiClient;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import org.springframework.test.context.ActiveProfiles;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 
 import java.util.List;
 import java.util.Set;
@@ -35,9 +37,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * </ul>
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, UserBlockRepository.class,
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, UserBlockRepository.class,
         BlockServiceDomainScopeTest.Stubs.class})
-class BlockServiceDomainScopeTest {
+class BlockServiceDomainScopeTest extends PostgresTestSupport {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class Stubs {

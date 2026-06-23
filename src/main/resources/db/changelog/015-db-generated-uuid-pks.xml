@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      DB-GENERATED UUID PRIMARY KEYS — the user-bff leg of the org-wide migration
+      (exemplars: merged mod-bff #36, changelog 009-mod-action-db-generated-id.xml;
+      merged admin-bff #133, changelog 200-db-generated-uuid-pks.xml).
+
+      Decision (pinned): stop minting UUID primary keys in Java
+      (UUID.randomUUID().toString()); let Postgres generate them via a column DEFAULT
+      and read the generated id back on insert (INSERT ... RETURNING id). For a
+      varchar id the DB default casts the native uuid to text —
+      (gen_random_uuid())::text — which yields the lowercase 36-char hyphenated form,
+      BYTE-IDENTICAL to UUID.randomUUID().toString(). The column type and the entity
+      @Id type stay String; only the SOURCE of the id moves from the app to the DB.
+      Each affected repository INSERT now OMITS id and appends RETURNING id (a
+      NON-@Modifying @Query returning Mono<String>).
+
+      Numbered 015 — a band ABOVE the current max (014) in db.changelog-master.xml.
+      Registered LAST in the master with a SINGLE <include>.
+
+      ── Migrated tables (all varchar String @Id) ────────────────────────────────────
+        user_block               (003) — was UserBlockRepository.add()
+        connected_client_audit   (009) — was ConnectedClientAuditRepository.record()
+        media_poison_decision    (007) — was MediaPoisonDecisionRepository.record()
+        user_notifications       (012) — was UserNotificationRepository.insertForTest()
+                                         (the test-seed path); the PRODUCTION
+                                         insertIfAbsent path keeps its caller-supplied
+                                         DETERMINISTIC id for idempotency and is UNCHANGED.
+        hs_service_token         (013) — was HsTokenCustody.upsert()'s insert-if-absent
+                                         leg (UUID.randomUUID()); the update-first leg
+                                         keyed on (owner_subject, platform) is UNCHANGED.
+
+      No ON CONFLICT / dedup is altered: user_notifications.insertIfAbsent dedups via an
+      existence pre-check on the caller-supplied id (kept), and hs_service_token's upsert
+      is update-first/insert-if-absent on the (owner_subject, platform) unique constraint
+      (kept) — only the fresh-INSERT leg's id source moves to the DB.
+
+      The migrated tables' @DataR2dbcTest slices MOVE off H2 (TestDatabaseConfig) to the
+      shared Testcontainers-Postgres base (commons PostgresTestSupport) — H2 has neither
+      pgcrypto/gen_random_uuid() nor a reliable INSERT ... RETURNING. The remaining H2
+      slices (non-migrated tables) are unaffected: they never INSERT into a migrated
+      table, so the added DEFAULT expression is never evaluated under H2.
+    -->
+
+    <!-- FIRST: ensure gen_random_uuid() is available. Built-in on PG13+, but install
+         pgcrypto defensively (idempotent + harmless if already present) — mirrors the
+         mod-bff / admin-bff exemplars. Gated to PostgreSQL: the test store for the
+         migrated slices IS Postgres, and the production runtime is Postgres; the H2
+         non-migrated slices MARK_RAN it (H2 has no pgcrypto). -->
+    <changeSet id="015-pgcrypto-extension" author="snapdragon">
+        <preConditions onFail="MARK_RAN" onError="MARK_RAN">
+            <dbms type="postgresql"/>
+        </preConditions>
+        <comment>Install pgcrypto so gen_random_uuid() is available as the
+                 DB-generated-UUID column DEFAULT. IF NOT EXISTS — idempotent.</comment>
+        <sql>CREATE EXTENSION IF NOT EXISTS pgcrypto;</sql>
+    </changeSet>
+
+    <!-- user_block.id (varchar(64), changelog 003): DB-generate via
+         (gen_random_uuid())::text instead of UserBlockRepository minting
+         UUID.randomUUID().toString(). INSERT omits id; RETURNING id reads it back. -->
+    <changeSet id="015-gen-uuid-user_block" author="snapdragon">
+        <comment>DB-generate user_block.id ((gen_random_uuid())::text) instead of the
+                 app minting it; INSERT omits id, RETURNING id reads it back.</comment>
+        <addDefaultValue tableName="user_block" columnName="id"
+                         columnDataType="varchar(64)"
+                         defaultValueComputed="(gen_random_uuid())::text"/>
+    </changeSet>
+
+    <!-- connected_client_audit.id (varchar(64), changelog 009): DB-generate via
+         (gen_random_uuid())::text instead of ConnectedClientAuditRepository minting it. -->
+    <changeSet id="015-gen-uuid-connected_client_audit" author="snapdragon">
+        <comment>DB-generate connected_client_audit.id ((gen_random_uuid())::text) instead
+                 of the app minting it; INSERT omits id, RETURNING id reads it back.</comment>
+        <addDefaultValue tableName="connected_client_audit" columnName="id"
+                         columnDataType="varchar(64)"
+                         defaultValueComputed="(gen_random_uuid())::text"/>
+    </changeSet>
+
+    <!-- media_poison_decision.id (varchar(64), changelog 007): DB-generate via
+         (gen_random_uuid())::text instead of MediaPoisonDecisionRepository minting it. -->
+    <changeSet id="015-gen-uuid-media_poison_decision" author="snapdragon">
+        <comment>DB-generate media_poison_decision.id ((gen_random_uuid())::text) instead of
+                 the app minting it; INSERT omits id, RETURNING id reads it back.</comment>
+        <addDefaultValue tableName="media_poison_decision" columnName="id"
+                         columnDataType="varchar(64)"
+                         defaultValueComputed="(gen_random_uuid())::text"/>
+    </changeSet>
+
+    <!-- user_notifications.id (varchar(64), changelog 012): DB-generate via
+         (gen_random_uuid())::text for the FRESH-INSERT leg (was insertForTest's
+         UUID.randomUUID()). The production insertIfAbsent path supplies a DETERMINISTIC
+         id explicitly (idempotency pre-check) — the DEFAULT only fires when id is OMITTED,
+         so the deterministic path is unaffected. -->
+    <changeSet id="015-gen-uuid-user_notifications" author="snapdragon">
+        <comment>DB-generate user_notifications.id ((gen_random_uuid())::text) for the
+                 id-omitted INSERT. The deterministic insertIfAbsent path supplies id
+                 explicitly and is unaffected by the DEFAULT.</comment>
+        <addDefaultValue tableName="user_notifications" columnName="id"
+                         columnDataType="varchar(64)"
+                         defaultValueComputed="(gen_random_uuid())::text"/>
+    </changeSet>
+
+    <!-- hs_service_token.id (varchar(36), changelog 013): DB-generate via
+         (gen_random_uuid())::text for the insert-if-absent leg of the custody upsert
+         (was UUID.randomUUID().toString()). The update-first leg keyed on
+         (owner_subject, platform) is unchanged. -->
+    <changeSet id="015-gen-uuid-hs_service_token" author="snapdragon">
+        <comment>DB-generate hs_service_token.id ((gen_random_uuid())::text) for the
+                 insert-if-absent leg; the update-first leg keyed on
+                 (owner_subject, platform) is unchanged.</comment>
+        <addDefaultValue tableName="hs_service_token" columnName="id"
+                         columnDataType="varchar(36)"
+                         defaultValueComputed="(gen_random_uuid())::text"/>
+    </changeSet>
+
+</databaseChangeLog>

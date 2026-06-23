@@ -5,7 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.context.annotation.Import;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import org.springframework.test.context.ActiveProfiles;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,8 +29,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * class, so each method uses a UNIQUE owner id to stay isolated.
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, MediaPoisonDecisionRepository.class})
-class MediaPoisonDecisionRepositoryDomainScopeTest {
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, MediaPoisonDecisionRepository.class})
+class MediaPoisonDecisionRepositoryDomainScopeTest extends PostgresTestSupport {
 
     @Autowired MediaPoisonDecisionRepository repo;
 

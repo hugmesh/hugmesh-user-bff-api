@@ -6,8 +6,6 @@ import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.commons.tenancy.DomainScope;
 
-import java.util.UUID;
-
 /**
  * Owner-AND-domain-scoped facade over {@link UserNotificationR2dbcRepository} for
  * {@code user_notifications} — the always-on in-app FLOOR inbox. Keeps the original
@@ -120,8 +118,9 @@ public class UserNotificationRepository {
      */
     Mono<String> insertForTest(String userSubject, String category, String title,
                                String body, String domain) {
-        String id = UUID.randomUUID().toString();
         String dom = DomainScope.isUnscoped(domain) ? DomainRegistry.DEFAULT_DOMAIN : domain;
-        return repo.insertRow(id, dom, userSubject, category, title, body).thenReturn(id);
+        // DB-generated id (changelog 015 column DEFAULT): the INSERT omits id and
+        // RETURNING id hands back the generated UUID string (the seeded row's id).
+        return repo.insertRowReturningId(dom, userSubject, category, title, body);
     }
 }

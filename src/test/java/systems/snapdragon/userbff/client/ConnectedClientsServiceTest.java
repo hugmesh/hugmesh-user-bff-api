@@ -7,7 +7,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import systems.snapdragon.userbff.federation.FederationHttpClientSsl;
-import systems.snapdragon.userbff.support.TestDatabaseConfig;
+import org.springframework.test.context.ActiveProfiles;
+import systems.snapdragon.commons.testsupport.PostgresTestSupport;
+import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 import systems.snapdragon.commons.web.ApiException;
 
 import java.util.List;
@@ -33,9 +35,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ul>
  */
 @DataR2dbcTest
-@Import({TestDatabaseConfig.class, ConnectedClientAuditRepository.class,
+@ActiveProfiles("test")
+@Import({PostgresSliceTestConfig.class, ConnectedClientAuditRepository.class,
         ConnectedClientsServiceTest.Stubs.class})
-class ConnectedClientsServiceTest {
+class ConnectedClientsServiceTest extends PostgresTestSupport {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class Stubs {

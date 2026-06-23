@@ -6,8 +6,6 @@ import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.commons.tenancy.DomainScope;
 
-import java.util.UUID;
-
 /**
  * Owner-AND-domain-scoped facade over {@link MediaPoisonDecisionR2dbcRepository} for
  * {@code media_poison_decision}. Keeps the original method surface ({@code record} /
@@ -45,10 +43,11 @@ public class MediaPoisonDecisionRepository {
      */
     public Mono<MediaPoisonDecision> record(String userId, String platform, String mediaRef,
                                             String mode, String status, String backend, String domain) {
-        String id = UUID.randomUUID().toString();
         String dom = DomainScope.isUnscoped(domain) ? DomainRegistry.DEFAULT_DOMAIN : domain;
-        return repo.insertRow(id, userId, platform, mediaRef, mode, status, backend, dom)
-                .then(repo.findById(id))
+        // The id is DB-generated (changelog 015 column DEFAULT): the INSERT omits it and
+        // RETURNING id hands back the generated UUID string, which drives the read-back.
+        return repo.insertRowReturningId(userId, platform, mediaRef, mode, status, backend, dom)
+                .flatMap(repo::findById)
                 .map(MediaPoisonDecisionRepository::toWire);
     }
 
