@@ -141,9 +141,6 @@ app:
       client-secret: "${APP_BFF_OIDC_CLIENT_SECRET:}"
       redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://snapdragon.systems/login/callback}"
       default-expiry-seconds: 3600
-      # server-side PKCE/state/nonce pending-store TTL + sweep cadence.
-      pending-ttl: "${APP_BFF_OIDC_PENDING_TTL:PT5M}"
-      pending-sweep-ms: "${APP_BFF_OIDC_PENDING_SWEEP_MS:60000}"
     custody-key: "${APP_BFF_CUSTODY_KEY:}"
   # The opaque bff_ session cookie (auth-core SessionCookieService). SHIPS DARK:
   # enabled=false ⇒ NO Set-Cookie is emitted (the session token stays in the body

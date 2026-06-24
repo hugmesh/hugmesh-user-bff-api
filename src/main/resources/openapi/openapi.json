@@ -976,7 +976,7 @@
     "/bff/auth/callback" : {
       "post" : {
         "tags" : [ "OIDC login callback" ],
-        "summary" : "Casdoor OIDC callback: browser-PKCE handoff. Exchange code, provision account+session via admin-bff, set the bff_ cookie. 204 on success. 503 when the OIDC surface is dark.",
+        "summary" : "Casdoor OIDC callback: browser-PKCE handoff. Exchange code, provision account+session via admin-bff, set the bff_ cookie. 200+body on success. 503 when the OIDC surface is dark.",
         "operationId" : "callback",
         "requestBody" : {
           "content" : {
@@ -990,7 +990,14 @@
         },
         "responses" : {
           "200" : {
-            "description" : "OK"
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CallbackResult"
+                }
+              }
+            }
           }
         }
       }
@@ -1994,6 +2001,17 @@
             "type" : "string"
           },
           "redirectUri" : {
+            "type" : "string"
+          }
+        }
+      },
+      "CallbackResult" : {
+        "type" : "object",
+        "properties" : {
+          "registrationComplete" : {
+            "type" : "boolean"
+          },
+          "status" : {
             "type" : "string"
           }
         }
