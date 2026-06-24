@@ -12,7 +12,7 @@
 #   GitLab CI passes it as:  --secret id=ci_job_token,env=CI_JOB_TOKEN
 #                            --build-arg CI_API_V4_URL --build-arg GITLAB_GROUP_ID
 # -----------------------------------------------------------------------------
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /work
 
 # GitLab registry coordinates the settings.xml interpolates ($CI_API_V4_URL is the
@@ -35,7 +35,7 @@ RUN --mount=type=secret,id=ci_job_token \
       fi; \
       ./mvnw -B -s settings.xml package -DskipTests'
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /work/target/*.jar app.jar
 EXPOSE 8080
