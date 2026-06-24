@@ -36,7 +36,7 @@ flowchart LR
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
     subgraph BFF["snapdragon-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
-        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients ·<br/>media · status · notifications"]
+        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications"]
         Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
@@ -121,13 +121,20 @@ scoped delete) and the repository/SQL layer (owner isolation).
 ### Profile — `ProfileController` (`/bff/user/profile`)
 Own R2DBC `user_profile` table (one row per user; `user_id` = JWT subject = PK).
 Fields: `gender, pronouns, timezone, displayName, visibility {public|internal}
-(default internal), vanitySubdomainEnabled, vanityUsername, screenReaderName`.
+(default internal), vanitySubdomainEnabled, vanityUsername, screenReaderName,
+avatarUrl`.
 
 - `GET /bff/user/profile` — my profile (an empty default if none yet).
 - `PUT /bff/user/profile` — create/update my profile (body `userId` ignored; the
   vanity username is derived from the **token** — `preferred_username`, then `name`,
   then subject — NOT the body, so the reserved-name guard can't be bypassed).
 - `DELETE /bff/user/profile` — delete my profile.
+- `POST /bff/user/profile/avatar` — upload my profile picture (multipart `file`,
+  `image/*` only, 5 MB cap). The bytes go to the tuwunel media repository via
+  `MatrixMediaClient` and the resulting `mxc://` URL is persisted onto
+  `user_profile.avatar_url`; the column is server-derived and a profile save never
+  clears it. STUB-GATED by `avatar.matrix.enabled` (default false — a deterministic
+  `mxc://stub.invalid/<id>` is returned so avatar storage works + ships dark).
 - `POST /bff/user/profile/password` — change my **Casdoor** password.
 - `POST /bff/user/profile/email` — change my **Casdoor** email.
 
@@ -269,6 +276,22 @@ Removing the external-client role → `ConnectedClientsService.reconcilePersonal
 Revocation` writes `external-client:<localpart>:<platform>` (the gateway filter checks
 it only for `kind=personal` tokens, so base our-UI access is unaffected).
 
+### Active login sessions — `SessionsController` (`/bff/user/sessions`)
+Self-service **active session management** — list / revoke the caller's OWN opaque
+`bff_` login sessions. The owner is ALWAYS derived server-side from the validated JWT
+principal; there is deliberately no `/sessions?account=` or `/sessions/{account}`
+route, and the revoke handle (`id`) is an opaque fingerprint that only resolves
+against the caller's own live tokens — cross-user isolation is structural, not a
+check. `ROLE_USER` floor + `@PreAuthorize("hasRole('USER')")`. admin-bff owns the
+`bff_session` table; every read/write here is delegated over its internal API via
+`SessionsService` (user-bff has no session DB of its own).
+
+- `GET /bff/user/sessions` — my active login sessions (ids are opaque fingerprints,
+  never the raw session token).
+- `DELETE /bff/user/sessions/{id}` — revoke one of mine by its opaque id; a
+  foreign/unknown id is a generic **404** (anti-enumeration). Revoking my own current
+  session is allowed.
+
 ### AI-cloak media proxy — `MediaPoisonController` (`/bff/user/media`)
 The **poison-before-ingest** seam. The UIs route uploads through this BFF endpoint
 **instead of POSTing media directly to the homeserver**, so the AI-cloak
@@ -312,6 +335,27 @@ with `status=skipped` + a documented signal so the UI warns *"not cloaked"*), `l
 never *forced* to block. Ships **dark** by default (`app.media.poisoning.enabled
 =false` ⇒ the controller is mounted but every upload forwards through `status=none`)
 until the survival gate is verified on a real GPU cluster.
+
+### Homeserver proxy (D6) — `MatrixProxyController` / `MastodonProxyController` (`/bff/user/{matrix,mastodon}/**`) 🚧 ships dark
+Owner-scoped reverse-proxy passthrough to the Matrix (tuwunel) / Mastodon (Akkoma)
+homeserver client APIs **through the per-pod mTLS proxy sidecars**, so the user-ui
+never holds homeserver credentials: the BFF injects a server-held homeserver-native
+token brokered by `ServiceTokenBroker` (the reactive port of admin-bff's broker —
+register-then-login for Matrix, password-grant for Mastodon; the minted token is
+AES-encrypted into the `hs_service_token` custody store and its SHA-256 hash written
+to the gateway revocation filter). The homeserver service-account password
+(`app.hs-token.svc-password` / `APP_HS_TOKEN_SVC_PASSWORD`) is **MANDATORY** — there
+is no baked default; a missing value fails context start (fail-closed).
+
+- `GET|PUT|POST|DELETE|PATCH /bff/user/matrix/**` → tuwunel client API via the
+  `tuwunel-proxy` sidecar.
+- `GET|PUT|POST|DELETE|PATCH /bff/user/mastodon/**` → Akkoma client API via the
+  `akkoma-proxy` sidecar.
+
+**SHIPS DARK:** every method 503s when `app.hs-token.enabled=false` (default) or the
+custody cipher key is blank — the JSON response decode runs off the WebFlux codec
+path (read-as-String + Jackson-2 `readTree`) because Boot 4's reactive codec is
+Jackson 3 and cannot decode the Jackson-2 `JsonNode` type directly.
 
 ### Account status — `AccountStatusController` (`/bff/user/status`) ✅ shipped
 A `ROLE_USER`-floor, owner-scoped, **read-only polling** endpoint. There is no write
@@ -445,7 +489,7 @@ the only authority source.
 
 This service adopts the org's shared Maven artifacts. Three de-duplication moves:
 
-1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.0.0` (itself a child of
+1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.4.0` (itself a child of
    `spring-boot-starter-parent:4.0.2`, so the whole Spring Boot dependency/plugin
    management is inherited transitively). The parent consolidates the reactive-BFF
    `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
@@ -490,7 +534,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/systems/snapdragon/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.snapdragon:snapdragon-auth-core:2.0.0`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.snapdragon:snapdragon-auth-core:2.3.0`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
    the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
    infra) is extracted to `snapdragon-auth-core` (depends on `snapdragon-commons`,
@@ -580,12 +624,17 @@ admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
 Reactive WebFlux everywhere (Mono/Flux, reactive WebClient; no `.block()` /
 `Thread.sleep` on the event loop). R2DBC for all runtime data; JDBC only for the
-Liquibase migrations (`db/changelog`, **001–012**). 010 = domain-scoping (the
+Liquibase migrations (`db/changelog`, **001–015**). 010 = domain-scoping (the
 `domain` column on every owner-keyed table); 011 = `user_preferences_store` (the
 durable per-user/per-brand preferences table backing `/bff/user/preferences`,
 domain-first composite PK `(user_id, pref_key, domain)`); 012 = the notifications
 floor (`user_notifications` + `notification_preference`, both owner-keyed +
-domain-scoped, `account-restriction` forced-on with a DB CHECK backstop). Spring
+domain-scoped, `account-restriction` forced-on with a DB CHECK backstop); 013 =
+`hs_service_token` (the homeserver service-account token broker cache); 014 =
+`user_profile.avatar_url` (the profile picture as a Matrix `mxc://` URL); 015 =
+DB-generated UUID primary keys (`(gen_random_uuid())::text` column DEFAULT,
+byte-identical to the prior `UUID.randomUUID().toString()`; adopts admin-bff #133 /
+mod-bff #36). Spring
 Native: `native` profile + native-maven-plugin, surefire `argLine
 -Dnet.bytebuddy.experimental=true`, `NativeHintsConfig` with reflection hints for the
 JSON-bound DTOs + swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps
@@ -704,18 +753,19 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
 🔭 planned (design-complete, no code here).
 
 - ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.2 / Spring Cloud
-  2025.1, Java 21, WebFlux + R2DBC + Liquibase (001–012), Spring Native hints,
-  springdoc OpenAPI.
+  2025.1, Java 21, WebFlux + R2DBC + Liquibase (001–015, incl. DB-generated UUID
+  primary keys), Spring Native hints, springdoc OpenAPI.
 - ✅ **Casdoor JWT resource server + owner-enforcement** across every `/bff/user/**`
   surface; the canonical `CasdoorAuthorities` converter; `ROLE_SERVICE`-exclusive
   `/bff/user/internal/**`.
 - ✅ **Issuer-keyed multi-tenancy / domain-scoping** (per-query `domain` predicate,
   fail-closed unknown-issuer 401, SUPERADMIN cross-domain unscoped).
-- ✅ **Shipped feature surfaces:** profile (+confusable/reserved/screen-reader guards),
-  home-guide, durable preferences, cards proxy, self-block + instance-block
-  recommendation, self-silence (atomic activate), connected-clients audit, AI-cloak
-  media proxy (dark), account-status polling, in-app notifications floor (dark).
-- ✅ **Org artifact adoption:** `snapdragon-parent:2.0.0` + `snapdragon-commons:2.0.0`
+- ✅ **Shipped feature surfaces:** profile (+confusable/reserved/screen-reader guards,
+  avatar upload (dark)), home-guide, durable preferences, cards proxy, self-block +
+  instance-block recommendation, self-silence (atomic activate), connected-clients
+  audit, active login-session management, AI-cloak media proxy (dark), account-status
+  polling, in-app notifications floor (dark).
+- ✅ **Org artifact adoption:** `snapdragon-parent:2.4.0` + `snapdragon-commons:2.0.0`
   (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI.
@@ -726,7 +776,7 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   (`app.bff.oidc.enabled` / `app.bff.custody-key` / `app.internal.token`),
   fail-closed-stubbed, byte-identical runtime when off. The **live flag-flip + SSO
   e2e** is the only remaining work (🚧, see Roadmap) — the code itself is merged.
-- ✅ **`snapdragon-auth-core:2.0.0` adoption — on `main`** — the shared account/session/
+- ✅ **`snapdragon-auth-core:2.3.0` adoption — on `main`** — the shared account/session/
   MFA/Casdoor-admin core (depends on commons; consumed by user-bff + admin-bff only),
   pinned in `pom.xml` and `@Import`ed (active under the SSO flags above).
 - 🚧 **Edge authz alignment:** the gateway is a pure Casdoor-JWT RS that swaps
