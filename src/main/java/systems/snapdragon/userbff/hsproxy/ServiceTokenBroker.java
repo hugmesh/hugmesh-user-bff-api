@@ -1,9 +1,12 @@
 package systems.snapdragon.userbff.hsproxy;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -42,6 +45,15 @@ public class ServiceTokenBroker {
 
     private static final Logger log = LoggerFactory.getLogger(ServiceTokenBroker.class);
 
+    /**
+     * Jackson-2 mapper used to parse homeserver JSON responses OFF the WebFlux
+     * codec path (see {@link #postJson}). Boot 4's reactive JSON codec is Jackson 3
+     * (tools.jackson), which cannot decode into this Jackson-2 {@link JsonNode}
+     * type — so the response is read as a String (always codec-safe) and parsed
+     * here. Thread-safe for {@code readTree}.
+     */
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final WebClient matrix;
     private final WebClient mastodon;
     private final String svcPassword;
@@ -55,6 +67,7 @@ public class ServiceTokenBroker {
      * this BFF's cluster-CA client identity so the sidecars' {@code ssl_verify_client on}
      * handshake succeeds. Env-overridable.
      */
+    @Autowired
     public ServiceTokenBroker(
             FederationHttpClientSsl mtls,
             @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl,
@@ -66,6 +79,20 @@ public class ServiceTokenBroker {
         ReactorClientHttpConnector connector = new ReactorClientHttpConnector(httpClient);
         this.matrix = WebClient.builder().baseUrl(matrixUrl).clientConnector(connector).build();
         this.mastodon = WebClient.builder().baseUrl(mastodonUrl).clientConnector(connector).build();
+        this.svcPassword = svcPassword;
+        this.custody = custody;
+        this.hashWriter = hashWriter;
+    }
+
+    /**
+     * Test seam — inject pre-built {@link WebClient}s (e.g. backed by a stub
+     * exchange) so the JSON decode path can be exercised without a live homeserver
+     * or the mTLS connector. Production uses the {@code @Autowired} constructor above.
+     */
+    ServiceTokenBroker(WebClient matrix, WebClient mastodon, String svcPassword,
+                       HsTokenCustody custody, HsTokenRevocationHashWriter hashWriter) {
+        this.matrix = matrix;
+        this.mastodon = mastodon;
         this.svcPassword = svcPassword;
         this.custody = custody;
         this.hashWriter = hashWriter;
@@ -184,7 +211,28 @@ public class ServiceTokenBroker {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
-                .bodyToMono(JsonNode.class)
+                // Boot 4's reactive JSON codec is Jackson 3 (tools.jackson) and
+                // cannot decode into this Jackson-2 JsonNode; read the body as a
+                // String (always codec-safe) and parse it with the Jackson-2 mapper.
+                .bodyToMono(String.class)
+                .flatMap(ServiceTokenBroker::parseJson)
                 .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
+    }
+
+    /**
+     * Parse a homeserver JSON body with the Jackson-2 {@link #MAPPER}. A blank or
+     * empty body yields an empty {@link Mono} so the caller's {@code switchIfEmpty}
+     * supplies an empty object node (preserving the prior empty-response behaviour).
+     */
+    private static Mono<JsonNode> parseJson(String json) {
+        if (json == null || json.isBlank()) {
+            return Mono.empty();
+        }
+        try {
+            return Mono.just(MAPPER.readTree(json));
+        } catch (JsonProcessingException e) {
+            return Mono.error(new IllegalStateException(
+                    "broker: invalid JSON response from homeserver", e));
+        }
     }
 }
