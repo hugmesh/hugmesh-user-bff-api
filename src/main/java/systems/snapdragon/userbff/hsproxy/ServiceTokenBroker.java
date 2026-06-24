@@ -72,7 +72,7 @@ public class ServiceTokenBroker {
             FederationHttpClientSsl mtls,
             @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl,
             @Value("${app.hs-token.mastodon-url:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}") String mastodonUrl,
-            @Value("${app.hs-token.svc-password:snapdragon-svc-pw}") String svcPassword,
+            @Value("${app.hs-token.svc-password}") String svcPassword,
             HsTokenCustody custody,
             HsTokenRevocationHashWriter hashWriter) {
         HttpClient httpClient = mtls.customize(HttpClient.create());

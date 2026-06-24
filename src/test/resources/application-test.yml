@@ -1,0 +1,8 @@
+# Test profile (@ActiveProfiles("test")). Supplies the throwaway homeserver
+# service-account password so the now-MANDATORY app.hs-token.svc-password
+# (application.yml has no default — fail-closed in prod) resolves under test
+# without an APP_HS_TOKEN_SVC_PASSWORD env var. Mirrors snapdragon-admin-bff-api's
+# application-test.yml. This is a throwaway test value, NOT a real credential.
+app:
+  hs-token:
+    svc-password: "test-svc-pw"

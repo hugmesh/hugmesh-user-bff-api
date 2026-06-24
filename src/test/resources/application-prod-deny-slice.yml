@@ -28,3 +28,10 @@ block:
     enabled: false
   mastodon:
     enabled: false
+
+# The now-mandatory homeserver svc-password (application.yml has no default —
+# fail-closed in prod); supply a throwaway value so the full-context broker bean
+# instantiates under this prod-posture slice. Not a real credential.
+app:
+  hs-token:
+    svc-password: "test-svc-pw"

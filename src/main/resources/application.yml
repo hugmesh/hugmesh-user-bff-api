@@ -205,7 +205,12 @@ app:
     key: "${APP_HS_TOKEN_KEY:}"
     matrix-url: "${APP_HS_TOKEN_MATRIX_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
     mastodon-url: "${APP_HS_TOKEN_MASTODON_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"
-    svc-password: "${APP_HS_TOKEN_SVC_PASSWORD:}"
+    # MANDATORY (no default): a missing APP_HS_TOKEN_SVC_PASSWORD now FAILS context
+    # startup rather than silently brokering homeserver tokens with an empty (or, via
+    # the old @Value default, a publicly-known) credential. Mirrors admin-bff's
+    # ${SVC_PASSWORD}. The "test" / "prod-deny-slice" test profiles supply a throwaway
+    # value; prod sources it from ESO/Vault, never a literal in git.
+    svc-password: "${APP_HS_TOKEN_SVC_PASSWORD}"
     registry:
       enabled: "${APP_HS_TOKEN_REGISTRY_ENABLED:false}"
       base-url: "${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}"
