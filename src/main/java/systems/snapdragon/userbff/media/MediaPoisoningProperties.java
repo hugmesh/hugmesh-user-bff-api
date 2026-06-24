@@ -69,7 +69,7 @@ public class MediaPoisoningProperties {
     public void setDefaultMode(String defaultMode) { this.defaultMode = defaultMode; }
     public String getFallbackMode() { return fallbackMode; }
     public void setFallbackMode(String fallbackMode) { this.fallbackMode = fallbackMode; }
-    public List<String> getThumbnailSizes() { return thumbnailSizes; }
+    public List<String> getThumbnailSizes() { return thumbnailSizes == null ? List.of() : List.copyOf(thumbnailSizes); }
     public void setThumbnailSizes(List<String> thumbnailSizes) { this.thumbnailSizes = thumbnailSizes; }
     public long getTimeoutMs() { return timeoutMs; }
     public void setTimeoutMs(long timeoutMs) { this.timeoutMs = timeoutMs; }

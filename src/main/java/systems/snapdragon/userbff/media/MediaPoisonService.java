@@ -108,7 +108,13 @@ public class MediaPoisonService {
      *                   honest {@code status} ({@code protected|degraded|skipped|
      *                   none|failed})
      */
-    public record UploadOutcome(Map<String, Object> homeserver, MediaPoisonDecision decision) {}
+    public record UploadOutcome(Map<String, Object> homeserver, MediaPoisonDecision decision) {
+        // Return an unmodifiable view so callers cannot mutate the internal map.
+        @Override
+        public Map<String, Object> homeserver() {
+            return homeserver == null ? Map.of() : java.util.Collections.unmodifiableMap(homeserver);
+        }
+    }
 
     /**
      * Back-compat overload — stamps the decision in the platform {@code default} domain.

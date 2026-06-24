@@ -40,7 +40,13 @@ public class AdminBffInternalClient {
 
     /** A provisioned account view (admin-bff is the source of truth). */
     public record AccountView(String id, String provider, String handle,
-                              boolean registrationComplete, List<String> roles) {}
+                              boolean registrationComplete, List<String> roles) {
+        // Return a defensive copy so callers cannot mutate the internal list.
+        @Override
+        public List<String> roles() {
+            return roles == null ? List.of() : List.copyOf(roles);
+        }
+    }
 
     /** A freshly-minted opaque {@code bff_} session token from admin-bff. */
     public record SessionView(String token, String accountId) {}

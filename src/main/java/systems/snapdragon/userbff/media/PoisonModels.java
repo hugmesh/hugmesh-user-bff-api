@@ -91,7 +91,13 @@ public final class PoisonModels {
      * absent) WITHOUT this object — so the lean fallback engages.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Health(String backend, List<String> modes, Integer etaSeconds) {}
+    public record Health(String backend, List<String> modes, Integer etaSeconds) {
+        // Return a defensive copy so callers cannot mutate the internal list.
+        @Override
+        public List<String> modes() {
+            return modes == null ? List.of() : List.copyOf(modes);
+        }
+    }
 
     /**
      * A poison job submitted to the worker: the original image bytes (base64 on the
@@ -100,7 +106,18 @@ public final class PoisonModels {
      * config). The worker returns the poisoned original + each poisoned size.
      */
     public record PoisonRequest(String mode, String filename, String contentType,
-                                List<String> thumbnailSizes, byte[] imageBase64NotUsed) {}
+                                List<String> thumbnailSizes, byte[] imageBase64NotUsed) {
+        // Return defensive copies so callers cannot mutate the internal mutable fields.
+        @Override
+        public List<String> thumbnailSizes() {
+            return thumbnailSizes == null ? List.of() : List.copyOf(thumbnailSizes);
+        }
+
+        @Override
+        public byte[] imageBase64NotUsed() {
+            return imageBase64NotUsed == null ? null : imageBase64NotUsed.clone();
+        }
+    }
 
     /**
      * The worker's poison result: the poisoned original + a per-size poisoned
@@ -110,11 +127,28 @@ public final class PoisonModels {
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PoisonResult(boolean ok, String backend, byte[] poisonedOriginal,
-                               List<SizedBytes> thumbnails, String detail) {}
+                               List<SizedBytes> thumbnails, String detail) {
+        // Return defensive copies so callers cannot mutate the internal mutable fields.
+        @Override
+        public byte[] poisonedOriginal() {
+            return poisonedOriginal == null ? null : poisonedOriginal.clone();
+        }
+
+        @Override
+        public List<SizedBytes> thumbnails() {
+            return thumbnails == null ? List.of() : List.copyOf(thumbnails);
+        }
+    }
 
     /** One poisoned derivative for a served size. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record SizedBytes(String size, byte[] bytes) {}
+    public record SizedBytes(String size, byte[] bytes) {
+        // Return a defensive copy so callers cannot mutate the internal byte array.
+        @Override
+        public byte[] bytes() {
+            return bytes == null ? null : bytes.clone();
+        }
+    }
 
     /**
      * The worker's perturbation-presence verdict for ONE re-fetched served artifact
