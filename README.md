@@ -3,8 +3,8 @@
 Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with the
 (later) `snapdragon-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
 resource-server + springdoc + Spring Native, scaffolded from the
-`snapdragon-admin-bff-api` template (same stack, same conventions). Java 21,
-Spring Boot 4.0.2 / Spring Cloud 2025.1.
+`snapdragon-admin-bff-api` template (same stack, same conventions). Java 25 LTS,
+Spring Boot 4.0.7 / Spring Cloud 2025.1.2.
 
 ## Where it sits
 
@@ -489,8 +489,8 @@ the only authority source.
 
 This service adopts the org's shared Maven artifacts. Three de-duplication moves:
 
-1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.4.0` (itself a child of
-   `spring-boot-starter-parent:4.0.2`, so the whole Spring Boot dependency/plugin
+1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.7.0` (itself a child of
+   `spring-boot-starter-parent:4.0.7`, so the whole Spring Boot dependency/plugin
    management is inherited transitively). The parent consolidates the reactive-BFF
    `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
    R2DBC + Liquibase + JDBC, springdoc, the full test stack) and the
@@ -752,8 +752,8 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or landing) ·
 🔭 planned (design-complete, no code here).
 
-- ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.2 / Spring Cloud
-  2025.1, Java 21, WebFlux + R2DBC + Liquibase (001–015, incl. DB-generated UUID
+- ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.7 / Spring Cloud
+  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–015, incl. DB-generated UUID
   primary keys), Spring Native hints, springdoc OpenAPI.
 - ✅ **Casdoor JWT resource server + owner-enforcement** across every `/bff/user/**`
   surface; the canonical `CasdoorAuthorities` converter; `ROLE_SERVICE`-exclusive
@@ -765,7 +765,7 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   instance-block recommendation, self-silence (atomic activate), connected-clients
   audit, active login-session management, AI-cloak media proxy (dark), account-status
   polling, in-app notifications floor (dark).
-- ✅ **Org artifact adoption:** `snapdragon-parent:2.4.0` + `snapdragon-commons:2.0.0`
+- ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons:2.0.0`
   (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI.
