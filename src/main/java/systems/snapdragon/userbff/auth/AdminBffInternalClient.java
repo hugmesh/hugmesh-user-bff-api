@@ -108,10 +108,7 @@ public class AdminBffInternalClient {
         if (http == null) {
             return stub("allowlistCheck");
         }
-        return http.get().uri(uri -> uri.path("/bff/internal/allowlist/check")
-                        .queryParam("provider", provider)
-                        .queryParam("handle", handle)
-                        .build())
+        return http.get().uri("/bff/internal/allowlist/{provider}/{handle}", provider, handle)
                 .retrieve()
                 .bodyToMono(Boolean.class);
     }
@@ -134,10 +131,7 @@ public class AdminBffInternalClient {
         if (http == null) {
             return stub("deleteSession");
         }
-        return http.method(org.springframework.http.HttpMethod.DELETE)
-                .uri("/bff/internal/sessions")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", token))
+        return http.delete().uri("/bff/internal/sessions/{token}", token)
                 .retrieve()
                 .toBodilessEntity()
                 .then();
