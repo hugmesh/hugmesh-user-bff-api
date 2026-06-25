@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DataR2dbcTest
 @Import({TestDatabaseConfig.class, UserNotificationRepository.class,
-        NotificationPreferenceRepository.class, InternalNotificationDeliveryService.class})
+        NotificationPreferenceRepository.class, SseNotificationBus.class, InternalNotificationDeliveryService.class})
 class InternalNotificationDeliveryServiceTest {
 
     @Autowired InternalNotificationDeliveryService service;

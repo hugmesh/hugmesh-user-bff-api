@@ -1117,6 +1117,28 @@
         }
       }
     },
+    "/bff/user/notifications/events" : {
+      "get" : {
+        "tags" : [ "Notifications (in-app floor)" ],
+        "summary" : "Real-time notification event stream (SSE). Client reconnects on close.",
+        "operationId" : "stream",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "text/event-stream" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ServerSentEventSseNotificationEvent"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/media/status/{ref}" : {
       "get" : {
         "tags" : [ "Media-cloak" ],
@@ -2059,6 +2081,9 @@
             "format" : "date-time"
           }
         }
+      },
+      "ServerSentEventSseNotificationEvent" : {
+        "type" : "object"
       },
       "MediaPoisonDecision" : {
         "type" : "object",

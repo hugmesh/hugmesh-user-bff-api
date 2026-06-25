@@ -19,6 +19,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import org.springframework.http.MediaType;
+import reactor.core.publisher.Flux;
+import systems.snapdragon.userbff.notification.SseNotificationEvent;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -61,6 +64,7 @@ class UserNotificationControllerTest {
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean UserNotificationService service;
+    @MockitoBean SseNotificationBus sseBus;
 
     private static final String UUID1 = "11111111-1111-1111-1111-111111111111";
 
@@ -160,6 +164,32 @@ class UserNotificationControllerTest {
             client.post().uri("/bff/user/notifications/" + UUID1 + "/read")
                     .exchange().expectStatus().isUnauthorized();
             verify(service, never()).markRead(any(), any(), any());
+        }
+
+        @Test
+        void stream_anonymous_isUnauthorized() {
+            client.get().uri("/bff/user/notifications/events")
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .exchange().expectStatus().isUnauthorized();
+        }
+    }
+
+    // ── SSE STREAM ────────────────────────────────────────────────────────────
+    @Nested
+    class SseStream {
+        @Test
+        void stream_authenticatedUser_returnsEventStream() {
+            SseNotificationEvent event = new SseNotificationEvent(
+                    "id-1", "role-change", "Role changed", null);
+            org.mockito.Mockito.when(sseBus.subscribe("alice"))
+                    .thenReturn(Flux.just(event));
+
+            client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
+                    .get().uri("/bff/user/notifications/events")
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .exchange()
+                    .expectStatus().isOk()
+                    .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM);
         }
     }
 }

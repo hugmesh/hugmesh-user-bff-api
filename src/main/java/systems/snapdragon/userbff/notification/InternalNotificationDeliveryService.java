@@ -29,17 +29,24 @@ import systems.snapdragon.commons.web.ApiException;
  * INSERT-IF-ABSENT: a retried delivery of the same {@code (sourceTable, sourceId)} finds
  * the row already present and reports {@code delivered=true, deduped=true} WITHOUT
  * writing a second row.
+ *
+ * <p><b>SSE push.</b> On a fresh insert (not a dedupe), the event is also pushed to the
+ * {@link SseNotificationBus} so any open browser stream for the target user is updated
+ * immediately without polling.
  */
 @Service
 public class InternalNotificationDeliveryService {
 
     private final UserNotificationRepository notifications;
     private final NotificationPreferenceRepository preferences;
+    private final SseNotificationBus sseBus;
 
     public InternalNotificationDeliveryService(UserNotificationRepository notifications,
-                                               NotificationPreferenceRepository preferences) {
+                                               NotificationPreferenceRepository preferences,
+                                               SseNotificationBus sseBus) {
         this.notifications = notifications;
         this.preferences = preferences;
+        this.sseBus = sseBus;
     }
 
     /** The outcome of a deliver call (serialised to the endpoint's JSON body). */
@@ -87,8 +94,17 @@ public class InternalNotificationDeliveryService {
                 return Mono.just(DeliveryResult.suppressedResult());   // no write
             }
             return notifications.insertIfAbsent(id, dom, owner, cat, ttl, body)
+                    .doOnSuccess(inserted -> pushToSse(inserted, owner, id, cat, ttl, body))
                     .map(inserted -> inserted ? DeliveryResult.inserted() : DeliveryResult.dedupedHit());
         });
+    }
+
+    private void pushToSse(Boolean inserted, String userId, String id,
+                           String category, String title, String body) {
+        // only push on a fresh insert — dedupe hits carry no new information for the user
+        if (Boolean.TRUE.equals(inserted)) {
+            sseBus.publish(userId, new SseNotificationEvent(id, category, title, body));
+        }
     }
 
     private static Mono<DeliveryResult> badRequest(String msg) {
