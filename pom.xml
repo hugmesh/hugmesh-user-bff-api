@@ -47,7 +47,7 @@
     <dependency>
       <groupId>systems.snapdragon</groupId>
       <artifactId>snapdragon-commons</artifactId>
-      <version>2.0.0</version>
+      <version>2.7.0</version>
       <classifier>tests</classifier>
       <scope>test</scope>
     </dependency>

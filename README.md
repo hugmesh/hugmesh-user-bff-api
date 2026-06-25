@@ -517,7 +517,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
    plugin config. Only the **repo-specific** deps stay in this POM: `icu4j` and
    `commons-text` (the Unicode confusable / typo-squat guard).
 
-2. **Shared security/tenancy/web →** `systems.snapdragon:snapdragon-commons:2.0.0`.
+2. **Shared security/tenancy/web →** `systems.snapdragon:snapdragon-commons:2.7.0`.
    The local copies of `security.{Roles,DomainRegistry,CasdoorAuthorities,DomainScope}`,
    `config.TenancyResourceServerConfig` and `web.ApiException` were **deleted** and
    replaced by:
@@ -688,7 +688,7 @@ inline `@Query`).
 CI is **GitLab only** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
 in-cluster GitLab. There are deliberately **no `.github/workflows`** (GitHub
 Actions is billing-blocked). The pipeline runs **`test`** (`mvn verify` on
-`eclipse-temurin:21-jdk-noble`) → **`security`** (OWASP Dependency-Check SCA,
+`maven:3.9-eclipse-temurin-25`) → **`security`** (OWASP Dependency-Check SCA,
 fail-on-CVSS≥9) → **`dast`** (a ZAP API scan against the OpenAPI spec when
 `DAST_TARGET_URL` is set, advisory otherwise) → **`build`** (the container image) →
 **`pentest`**. The `pentest` stage `include:`s the centralized OWASP harness from
@@ -784,7 +784,7 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   instance-block recommendation, self-silence (atomic activate), connected-clients
   audit, active login-session management, AI-cloak media proxy (dark), account-status
   polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark).
-- ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons:2.0.0`
+- ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons:2.7.0`
   (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI.
