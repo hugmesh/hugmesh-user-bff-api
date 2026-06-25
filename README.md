@@ -36,7 +36,7 @@ flowchart LR
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
     subgraph BFF["snapdragon-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
-        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications"]
+        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE)"]
         Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
@@ -71,7 +71,7 @@ amber-dashed homeserver leg is the ✅-shipped-but-**gated** stub-seam (off by d
 ## Auth model / SSO relocation 🚧
 
 The platform's auth is being consolidated this cycle, and this BFF is the new home
-for the user-facing slice of it. Ground truth as of 2026-06-20:
+for the user-facing slice of it. Ground truth as of 2026-06-25:
 
 - **Casdoor is the SSO IdP.** `login-ui` performs a Casdoor OIDC authorization-code
   (PKCE) redirect; **this BFF does the server-side code→token exchange** and holds
@@ -415,6 +415,27 @@ external channels that build on top.
 > the SERVICE-only deliver endpoint exists, but nothing writes `user_notifications` in
 > normal operation yet — the `snapdragon-actions` reconciler (a separate repo, later PR)
 > is the only writer. This is the read/prefs/deliver-seam side of the feature.
+
+### Real-time SSE stream 🚧 in-flight
+`GET /bff/user/notifications/events` — a **server-sent event stream** (`text/event-stream`)
+for real-time in-app notification push. `ROLE_USER` floor, owner-enforced (owner = JWT
+subject). **PR #72 open.**
+
+- **Wire protocol:** events carry `{id, category, title, body}` as JSON. The connection
+  has a **4-minute server-side timeout**; the client is expected to reconnect
+  automatically (the standard SSE reconnect loop handles this).
+- **`SseNotificationBus`** — a per-user `Sinks.Many` multicast (`onBackpressureBuffer(16,
+  false)`), one sink per connected subscriber. The SSE endpoint subscribes to the
+  caller's sink; when the sink completes or errors the SSE stream closes cleanly.
+- **`InternalNotificationDeliveryService`** — after writing the `user_notifications` DB
+  row, publishes the notification event onto the caller's `SseNotificationBus` sink so
+  all active SSE connections for that user receive it immediately.
+- **Host-shell consumption:** the `snapdragon-user-ui` host shell consumes this stream
+  via **bearer-fetch SSE** (native `fetch()` + `ReadableStream` line-by-line parsing),
+  **NOT** the browser's native `EventSource` API — `EventSource` cannot send an
+  `Authorization` header, so it cannot carry the `bff_` session token. The bearer-fetch
+  pattern (`fetch(url, { headers: { Authorization: ... } })` + a `ReadableStream`
+  reader) is the required approach for any authenticated SSE endpoint.
 
 ## Where data lives (the routing rule)
 
