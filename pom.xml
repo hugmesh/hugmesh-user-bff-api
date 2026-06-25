@@ -4,12 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <!-- The org metapom — consolidates the Spring Boot 3.5.5 / Java 21 reactive BFF
+  <!-- The org metapom — consolidates the Spring Boot 4.0.7 / Java 25 reactive BFF
        baseline (WebFlux + Casdoor OAuth2 resource server + R2DBC/Liquibase +
        SpringDoc), the shared <dependencies>, dependencyManagement (snapdragon-commons,
        AWS SDK BOM, resilience4j, springdoc), pluginManagement (compiler / surefire
        bytebuddy flag / spring-boot / native) and the GitLab Maven publishing wiring.
-       snapdragon-parent is itself a child of spring-boot-starter-parent:3.5.5, so the
+       snapdragon-parent is itself a child of spring-boot-starter-parent:4.0.7, so the
        Spring Boot dependency + plugin management is inherited TRANSITIVELY. -->
   <parent>
     <groupId>systems.snapdragon</groupId>
@@ -24,7 +24,7 @@
   <artifactId>user-bff</artifactId>
   <version>0.1.0</version>
   <properties>
-    <!-- java.version (21), encoding, the snapdragon-commons version and the springdoc
+    <!-- java.version (25), encoding, the snapdragon-commons version and the springdoc
          version are all inherited from snapdragon-parent. ONLY the repo-specific pins
          (icu4j / commons-text) stay below on the dependencies themselves. -->
   </properties>

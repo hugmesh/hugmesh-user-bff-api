@@ -382,6 +382,7 @@ external channels that build on top.
   default 50).
 - `POST /bff/user/notifications/{id}/read` — mark ONE of my own notifications read; an
   id that is not my own owner+domain row is a **404** (no cross-user mark).
+- `GET /bff/user/notifications/events` — real-time SSE stream of new in-app notifications for the caller (`text/event-stream`). Backed by `SseNotificationBus` (per-user `Sinks.Many` registry); the `InternalNotificationDeliveryService` emits into the bus on every successful `POST /bff/user/internal/notifications` write. Client should reconnect on close; the server closes the stream after a 4-minute idle window (`SSE_TIMEOUT`). Owner-enforced (JWT subject). ✅ shipped.
 
 **Per-category preferences — `NotificationPreferenceController`
 (`/bff/user/notification-preferences`)** (`ROLE_USER` floor) — MIRRORS the durable
@@ -411,10 +412,7 @@ external channels that build on top.
   (`sourceTable`+`sourceId`), so a retry is INSERT-IF-ABSENT (a duplicate returns
   `delivered=true, deduped=true`, never a second row).
 
-> **SHIPS DARK (in-app floor MVP):** the read/mark-read + prefs surfaces are live and
-> the SERVICE-only deliver endpoint exists, but nothing writes `user_notifications` in
-> normal operation yet — the `snapdragon-actions` reconciler (a separate repo, later PR)
-> is the only writer. This is the read/prefs/deliver-seam side of the feature.
+> **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is still dark in normal operation — nothing writes `user_notifications` yet outside tests, so the SSE stream emits only when the `snapdragon-actions` reconciler (separate repo, later PR) starts calling the internal deliver endpoint. The SSE wiring itself is ✅ shipped.
 
 ### Real-time SSE stream 🚧 in-flight
 `GET /bff/user/notifications/events` — a **server-sent event stream** (`text/event-stream`)
@@ -785,7 +783,7 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   avatar upload (dark)), home-guide, durable preferences, cards proxy, self-block +
   instance-block recommendation, self-silence (atomic activate), connected-clients
   audit, active login-session management, AI-cloak media proxy (dark), account-status
-  polling, in-app notifications floor (dark).
+  polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark).
 - ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons:2.0.0`
   (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
