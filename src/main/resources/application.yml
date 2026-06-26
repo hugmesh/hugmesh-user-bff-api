@@ -194,11 +194,13 @@ app:
       enabled: "${APP_SESSIONS_MANAGEMENT_ENABLED:true}"
 
   # ── D6 Matrix/Mastodon BFF-proxy (custody store + mint + reactive proxy) ──────
-  # SHIPS DARK: enabled=false ⇒ every /bff/user/{matrix,mastodon}/** endpoint 503s
-  # and nothing reads/writes the hs_service_token custody table. The legacy admin-bff
-  # /bff/provision/* browser-token path stays the live fallback (NOT removed; PR5/UI
-  # is out of scope). Flip enabled=true ONLY once a custody key (app.hs-token.key) is
-  # provisioned AND the tuwunel-proxy/akkoma-proxy mTLS sidecars exist.
+  # LIVE BY DEFAULT: enabled=true ⇒ /bff/user/{matrix,mastodon}/** reverse-proxies with
+  # the SERVER-HELD homeserver token injected (owner = the bff_ session subject); the
+  # browser holds NO homeserver access token. The token-removal cutover makes this the
+  # only path — the browser MUST call these proxy endpoints with the HttpOnly bff_ cookie.
+  # Even when enabled=true the proxy still 503s unless a custody key (app.hs-token.key)
+  # is provisioned AND the tuwunel-proxy/akkoma-proxy mTLS sidecars exist (fail-closed).
+  # Override APP_HS_TOKEN_ENABLED=false to fully dark the surface.
   #
   # key: the AES-256-GCM data key for the at-rest custody-token cipher — ESO/Vault-
   # sourced at deploy, NEVER a literal in git. Blank ⇒ the cipher is INERT and the
@@ -213,7 +215,7 @@ app:
   # the gateway HomeserverTokenRevocationFilter keeps working. Default OFF (the custody
   # row + decrypted token are the source of truth; the gateway hash converges next tick).
   hs-token:
-    enabled: "${APP_HS_TOKEN_ENABLED:false}"
+    enabled: "${APP_HS_TOKEN_ENABLED:true}"
     key: "${APP_HS_TOKEN_KEY:}"
     matrix-url: "${APP_HS_TOKEN_MATRIX_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
     mastodon-url: "${APP_HS_TOKEN_MASTODON_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"

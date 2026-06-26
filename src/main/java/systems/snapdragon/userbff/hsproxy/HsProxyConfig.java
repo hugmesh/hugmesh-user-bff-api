@@ -21,9 +21,10 @@ import systems.snapdragon.userbff.federation.FederationHttpClientSsl;
  * the sidecar nginx already has a 300s read timeout + WS upgrade headers). Response
  * decompression is left to the sidecar; the BFF forwards bytes verbatim.
  *
- * <p>The feature is SHIPS-DARK behind {@code app.hs-token.enabled} (default false) — the
- * controllers 503 when disabled — so these beans are always present but inert until the
- * gate is flipped and a custody key + sidecars exist.
+ * <p>The feature is gated behind {@code app.hs-token.enabled} (now default true — the
+ * proxy is the only homeserver path, the browser holds no token) — the controllers still
+ * 503 unless a custody key + sidecars exist — so these beans are always present but inert
+ * until both the gate is on and a custody key + sidecars are wired.
  */
 @Configuration
 public class HsProxyConfig {

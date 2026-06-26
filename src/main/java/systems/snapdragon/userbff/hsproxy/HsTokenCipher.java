@@ -33,10 +33,10 @@ import java.util.Base64;
  * arbitrary passphrase, which is folded to 32 bytes via SHA-256.
  *
  * <h3>Dark posture</h3>
- * When no key is configured the cipher is INERT: {@link #isAvailable()} is false. The D6
- * feature is already dark behind {@code app.hs-token.enabled} (default false); a
- * deployment that flips it on without provisioning a key gets a clean failure rather than
- * a plaintext-secret fallback. No JDK fallback to plaintext EVER.
+ * When no key is configured the cipher is INERT: {@link #isAvailable()} is false. Even
+ * with {@code app.hs-token.enabled} now default true, a deployment that turns the proxy on
+ * without provisioning a key gets a clean 503 rather than a plaintext-secret fallback. No
+ * JDK fallback to plaintext EVER.
  */
 @Component
 public class HsTokenCipher {

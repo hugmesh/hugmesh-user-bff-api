@@ -25,11 +25,12 @@ import reactor.core.publisher.Mono;
  * the {@code ROLE_USER} security floor. Streaming ({@code /api/v1/streaming/**}) passes
  * through verbatim via {@link HsReverseProxy}.
  *
- * <p>SHIPS DARK: every method 503s when {@code app.hs-token.enabled=false} (default) OR
- * the custody cipher key is unset — the legacy admin-bff {@code /bff/provision/*}
- * browser-token path stays the live fallback (NOT removed here; PR5/UI is out of scope).
+ * <p>LIVE BY DEFAULT ({@code app.hs-token.enabled} now defaults true): this proxy is the
+ * ONLY homeserver path now that the browser holds no Mastodon access token. Every method
+ * still 503s when {@code app.hs-token.enabled=false} OR the custody cipher key is unset
+ * (fail-closed) — there is no browser-token fallback.
  */
-@Tag(name = "Mastodon proxy (D6)", description = "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Ships dark behind app.hs-token.enabled.")
+@Tag(name = "Mastodon proxy (D6)", description = "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled.")
 @RestController
 @RequestMapping("/bff/user/mastodon")
 @PreAuthorize("hasRole('MASTODON')")
@@ -57,8 +58,8 @@ public class MastodonProxyController {
     @RequestMapping("/**")
     public Mono<Void> proxy(@AuthenticationPrincipal Jwt jwt, ServerWebExchange exchange) {
         if (!enabled || !custody.cipherAvailable()) {
-            // SHIPS-DARK: feature off (or no custody key) → 503; the legacy
-            // /bff/provision/* browser-token path is the live fallback.
+            // Fail-closed: feature off (or no custody key) → 503. There is NO
+            // browser-token fallback — the browser holds no homeserver token.
             return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "Mastodon BFF-proxy is not enabled (app.hs-token.enabled=false)"));
         }

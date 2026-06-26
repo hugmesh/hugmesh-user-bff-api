@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -36,11 +37,14 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  *   <li>cross-surface: a MATRIX-only role is 403 on the Mastodon surface (no leakage).</li>
  * </ul>
  *
- * <p>This test pins the DARK posture (the default {@code app.hs-token.enabled} is unset →
- * false), which is the safe shipping state of the PR.
+ * <p>This test pins the DARK posture EXPLICITLY via {@code @TestPropertySource}
+ * ({@code app.hs-token.enabled=false}) — the application.yml default is now {@code true}
+ * (the proxy is live so the browser holds no homeserver token), so the dark-behaviour
+ * assertions must override it locally rather than rely on the shipped default.
  */
 @WebFluxTest(controllers = {MatrixProxyController.class, MastodonProxyController.class})
 @Import({SecurityConfig.class, HsProxyControllerSecurityTest.StubClients.class})
+@TestPropertySource(properties = "app.hs-token.enabled=false")
 class HsProxyControllerSecurityTest {
 
     @Autowired ApplicationContext context;
