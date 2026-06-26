@@ -13,6 +13,7 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -85,8 +86,9 @@ class SsoAuthControllerTest {
     }
 
     @Test
-    void register_delegatesEnsureAccount() {
+    void register_delegatesAllowlistEnsureAndSession() {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(adminBff.allowlistCheck(eq("email"), eq("alice@example.test"))).thenReturn(Mono.just(true));
         when(adminBff.ensureAccount(eq("email"), eq("alice@example.test"))).thenReturn(Mono.just(ACCOUNT));
         when(adminBff.createSession("acc-1")).thenReturn(Mono.just(SESSION));
 
@@ -97,7 +99,29 @@ class SsoAuthControllerTest {
                 .expectStatus().isOk()
                 .expectBody().jsonPath("$.token").isEqualTo("bff_opaque");
 
+        verify(adminBff).allowlistCheck("email", "alice@example.test");
         verify(adminBff).ensureAccount("email", "alice@example.test");
+    }
+
+    /**
+     * Regression for finding #5: /register (permitAll, account-provisioning) MUST gate on the
+     * BFF-side allowlist just like /login. An unlisted email is rejected with 403 BEFORE any
+     * account is provisioned — ensureAccount/createSession are never invoked.
+     */
+    @Test
+    void register_notAllowlisted_is403_andNeverProvisions() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(adminBff.allowlistCheck(eq("email"), eq("blocked@example.test"))).thenReturn(Mono.just(false));
+
+        client(adminBff, false).post().uri("/bff/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"email\":\"blocked@example.test\",\"displayName\":\"Mallory\",\"screenReaderName\":\"Mallory\"}")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        verify(adminBff).allowlistCheck("email", "blocked@example.test");
+        verify(adminBff, never()).ensureAccount(anyString(), anyString());
+        verify(adminBff, never()).createSession(anyString());
     }
 
     @Test

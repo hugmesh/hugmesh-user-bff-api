@@ -79,7 +79,14 @@ public class SsoAuthController {
     @PostMapping("/register")
     public Mono<ResponseEntity<Map<String, Object>>> register(@RequestBody RegisterEmailRequest req,
                                                               ServerWebExchange exchange) {
-        return adminBff.ensureAccount("email", req.email())
+        // Gate the account-provisioning entrypoint on the SAME allowlist as login() so an
+        // unlisted email cannot self-provision an account + session via /register (this is a
+        // permitAll, mutating surface). 403 BEFORE ensureAccount when not allowed; fail-closed.
+        return adminBff.allowlistCheck("email", req.email())
+                .flatMap(allowed -> Boolean.TRUE.equals(allowed)
+                        ? adminBff.ensureAccount("email", req.email())
+                        : Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN,
+                                "not allowed to register")))
                 .flatMap(account -> adminBff.createSession(account.id())
                         .map(session -> emitAndSession(exchange, account, session)));
     }
