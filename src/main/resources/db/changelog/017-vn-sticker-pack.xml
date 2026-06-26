@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        vn_sticker_pack — a VN-CHARACTER EXPRESSION STICKER (Phase B1). One row per
+        per-user expression sticker: a raster (PNG) snapshot rendered from the character
+        rig at a canonical EXPRESSION (happy|sad|...), moderated and stored so the active
+        set can later be advertised as an MSC2545 (im.ponies.user_emotes) sticker pack and
+        sent as m.sticker events.
+
+        The leg this table backs (B1 increment 1 — the STORAGE backend) is
+        MODERATE → STORE-PENDING → FILE-MODERATION-FINDING: a sticker's PNG bytes are
+        edge-AI vision-moderated FIRST (reuse of the avatar EdgeAiAnalysisClient.moderate
+        — fail-CLOSED when enabled-but-unreachable; allow-all when the feature ships dark);
+        a blocked sticker never reaches the homeserver and is never persisted (422). An
+        ALLOWED sticker is uploaded to the homeserver media repo (mxc://, stub-gated like
+        the avatar) and persisted here status='PENDING', and the save files a held @system
+        moderation finding (surface=character-sticker) so a HUMAN reviews it. A moderator
+        later flips the row to ACTIVE (advertised) or REJECTED.
+
+        Columns (owner-keyed, one row per sticker):
+          • id             — DB-generated UUID PK ((gen_random_uuid())::text, changelog
+                             015 idiom): the INSERT OMITS id and RETURNING id reads the
+                             generated string back.
+          • owner_subject  — Casdoor JWT subject (owner); NEVER from the request body.
+          • domain         — the brand/tenant (DEFAULT 'default', NOT NULL), derived
+                             server-side from the validated token issuer (mirrors 010/016).
+          • expression     — the canonical expression label (StickerExpression vocabulary);
+                             NOT NULL. A CHECK gives DB parity with the API-enforced set
+                             (the same shortcode-safe tokens the MSC2545 pack keys on).
+          • mxc_url        — the homeserver media mxc:// URL of the rendered PNG (NOT NULL;
+                             a stub mxc:// when the live upload is disabled — the durable
+                             ref either way). This is what the pack/picker resolves.
+          • status         — PENDING|ACTIVE|REJECTED; DEFAULT 'PENDING'. A CHECK gives DB
+                             parity with the API-enforced vocabulary (pattern 005/007/016).
+          • created_at     — when the sticker was saved (server-side now()).
+
+        Numbered 017 — the band ABOVE the current max (016) in db.changelog-master.xml;
+        registered LAST in the master with a SINGLE <include>.
+    -->
+
+    <changeSet id="017-1-vn-sticker-pack" author="snapdragon">
+        <createTable tableName="vn_sticker_pack">
+            <column name="id" type="varchar(64)" defaultValueComputed="(gen_random_uuid())::text">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="owner_subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="domain" type="varchar(255)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expression" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="mxc_url" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="varchar(16)" defaultValue="PENDING">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- Owner + domain list index for the "my stickers, newest first" read. -->
+    <changeSet id="017-2-vn-sticker-pack-index" author="snapdragon">
+        <createIndex tableName="vn_sticker_pack" indexName="idx_vn_sticker_pack_owner_domain">
+            <column name="owner_subject"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="vn_sticker_pack" indexName="idx_vn_sticker_pack_owner_domain"/>
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced status vocabulary (plain ANSI col IN (...),
+         runs identically on production Postgres AND the H2 PostgreSQL-compat slice). -->
+    <changeSet id="017-3-vn-sticker-pack-status-check" author="snapdragon">
+        <sql>
+            ALTER TABLE vn_sticker_pack
+                ADD CONSTRAINT ck_vn_sticker_pack_status
+                CHECK (status IN ('PENDING', 'ACTIVE', 'REJECTED'))
+        </sql>
+        <rollback>
+            ALTER TABLE vn_sticker_pack DROP CONSTRAINT ck_vn_sticker_pack_status
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced canonical expression vocabulary (StickerExpression).
+         The label set MUST stay identical to StickerExpression.ALL (the API gate) — the
+         two paired vocabularies are kept in lock-step by convention. -->
+    <changeSet id="017-4-vn-sticker-pack-expression-check" author="snapdragon">
+        <sql>
+            ALTER TABLE vn_sticker_pack
+                ADD CONSTRAINT ck_vn_sticker_pack_expression
+                CHECK (expression IN ('neutral', 'happy', 'sad', 'angry', 'surprised',
+                                      'embarrassed', 'thinking', 'wink', 'sleepy', 'smug'))
+        </sql>
+        <rollback>
+            ALTER TABLE vn_sticker_pack DROP CONSTRAINT ck_vn_sticker_pack_expression
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

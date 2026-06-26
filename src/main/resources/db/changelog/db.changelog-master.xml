@@ -71,6 +71,19 @@
               so a HUMAN reviews the sanitized SVG itself (no server-side rasterizer). DB-
               generated UUID PK ((gen_random_uuid())::text, 015 idiom); owner_subject +
               domain scoped like every other owner-keyed table; status CHECK parity.
+        017 — vn_sticker_pack: a VN-CHARACTER EXPRESSION STICKER (Phase B1, increment 1 —
+              the moderated sticker-pack STORAGE backend). One row per per-user expression
+              sticker: a raster (PNG) snapshot rendered from the character rig at a
+              canonical EXPRESSION (StickerExpression vocabulary). The save leg is
+              MODERATE → STORE-PENDING → FILE-MODERATION-FINDING: the PNG bytes are edge-AI
+              vision-moderated FIRST (reuse of the avatar EdgeAiAnalysisClient.moderate,
+              fail-CLOSED when enabled-but-unreachable; allow-all when dark), a blocked
+              sticker never reaches the homeserver and is never persisted (422), an allowed
+              one is uploaded to the homeserver media repo (mxc://, stub-gated like the
+              avatar) and persisted status='PENDING', and the save files a held @system
+              moderation finding (surface=character-sticker). DB-generated UUID PK
+              ((gen_random_uuid())::text, 015 idiom); owner_subject + domain scoped; status
+              + expression CHECK parity (the expression CHECK mirrors StickerExpression.ALL).
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -89,4 +102,5 @@
     <include file="db/changelog/014-user-profile-avatar.xml"/>
     <include file="db/changelog/015-db-generated-uuid-pks.xml"/>
     <include file="db/changelog/016-vn-character-part.xml"/>
+    <include file="db/changelog/017-vn-sticker-pack.xml"/>
 </databaseChangeLog>

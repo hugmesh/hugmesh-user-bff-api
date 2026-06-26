@@ -18,6 +18,9 @@
     "name" : "Media-cloak",
     "description" : "Poison-before-ingest media proxy (owner = JWT subject). Best-effort AI-cloak — 'AI-cloak applied', never 'protected' unless the round-trip survival gate passes."
   }, {
+    "name" : "Character-stickers",
+    "description" : "The caller's OWN VN-character expression stickers (owner = JWT subject). Each is a rendered PNG, edge-AI moderated before publish and reviewed by a moderator."
+  }, {
     "name" : "Character-parts",
     "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
   }, {
@@ -781,11 +784,69 @@
         }
       }
     },
+    "/bff/user/character/stickers" : {
+      "get" : {
+        "tags" : [ "Character-stickers" ],
+        "summary" : "List MY VN-character expression stickers (newest first). Owner = JWT subject.",
+        "operationId" : "listMine",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/VnSticker"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Character-stickers" ],
+        "summary" : "Save a VN-character expression sticker (multipart 'file' = the rendered PNG + 'expression' = a canonical label). The bytes are magic-byte-sniffed (a non-raster/SVG is a 400), size-capped, edge-AI moderated (a blocked sticker is a 422), uploaded to the homeserver media repo, stored status=PENDING, and queued for moderation. Owner = JWT subject.",
+        "operationId" : "save",
+        "requestBody" : {
+          "content" : {
+            "multipart/form-data" : {
+              "schema" : {
+                "required" : [ "expression", "file" ],
+                "type" : "object",
+                "properties" : {
+                  "expression" : {
+                    "type" : "string"
+                  },
+                  "file" : {
+                    "type" : "string",
+                    "format" : "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VnSticker"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/character/parts" : {
       "get" : {
         "tags" : [ "Character-parts" ],
         "summary" : "List MY character parts (newest first). Owner = JWT subject.",
-        "operationId" : "listMine",
+        "operationId" : "listMine_1",
         "responses" : {
           "200" : {
             "description" : "OK",
@@ -805,7 +866,7 @@
       "post" : {
         "tags" : [ "Character-parts" ],
         "summary" : "Save a user-drawn character part. The SVG is server-sanitized (a malformed/non-svg body is a 422), stored status=PENDING, and queued for moderation. Owner = JWT subject.",
-        "operationId" : "save",
+        "operationId" : "save_1",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -1098,7 +1159,7 @@
       "get" : {
         "tags" : [ "Sessions" ],
         "summary" : "List my active login sessions (owner = JWT-derived account; ids are opaque fingerprints, never the raw session token).",
-        "operationId" : "listMine_1",
+        "operationId" : "listMine_2",
         "responses" : {
           "200" : {
             "description" : "OK",
@@ -2032,6 +2093,33 @@
           },
           "reason" : {
             "type" : "string"
+          }
+        }
+      },
+      "VnSticker" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "ownerSubject" : {
+            "type" : "string"
+          },
+          "domain" : {
+            "type" : "string"
+          },
+          "expression" : {
+            "type" : "string"
+          },
+          "mxcUrl" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
           }
         }
       },

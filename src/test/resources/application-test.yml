@@ -6,3 +6,19 @@
 app:
   hs-token:
     svc-password: "test-svc-pw"
+
+# Bound the R2DBC connection pool for the @DataR2dbcTest slices. They all share ONE
+# Testcontainers Postgres container (commons PostgresTestSupport's static container,
+# one DB per slice) whose default max_connections is 100. Each loaded slice context
+# keeps its own R2DBC pool open against that one container, so as the number of
+# repository slices grows the cumulative open connections can cross the 100-client
+# ceiling — surfacing as "FATAL: sorry, too many clients already" when a late slice
+# (e.g. the notification repo test) tries to open its bootstrap connection. Capping
+# each pool to a small ceiling keeps the cumulative count well under the limit. This
+# only applies under the "test" profile; production uses application.yml's pool.
+spring:
+  r2dbc:
+    pool:
+      initial-size: 1
+      max-size: 4
+      max-idle-time: 30s
