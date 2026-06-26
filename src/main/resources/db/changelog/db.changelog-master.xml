@@ -64,6 +64,13 @@
               calling UUID.randomUUID() and reads the id back via INSERT ... RETURNING id.
               pgcrypto is gated to Postgres; the DEFAULT changeSets are harmless under H2
               (never evaluated by the non-migrated H2 slices).
+        016 — vn_character_part: a USER-DRAWN character PART (an SVG) for the VN/character-
+              studio drawable-parts feature. The stored `svg` is the SERVER-SANITIZED
+              subset (SvgSanitizerService runs BEFORE storage), saved status='PENDING',
+              and the save files a held @system moderation finding (surface=character-part)
+              so a HUMAN reviews the sanitized SVG itself (no server-side rasterizer). DB-
+              generated UUID PK ((gen_random_uuid())::text, 015 idiom); owner_subject +
+              domain scoped like every other owner-keyed table; status CHECK parity.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -81,4 +88,5 @@
     <include file="db/changelog/013-hs-service-token.xml"/>
     <include file="db/changelog/014-user-profile-avatar.xml"/>
     <include file="db/changelog/015-db-generated-uuid-pks.xml"/>
+    <include file="db/changelog/016-vn-character-part.xml"/>
 </databaseChangeLog>

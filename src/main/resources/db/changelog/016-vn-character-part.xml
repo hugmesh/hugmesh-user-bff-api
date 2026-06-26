@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        vn_character_part — a USER-DRAWN character PART (an SVG) for the VN/character-
+        studio drawable-parts feature. The stored `svg` is the SERVER-SANITIZED subset
+        (systems.snapdragon.userbff.svg.SvgSanitizerService allowlist-filters the dirty
+        client SVG BEFORE it ever lands here), so the column never holds raw user XML —
+        the security boundary runs in the service, the DB is the durable store.
+
+        The leg this table backs is SANITIZE → STORE-PENDING → FILE-MODERATION-FINDING:
+        a saved part lands `status='PENDING'` and the service files a held @system
+        moderation finding (surface=character-part) so a HUMAN reviews the sanitized SVG
+        itself (deliberately NO server-side rasterizer; the moderator reads the SVG). A
+        moderator later flips the row to ACTIVE or REJECTED.
+
+        Columns (owner-keyed, one row per part):
+          • id             — DB-generated UUID PK ((gen_random_uuid())::text, changelog
+                             015 idiom): the INSERT OMITS id and RETURNING id reads the
+                             generated string back.
+          • owner_subject  — Casdoor JWT subject (owner); NEVER from the request body.
+          • domain         — the brand/tenant (DEFAULT 'default', NOT NULL), derived
+                             server-side from the validated token issuer (mirrors 010).
+          • name           — the user's label for the part (optional, <=120 chars).
+          • svg            — the SANITIZED svg text (NOT NULL). This is what the GET
+                             /{id}/svg endpoint serves back (image/svg+xml, hardened CSP).
+          • status         — PENDING|ACTIVE|REJECTED; DEFAULT 'PENDING'. A CHECK gives
+                             DB parity with the API-enforced vocabulary (pattern 005/007).
+          • head_archetype — the head archetype the part is drawn for (optional, the
+                             facial-feature↔head compatibility key; nullable, <=40 chars).
+          • created_at     — when the part was saved (server-side now()).
+
+        Numbered 016 — the band ABOVE the current max (015) in db.changelog-master.xml;
+        registered LAST in the master with a SINGLE <include>.
+    -->
+
+    <changeSet id="016-1-vn-character-part" author="snapdragon">
+        <createTable tableName="vn_character_part">
+            <column name="id" type="varchar(64)" defaultValueComputed="(gen_random_uuid())::text">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="owner_subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="domain" type="varchar(255)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name" type="varchar(120)"/>
+            <column name="svg" type="text">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="varchar(16)" defaultValue="PENDING">
+                <constraints nullable="false"/>
+            </column>
+            <column name="head_archetype" type="varchar(40)"/>
+            <column name="created_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- Owner + domain list index for the "my parts, newest first" read. -->
+    <changeSet id="016-2-vn-character-part-index" author="snapdragon">
+        <createIndex tableName="vn_character_part" indexName="idx_vn_character_part_owner_domain">
+            <column name="owner_subject"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="vn_character_part" indexName="idx_vn_character_part_owner_domain"/>
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced status vocabulary (plain ANSI col IN (...),
+         runs identically on production Postgres AND the H2 PostgreSQL-compat slice). -->
+    <changeSet id="016-3-vn-character-part-status-check" author="snapdragon">
+        <sql>
+            ALTER TABLE vn_character_part
+                ADD CONSTRAINT ck_vn_character_part_status
+                CHECK (status IN ('PENDING', 'ACTIVE', 'REJECTED'))
+        </sql>
+        <rollback>
+            ALTER TABLE vn_character_part DROP CONSTRAINT ck_vn_character_part_status
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -18,6 +18,9 @@
     "name" : "Media-cloak",
     "description" : "Poison-before-ingest media proxy (owner = JWT subject). Best-effort AI-cloak — 'AI-cloak applied', never 'protected' unless the round-trip survival gate passes."
   }, {
+    "name" : "Character-parts",
+    "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
+  }, {
     "name" : "SSO auth",
     "description" : "Login / register / session surface, delegating to admin-bff internal. Ships dark behind app.bff.oidc.enabled."
   }, {
@@ -778,6 +781,55 @@
         }
       }
     },
+    "/bff/user/character/parts" : {
+      "get" : {
+        "tags" : [ "Character-parts" ],
+        "summary" : "List MY character parts (newest first). Owner = JWT subject.",
+        "operationId" : "listMine",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/VnCharacterPart"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Character-parts" ],
+        "summary" : "Save a user-drawn character part. The SVG is server-sanitized (a malformed/non-svg body is a 422), stored status=PENDING, and queued for moderation. Owner = JWT subject.",
+        "operationId" : "save",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SavePartRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VnCharacterPart"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/blocks" : {
       "get" : {
         "tags" : [ "Self-block" ],
@@ -1046,7 +1098,7 @@
       "get" : {
         "tags" : [ "Sessions" ],
         "summary" : "List my active login sessions (owner = JWT-derived account; ids are opaque fingerprints, never the raw session token).",
-        "operationId" : "listMine",
+        "operationId" : "listMine_1",
         "responses" : {
           "200" : {
             "description" : "OK",
@@ -1260,6 +1312,33 @@
                   "items" : {
                     "$ref" : "#/components/schemas/ConnectedClient"
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/character/parts/{id}/svg" : {
+      "get" : {
+        "tags" : [ "Character-parts" ],
+        "summary" : "Serve MY stored, SANITIZED part SVG as a hardened image (image/svg+xml + locked-down CSP). A part that is not mine is a 404. Owner = JWT subject.",
+        "operationId" : "serveSvg",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
                 }
               }
             }
@@ -1953,6 +2032,57 @@
           },
           "reason" : {
             "type" : "string"
+          }
+        }
+      },
+      "SavePartRequest" : {
+        "required" : [ "svg" ],
+        "type" : "object",
+        "properties" : {
+          "name" : {
+            "maxLength" : 120,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "headArchetype" : {
+            "maxLength" : 40,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "svg" : {
+            "maxLength" : 1000000,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "VnCharacterPart" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "ownerSubject" : {
+            "type" : "string"
+          },
+          "domain" : {
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "svg" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "headArchetype" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
           }
         }
       },
