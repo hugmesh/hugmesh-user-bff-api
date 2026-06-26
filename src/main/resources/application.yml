@@ -75,6 +75,18 @@ block:
     enabled: "${BLOCK_MASTODON_ENABLED:false}"
     base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
 
+# PROFILE-IMAGE VISION MODERATION (on-prem edge-AI). Ships DARK — enabled=false ⇒ avatar
+# uploads are UNCHANGED (allow-all). When enabled, every avatar is scanned by the shared
+# edge-ai-analysis service (POST /v1/analyze/content/moderate) BEFORE publish; a policy-hit
+# (nsfw/abuse) blocks the upload (422). FAIL-CLOSED: if the scanner is unreachable while
+# enabled, the upload is rejected (an unscanned image is never published). Needs a GPU/edge-AI
+# node — capability-gated like the other optional services.
+moderation:
+  image:
+    enabled: "${MODERATION_IMAGE_ENABLED:false}"
+    base-url: "${MODERATION_IMAGE_BASE_URL:http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080}"
+    timeout-ms: "${MODERATION_IMAGE_TIMEOUT_MS:15000}"
+
 # USER SELF-SILENCE (self-service visibility hide; NOT a ban). The durable
 # self_silence row is the source of truth; expires_at is authoritative and a
 # @Scheduled wake (SelfSilenceExpiryAction) auto-clears at expiry.
@@ -246,6 +258,25 @@ app:
       matrix:
         enabled: "${MEDIA_PROXY_MATRIX_ENABLED:false}"
         base-url: "${MEDIA_PROXY_MATRIX_BASE_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
+  # ── PRE-PUBLISH vision moderation (edge-AI) ──────────────────────────────────
+  # On avatar/profile-image set, send bytes to the on-prem edge-ai-analysis API
+  # (POST /v1/analyze/content/moderate) BEFORE publishing: reject ⇒ fail-closed 422,
+  # flag ⇒ allow + queue a finding, allow ⇒ proceed. Ships DARK (enabled=false): the
+  # gate is wired but bypassed until the edge-ai-analysis service is deployed + this
+  # is flipped on. All inference on-prem; nothing leaves the mesh.
+  vision:
+    moderation:
+      enabled: "${VISION_MODERATION_ENABLED:false}"
+      # in-cluster ClusterIP of the edge-ai-analysis service (generator optional svc).
+      base-url: "${VISION_MODERATION_BASE_URL:http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080}"
+      endpoint: "${VISION_MODERATION_ENDPOINT:/v1/analyze/content/moderate}"
+      # hard per-call latency budget (ms); on timeout the fail-closed policy applies.
+      timeout-ms: "${VISION_MODERATION_TIMEOUT_MS:10000}"
+      # fail-closed (true): an analysis-API error BLOCKS the upload (503) — an unscanned
+      # image never publishes. false = fail-open (availability-first). A clean 'reject'
+      # verdict always blocks regardless.
+      fail-closed: "${VISION_MODERATION_FAIL_CLOSED:true}"
+      max-bytes: "${VISION_MODERATION_MAX_BYTES:8388608}"
 
 # Multipart limits for the media-proxy /upload (bounded in-memory hold of the bytes
 # the BFF cloaks-then-forwards). Aligned with app.media.poisoning.max-upload-bytes.

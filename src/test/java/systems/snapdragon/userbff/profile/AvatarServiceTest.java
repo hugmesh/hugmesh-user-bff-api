@@ -1,9 +1,11 @@
 package systems.snapdragon.userbff.profile;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import systems.snapdragon.commons.web.ApiException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -25,7 +27,14 @@ class AvatarServiceTest {
 
     private final MatrixMediaClient media = mock(MatrixMediaClient.class);
     private final UserProfileRepository repo = mock(UserProfileRepository.class);
-    private final AvatarService service = new AvatarService(media, repo);
+    private final EdgeAiAnalysisClient moderation = mock(EdgeAiAnalysisClient.class);
+    private final AvatarService service = new AvatarService(media, repo, moderation);
+
+    @BeforeEach
+    void allowByDefault() {
+        // Moderation OFF (dark default) ⇒ allow — the upload flow is unchanged.
+        when(moderation.moderate(any())).thenReturn(Mono.just(ModerationVerdict.allow()));
+    }
 
     @Test
     void uploadAndStore_uploadsThenPersistsMxc_andReturnsIt() {
@@ -43,6 +52,45 @@ class AvatarServiceTest {
         ArgumentCaptor<String> mxc = ArgumentCaptor.forClass(String.class);
         verify(repo).updateAvatarUrl(eq("alice"), mxc.capture(), eq("default"));
         assertThat(mxc.getValue()).isEqualTo("mxc://home/abc");
+    }
+
+    @Test
+    void uploadAndStore_policyRejectedImage_isBlocked_noUploadNoPersist() {
+        byte[] bytes = {1, 2, 3};
+        when(moderation.moderate(any()))
+                .thenReturn(Mono.just(new ModerationVerdict("reject", "nsfw", 0.95, true, "ab12")));
+
+        StepVerifier.create(service.uploadAndStore("alice", bytes, "image/png", "default"))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(ApiException.class)
+                        .hasMessageContaining("blocked by content policy"))
+                .verify();
+
+        // A blocked avatar never reaches the homeserver and is never persisted.
+        verify(media, never()).upload(anyString(), any(), anyString());
+        verify(repo, never()).updateAvatarUrl(anyString(), anyString(), any());
+    }
+
+    @Test
+    void uploadAndStore_flaggedImage_isAlsoBlocked_inThisSlice() {
+        when(moderation.moderate(any()))
+                .thenReturn(Mono.just(new ModerationVerdict("flag", "nsfw", 0.6, true, null)));
+
+        StepVerifier.create(service.uploadAndStore("alice", new byte[]{9}, "image/png", "default"))
+                .expectError(ApiException.class)
+                .verify();
+        verify(media, never()).upload(anyString(), any(), anyString());
+    }
+
+    @Test
+    void uploadAndStore_allowedImage_proceedsToUpload() {
+        byte[] bytes = {4, 5};
+        when(moderation.moderate(any())).thenReturn(Mono.just(ModerationVerdict.allow()));
+        when(media.upload(eq("bob"), eq(bytes), eq("image/jpeg"))).thenReturn(Mono.just("mxc://h/ok"));
+        when(repo.updateAvatarUrl(eq("bob"), eq("mxc://h/ok"), eq("default"))).thenReturn(Mono.just(1L));
+
+        StepVerifier.create(service.uploadAndStore("bob", bytes, "image/jpeg", "default"))
+                .expectNext("mxc://h/ok")
+                .verifyComplete();
     }
 
     @Test
