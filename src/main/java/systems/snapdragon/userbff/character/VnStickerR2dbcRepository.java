@@ -26,6 +26,16 @@ public interface VnStickerR2dbcRepository
 
     Flux<VnStickerEntity> findByOwnerSubjectOrderByCreatedAtDesc(String ownerSubject);
 
+    /**
+     * ACTIVE-ONLY owner finder (the MSC2545 pack-registration source): the owner's
+     * stickers in a single lifecycle {@code status} ({@code ACTIVE}), newest first.
+     * DERIVED (no raw SQL) — the registration service passes {@code status='ACTIVE'} so
+     * only moderator-approved stickers are ever advertised in the {@code
+     * im.ponies.user_emotes} pack. Owner-scoped: another subject's rows are unreachable.
+     */
+    Flux<VnStickerEntity> findByOwnerSubjectAndStatusOrderByCreatedAtDesc(
+            String ownerSubject, String status);
+
     /** Owner-scoped single read (the serve path) — a foreign id yields empty. */
     Mono<VnStickerEntity> findByIdAndOwnerSubject(String id, String ownerSubject);
 

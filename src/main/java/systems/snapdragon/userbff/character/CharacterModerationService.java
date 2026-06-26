@@ -41,11 +41,15 @@ public class CharacterModerationService {
 
     private final VnCharacterPartRepository partRepo;
     private final VnStickerRepository stickerRepo;
+    /** MSC2545 pack registrar — hooked onto a SUCCESSFUL sticker→ACTIVE flip (dark by default). */
+    private final StickerPackRegistrationService packRegistration;
 
     public CharacterModerationService(VnCharacterPartRepository partRepo,
-                                      VnStickerRepository stickerRepo) {
+                                      VnStickerRepository stickerRepo,
+                                      StickerPackRegistrationService packRegistration) {
         this.partRepo = partRepo;
         this.stickerRepo = stickerRepo;
+        this.packRegistration = packRegistration;
     }
 
     /**
@@ -75,7 +79,30 @@ public class CharacterModerationService {
      */
     public Mono<VnSticker> resolveSticker(String id, String status, Long findingId, String reviewer) {
         return flip(() -> stickerRepo.updateStatusByIdWherePending(id, requireTerminal(status)),
-                () -> stickerRepo.findAnyById(id), "sticker", id, status, findingId, reviewer);
+                () -> stickerRepo.findAnyById(id), "sticker", id, status, findingId, reviewer)
+                // Only a SUCCESSFUL flip emits a row (a no-op completes empty, so this never
+                // runs for unknown / already-resolved ids). Register the owner's MSC2545 pack
+                // ONLY when the target was ACTIVE — never for REJECTED.
+                .flatMap(flipped -> STATUS_ACTIVE.equals(status)
+                        ? registerPackThenReturn(flipped)
+                        : Mono.just(flipped));
+    }
+
+    /**
+     * FAIL-SOFT side-effect: upsert the owner's ACTIVE stickers into their Matrix MSC2545
+     * pack, then return the post-flip sticker REGARDLESS of the registration outcome. The
+     * registrar already swallows its own errors (returning empty), but we also guard here
+     * with {@code onErrorResume} so a registration failure can NEVER fail the moderator's
+     * flip. {@code thenReturn} re-emits the sticker after the (empty) registration completes.
+     */
+    private Mono<VnSticker> registerPackThenReturn(VnSticker flipped) {
+        return packRegistration.registerActivePack(flipped.ownerSubject())
+                .onErrorResume(e -> {
+                    log.warn("[character-moderation] sticker pack registration failed for owner={} "
+                            + "(swallowed — flip unaffected): {}", flipped.ownerSubject(), e.toString());
+                    return Mono.empty();
+                })
+                .thenReturn(flipped);
     }
 
     /**

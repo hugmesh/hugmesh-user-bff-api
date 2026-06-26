@@ -59,6 +59,21 @@ public class VnStickerRepository {
     }
 
     /**
+     * The owner's ACTIVE stickers ACROSS all domains, newest first — the source set the
+     * MSC2545 pack-registration service advertises in the owner's {@code
+     * im.ponies.user_emotes} account-data. NOT domain-scoped: a Matrix account-data pack is
+     * per homeserver USER (one Matrix identity per owner subject), so every approved sticker
+     * the owner holds — regardless of which brand it was created under — belongs in their
+     * single pack. Only {@code ACTIVE} (moderator-approved) rows are returned; PENDING /
+     * REJECTED are excluded at the SQL layer.
+     */
+    public Flux<VnSticker> listActiveForOwner(String ownerSubject) {
+        return repo.findByOwnerSubjectAndStatusOrderByCreatedAtDesc(
+                        ownerSubject, CharacterModerationService.STATUS_ACTIVE)
+                .map(VnStickerRepository::toWire);
+    }
+
+    /**
      * The owner's single sticker by id, owner-scoped at the SQL layer so a caller can never
      * read another user's sticker even with a known id — a foreign id yields empty (the
      * controller maps that to a 404, never a 403, so existence is not leaked). Owner-scoped
