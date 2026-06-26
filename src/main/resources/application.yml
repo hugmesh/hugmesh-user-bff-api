@@ -154,12 +154,15 @@ app:
       redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://snapdragon.systems/login/callback}"
       default-expiry-seconds: 3600
     custody-key: "${APP_BFF_CUSTODY_KEY:}"
-  # The opaque bff_ session cookie (auth-core SessionCookieService). SHIPS DARK:
-  # enabled=false ⇒ NO Set-Cookie is emitted (the session token stays in the body
-  # only, byte-identical to today). secure default true; ttl default 12h.
+  # The opaque bff_ session cookie (auth-core SessionCookieService). LIVE BY DEFAULT:
+  # enabled=true ⇒ /bff/login (and the OIDC callback) emit the HttpOnly Set-Cookie so
+  # browsers hold the session in a cookie instead of JS-readable storage. The session
+  # token is ALSO still returned in the response body (vestigial) so non-UI consumers
+  # that read $.token keep working. Set APP_SESSION_COOKIE_ENABLED=false to go back to
+  # body-only (no Set-Cookie). secure default true; ttl default 12h.
   session:
     cookie:
-      enabled: "${APP_SESSION_COOKIE_ENABLED:false}"
+      enabled: "${APP_SESSION_COOKIE_ENABLED:true}"
       secure: "${APP_SESSION_COOKIE_SECURE:true}"
       ttl: "${APP_SESSION_COOKIE_TTL:PT12H}"
   # OUTBOUND X-Internal-Token the AdminBffInternalClient stamps on its calls to

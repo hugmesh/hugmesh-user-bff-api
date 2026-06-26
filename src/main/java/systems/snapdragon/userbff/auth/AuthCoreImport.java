@@ -22,13 +22,15 @@ import systems.snapdragon.authcore.config.SessionCookieService;
  *       self-binds {@code app.bff.custody-key} and is INERT ({@code isAvailable()==false})
  *       + fail-closed when the key is blank;</li>
  *   <li>{@link SessionCookieService} — mints/expires the opaque {@code bff_} cookie; it
- *       self-binds {@code app.session.cookie.*} and emits NO Set-Cookie when
- *       {@code app.session.cookie.enabled=false} (the default), so the token-in-body
- *       path is byte-identical to today.</li>
+ *       self-binds {@code app.session.cookie.*}. It now defaults to
+ *       {@code app.session.cookie.enabled=true}, so a Set-Cookie IS emitted on
+ *       login/callback; the session token also stays in the response body (vestigial)
+ *       so non-UI consumers are unaffected. Set the flag false to go body-only.</li>
  * </ul>
  *
- * <p>All three self-default to the dark/inert posture, so importing them changes
- * NOTHING at runtime until the corresponding flag is flipped on.
+ * <p>{@code OidcExchangeConfig} and {@code BffCustodyCipher} still self-default to the
+ * dark/inert posture (the OIDC-exchange surface stays off until its flag/key are set);
+ * only the {@code bff_} session cookie now ships live.
  */
 @Configuration(proxyBeanMethods = false)
 @Import({OidcExchangeConfig.class, BffCustodyCipher.class, SessionCookieService.class})

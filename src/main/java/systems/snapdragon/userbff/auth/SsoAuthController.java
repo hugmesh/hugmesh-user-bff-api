@@ -126,9 +126,9 @@ public class SsoAuthController {
     }
 
     /**
-     * admin-bff {@code emitAndSession} parity: mint the opaque {@code bff_} cookie (only
-     * when {@code app.session.cookie.enabled}; ships dark) AND keep the token in the body
-     * so the existing token-in-body clients are byte-identical until the cookie is flipped.
+     * admin-bff {@code emitAndSession} parity: mint the opaque {@code bff_} cookie (when
+     * {@code app.session.cookie.enabled}, now ON by default) AND keep the token in the body
+     * (vestigial) so existing token-in-body clients keep working even with the cookie live.
      */
     private ResponseEntity<Map<String, Object>> emitAndSession(
             ServerWebExchange exchange, AdminBffInternalClient.AccountView account,
