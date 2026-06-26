@@ -6,6 +6,10 @@ import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import systems.snapdragon.commons.web.ApiException;
+import systems.snapdragon.userbff.federation.FederationApiClient;
+import systems.snapdragon.userbff.federation.FederationModerationModels.FindingRequest;
+
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,16 +23,19 @@ import static org.mockito.Mockito.when;
 
 /**
  * Unit test for {@link AvatarService} with a mocked {@link MatrixMediaClient} +
- * {@link UserProfileRepository}. Verifies the upload→store→return contract: the
- * uploaded {@code mxc://} URL is persisted onto the OWNER's avatar_url (owner +
- * domain scoped) and returned, and a blank owner is rejected before any upload.
+ * {@link UserProfileRepository} + {@link EdgeAiAnalysisClient} + {@link FederationApiClient}.
+ * Verifies the upload→store→return contract (the uploaded {@code mxc://} URL is persisted
+ * onto the OWNER's avatar_url, owner + domain scoped, and returned), and the A3 producer
+ * behaviour: a BLOCKED image is filed as a held {@code @system} finding (flag→flagged /
+ * reject→rejected) before the 422, fail-soft if federation errors, and never filed when allowed.
  */
 class AvatarServiceTest {
 
     private final MatrixMediaClient media = mock(MatrixMediaClient.class);
     private final UserProfileRepository repo = mock(UserProfileRepository.class);
     private final EdgeAiAnalysisClient moderation = mock(EdgeAiAnalysisClient.class);
-    private final AvatarService service = new AvatarService(media, repo, moderation);
+    private final FederationApiClient federation = mock(FederationApiClient.class);
+    private final AvatarService service = new AvatarService(media, repo, moderation, federation);
 
     @BeforeEach
     void allowByDefault() {
@@ -52,13 +59,16 @@ class AvatarServiceTest {
         ArgumentCaptor<String> mxc = ArgumentCaptor.forClass(String.class);
         verify(repo).updateAvatarUrl(eq("alice"), mxc.capture(), eq("default"));
         assertThat(mxc.getValue()).isEqualTo("mxc://home/abc");
+        // an allowed image is NEVER filed as a finding
+        verify(federation, never()).fileFinding(any());
     }
 
     @Test
-    void uploadAndStore_policyRejectedImage_isBlocked_noUploadNoPersist() {
+    void uploadAndStore_policyRejectedImage_isBlocked_filesRejectedFinding_noUploadNoPersist() {
         byte[] bytes = {1, 2, 3};
         when(moderation.moderate(any()))
                 .thenReturn(Mono.just(new ModerationVerdict("reject", "nsfw", 0.95, true, "ab12")));
+        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("status", "held")));
 
         StepVerifier.create(service.uploadAndStore("alice", bytes, "image/png", "default"))
                 .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(ApiException.class)
@@ -68,21 +78,50 @@ class AvatarServiceTest {
         // A blocked avatar never reaches the homeserver and is never persisted.
         verify(media, never()).upload(anyString(), any(), anyString());
         verify(repo, never()).updateAvatarUrl(anyString(), anyString(), any());
+        // ...but it IS filed as a held finding, disposition=rejected, with the verdict fields.
+        ArgumentCaptor<FindingRequest> req = ArgumentCaptor.forClass(FindingRequest.class);
+        verify(federation).fileFinding(req.capture());
+        assertThat(req.getValue().surface()).isEqualTo("profile-avatar");
+        assertThat(req.getValue().disposition()).isEqualTo("rejected");
+        assertThat(req.getValue().classification()).isEqualTo("nsfw");
+        assertThat(req.getValue().confidence()).isEqualTo(0.95);
+        assertThat(req.getValue().policyHit()).isTrue();
+        assertThat(req.getValue().perceptualHash()).isEqualTo("ab12");
     }
 
     @Test
-    void uploadAndStore_flaggedImage_isAlsoBlocked_inThisSlice() {
+    void uploadAndStore_flaggedImage_isAlsoBlocked_filesFlaggedFinding() {
         when(moderation.moderate(any()))
                 .thenReturn(Mono.just(new ModerationVerdict("flag", "nsfw", 0.6, true, null)));
+        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("status", "held")));
 
         StepVerifier.create(service.uploadAndStore("alice", new byte[]{9}, "image/png", "default"))
                 .expectError(ApiException.class)
                 .verify();
         verify(media, never()).upload(anyString(), any(), anyString());
+        // flag maps to disposition=flagged
+        ArgumentCaptor<FindingRequest> req = ArgumentCaptor.forClass(FindingRequest.class);
+        verify(federation).fileFinding(req.capture());
+        assertThat(req.getValue().disposition()).isEqualTo("flagged");
     }
 
     @Test
-    void uploadAndStore_allowedImage_proceedsToUpload() {
+    void uploadAndStore_findingFileFails_imageStillBlocked_failSoft() {
+        when(moderation.moderate(any()))
+                .thenReturn(Mono.just(new ModerationVerdict("reject", "abuse", 0.99, true, null)));
+        // federation is unreachable — the finding-file errors, but the image stays blocked.
+        when(federation.fileFinding(any()))
+                .thenReturn(Mono.error(new RuntimeException("federation unreachable")));
+
+        StepVerifier.create(service.uploadAndStore("alice", new byte[]{7}, "image/png", "default"))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(ApiException.class)
+                        .hasMessageContaining("blocked by content policy"))
+                .verify();
+        verify(media, never()).upload(anyString(), any(), anyString());
+    }
+
+    @Test
+    void uploadAndStore_allowedImage_proceedsToUpload_noFinding() {
         byte[] bytes = {4, 5};
         when(moderation.moderate(any())).thenReturn(Mono.just(ModerationVerdict.allow()));
         when(media.upload(eq("bob"), eq(bytes), eq("image/jpeg"))).thenReturn(Mono.just("mxc://h/ok"));
@@ -91,6 +130,7 @@ class AvatarServiceTest {
         StepVerifier.create(service.uploadAndStore("bob", bytes, "image/jpeg", "default"))
                 .expectNext("mxc://h/ok")
                 .verifyComplete();
+        verify(federation, never()).fileFinding(any());
     }
 
     @Test

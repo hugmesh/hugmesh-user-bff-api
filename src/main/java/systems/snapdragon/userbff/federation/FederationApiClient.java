@@ -7,6 +7,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.federation.FederationModerationModels.FindingRequest;
 import systems.snapdragon.userbff.federation.FederationModerationModels.SubmitRequest;
 
 import java.util.Map;
@@ -119,6 +120,25 @@ public class FederationApiClient {
         SubmitRequest req = new SubmitRequest("instance-block", instance, reason);
         return http.post()
                 .uri("/api/federation/moderation")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(req)
+                .retrieve()
+                .bodyToMono(MAP_TYPE);
+    }
+
+    /**
+     * File an automated edge-AI moderation finding into the federation {@code @system}
+     * findings queue ({@code POST /api/federation/findings}). The caller's bearer is
+     * forwarded, so federation derives {@code subject} = the caller's JWT subject (a user
+     * can only ever file a finding about THEIR OWN content) and stamps
+     * {@code reporter="@system"} + {@code status="held"} server-side. The body is the
+     * federation {@code FileRequest(surface, disposition, classification, confidence,
+     * policyHit, perceptualHash)}. Returns the created finding (callers that file
+     * fire-and-forget ignore the body).
+     */
+    public Mono<Map<String, Object>> fileFinding(FindingRequest req) {
+        return http.post()
+                .uri("/api/federation/findings")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(req)
                 .retrieve()

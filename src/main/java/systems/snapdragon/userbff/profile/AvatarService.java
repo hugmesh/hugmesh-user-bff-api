@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.web.ApiException;
+import systems.snapdragon.userbff.federation.FederationApiClient;
+import systems.snapdragon.userbff.federation.FederationModerationModels.FindingRequest;
 
 /**
  * Owner-enforced profile-picture (avatar) upload. The flow is:
@@ -30,12 +32,14 @@ public class AvatarService {
     private final MatrixMediaClient matrixMedia;
     private final UserProfileRepository repo;
     private final EdgeAiAnalysisClient moderation;
+    private final FederationApiClient federation;
 
     public AvatarService(MatrixMediaClient matrixMedia, UserProfileRepository repo,
-                         EdgeAiAnalysisClient moderation) {
+                         EdgeAiAnalysisClient moderation, FederationApiClient federation) {
         this.matrixMedia = matrixMedia;
         this.repo = repo;
         this.moderation = moderation;
+        this.federation = federation;
     }
 
     /**
@@ -63,11 +67,38 @@ public class AvatarService {
             if (verdict.blocks()) {
                 log.info("[avatar] BLOCKED by content policy: action={} class={} confidence={} owner={}",
                         verdict.action(), verdict.classification(), verdict.confidence(), owner);
-                return Mono.<String>error(ApiException.unprocessable(
-                        "profile picture blocked by content policy"));
+                // A3 producer: file the blocked image into the federation @system findings
+                // queue so a moderator can review it (held). BEST-EFFORT — the image is
+                // blocked regardless; a federation outage must not change the user-facing
+                // 422, so a file failure is logged and swallowed. The caller's bearer is
+                // forwarded by FederationApiClient, so federation derives subject = owner.
+                return fileHeldFinding(owner, verdict)
+                        .then(Mono.<String>error(ApiException.unprocessable(
+                                "profile picture blocked by content policy")));
             }
             return matrixMedia.upload(owner, bytes, contentType)
                     .flatMap(mxc -> repo.updateAvatarUrl(owner, mxc, domain).thenReturn(mxc));
         });
+    }
+
+    /**
+     * File a blocked avatar verdict into the federation {@code @system} findings queue
+     * (held, for moderator review). Fail-soft: a federation error is logged and swallowed
+     * (the image stays blocked either way). The edge-AI {@code action} ({@code flag} |
+     * {@code reject}) maps to the federation {@code disposition} ({@code flagged} |
+     * {@code rejected}); {@code surface="profile-avatar"}.
+     */
+    private Mono<Void> fileHeldFinding(String owner, ModerationVerdict verdict) {
+        String disposition = "reject".equalsIgnoreCase(verdict.action()) ? "rejected" : "flagged";
+        FindingRequest req = new FindingRequest(
+                "profile-avatar", disposition, verdict.classification(),
+                verdict.confidence(), verdict.policyHit(), verdict.perceptualHash());
+        return federation.fileFinding(req)
+                .doOnNext(r -> log.info("[avatar] finding filed (held) for owner={} disposition={}", owner, disposition))
+                .onErrorResume(e -> {
+                    log.warn("[avatar] finding-file FAILED (image still blocked) owner={}: {}", owner, e.toString());
+                    return Mono.empty();
+                })
+                .then();
     }
 }
