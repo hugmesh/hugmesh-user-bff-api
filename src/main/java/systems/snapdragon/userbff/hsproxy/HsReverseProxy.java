@@ -9,9 +9,13 @@ import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import systems.snapdragon.commons.web.ApiException;
+
+import java.net.URI;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.BiFunction;
@@ -75,18 +79,74 @@ public class HsReverseProxy {
      * {@code /bff/user/{platform}} prefix already stripped). {@code loadToken} yields the
      * decrypted native token (fail-closed empty → 401). {@code remint} re-mints on a 401
      * and yields the fresh native token (empty → fail-closed 401).
+     *
+     * <p>SSRF GUARD: {@code upstreamPath} MUST be a single-{@code '/'}-leading, same-host
+     * RELATIVE path. A scheme-relative authority ({@code //evil.com/x}), a backslash
+     * variant ({@code /\evil}, {@code \evil}) or an embedded scheme ({@code https://evil})
+     * would override the mTLS WebClient's baseUrl host — leaking the decrypted homeserver
+     * Bearer + the BFF mTLS client cert to an attacker host. We {@link #requireSafePath
+     * reject such paths with 400} BEFORE any token is loaded or any upstream request is
+     * built, and construct the upstream {@link URI} via {@link UriComponentsBuilder#fromPath
+     * path-only} so an embedded authority can never override the host.
      */
     public Mono<Void> forward(ServerWebExchange exchange, String upstreamPath,
                               Mono<String> loadToken, Mono<String> remint) {
-        ServerHttpRequest req = exchange.getRequest();
-        String query = req.getURI().getRawQuery();
-        String fullPath = (query == null || query.isBlank()) ? upstreamPath : upstreamPath + "?" + query;
+        // Fail-fast SSRF guard: validate the relative path BEFORE loading the token or
+        // building the upstream request (so a hostile path never touches the mTLS leg).
+        // Deferred into the reactive chain so a bad path surfaces as a 400 Mono.error
+        // (never an unconsumed token / mTLS leg) regardless of the caller's wiring.
+        return Mono.defer(() -> {
+            requireSafePath(upstreamPath);
 
-        // Load the native token, forward the request, and refresh-on-401 if needed.
-        return loadToken
-                .switchIfEmpty(Mono.error(unauthorized("no custody token for this user/platform")))
-                .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
-                        .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint)));
+            ServerHttpRequest req = exchange.getRequest();
+            String query = req.getURI().getRawQuery();
+            // Build a path-ONLY relative URI: UriComponentsBuilder.fromPath() never parses
+            // an authority, so even a path that somehow slipped the guard cannot set a host.
+            // The request path value + raw query are already URL-encoded → build(true).
+            URI relativeUpstream = UriComponentsBuilder.fromPath(upstreamPath)
+                    .query(query == null || query.isBlank() ? null : query)
+                    .build(true)
+                    .toUri();
+            String fullPath = relativeUpstream.toString();
+
+            // Load the native token, forward the request, and refresh-on-401 if needed.
+            return loadToken
+                    .switchIfEmpty(Mono.error(unauthorized("no custody token for this user/platform")))
+                    .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
+                            .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint)));
+        });
+    }
+
+    /**
+     * Reject any {@code upstreamPath} that is not a single-{@code '/'}-leading, same-host
+     * RELATIVE path — the SSRF / token+mTLS-cert leak guard. Rejected (400) shapes:
+     * <ul>
+     *   <li>null / empty / not starting with {@code '/'};</li>
+     *   <li>scheme-relative authority: {@code //evil.com/x} (starts with {@code //});</li>
+     *   <li>backslash variants browsers/parsers fold to {@code '/'}: a leading
+     *       {@code '\'}, a {@code /\} second char, or ANY embedded {@code '\'};</li>
+     *   <li>an embedded scheme/authority: {@code https://evil}, {@code x://y} (contains
+     *       {@code ://}).</li>
+     * </ul>
+     * The single-leading-{@code '/'} normal path ({@code /_matrix/client/v3/sync}) passes.
+     */
+    private static void requireSafePath(String upstreamPath) {
+        if (upstreamPath == null || upstreamPath.isEmpty() || upstreamPath.charAt(0) != '/') {
+            throw badPath();
+        }
+        if (upstreamPath.startsWith("//")) {
+            throw badPath(); // scheme-relative authority overrides the baseUrl host
+        }
+        if (upstreamPath.indexOf('\\') >= 0) {
+            throw badPath(); // '\' (anywhere) is folded to '/' by many parsers → '\\evil' == '//evil'
+        }
+        if (upstreamPath.contains("://")) {
+            throw badPath(); // embedded absolute URL / scheme
+        }
+    }
+
+    private static ApiException badPath() {
+        return ApiException.badRequest("invalid upstream path (must be a single-'/'-leading same-host relative path)");
     }
 
     /** If the upstream returned 401, re-mint once and retry; any second 401 is fail-closed. */
