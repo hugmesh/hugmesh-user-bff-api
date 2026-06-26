@@ -219,12 +219,16 @@ app:
     key: "${APP_HS_TOKEN_KEY:}"
     matrix-url: "${APP_HS_TOKEN_MATRIX_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
     mastodon-url: "${APP_HS_TOKEN_MASTODON_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"
-    # MANDATORY (no default): a missing APP_HS_TOKEN_SVC_PASSWORD now FAILS context
-    # startup rather than silently brokering homeserver tokens with an empty (or, via
-    # the old @Value default, a publicly-known) credential. Mirrors admin-bff's
-    # ${SVC_PASSWORD}. The "test" / "prod-deny-slice" test profiles supply a throwaway
-    # value; prod sources it from ESO/Vault, never a literal in git.
-    svc-password: "${APP_HS_TOKEN_SVC_PASSWORD}"
+    # EMPTY DEFAULT + FAIL-CLOSED (mirrors `key` above): when unset, the broker bean
+    # still wires (it is an unconditional @Service injected by the always-present proxy
+    # controllers) but every mint 503s — exactly like an unconfigured custody `key`
+    # (HsTokenCipher) — instead of crashing the whole context at boot on an unresolved
+    # mandatory placeholder. So a deploy that turns the proxy on without provisioning the
+    # service password gets a clean 503, and a deploy that leaves hs-token OFF
+    # (APP_HS_TOKEN_ENABLED=false) boots cleanly without needing the secret at all.
+    # NEVER a real literal in git: the "test"/"prod-deny-slice" profiles supply a
+    # throwaway value; prod sources it from ESO/Vault.
+    svc-password: "${APP_HS_TOKEN_SVC_PASSWORD:}"
     registry:
       enabled: "${APP_HS_TOKEN_REGISTRY_ENABLED:false}"
       base-url: "${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}"

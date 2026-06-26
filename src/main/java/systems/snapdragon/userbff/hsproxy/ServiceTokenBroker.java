@@ -8,10 +8,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 import systems.snapdragon.userbff.federation.FederationHttpClientSsl;
@@ -106,6 +108,25 @@ public class ServiceTokenBroker {
     }
 
     /**
+     * Fail-closed guard for an unprovisioned service password. The broker is an
+     * unconditional {@code @Service} (the always-present proxy controllers inject it),
+     * so {@code app.hs-token.svc-password} now carries an EMPTY default — a deploy that
+     * leaves it unset boots cleanly instead of failing the whole context on an unresolved
+     * placeholder. A mint without a password cannot succeed, so we 503 here BEFORE any
+     * homeserver call — exactly how an unconfigured custody {@code key} (HsTokenCipher)
+     * 503s rather than brokering with an empty/known credential. Returns {@code null}
+     * when the password is present (caller proceeds normally).
+     */
+    private Mono<MintedToken> requireServicePassword() {
+        if (svcPassword == null || svcPassword.isBlank()) {
+            log.warn("[hs-token-broker] mint refused: app.hs-token.svc-password is unset (fail-closed 503)");
+            return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "homeserver token brokering unavailable: service password not configured"));
+        }
+        return null;
+    }
+
+    /**
      * Mint (or re-mint) a Matrix homeserver-native token for {@code ownerSubject} whose
      * homeserver handle is {@code localpart}: register, else password-login. On success
      * the token is encrypted + upserted into the owner's custody row AND its hash is
@@ -119,6 +140,10 @@ public class ServiceTokenBroker {
      * gap: re-introduce a local guard if user-bff ever gains a suspension mirror.
      */
     public Mono<MintedToken> mintMatrix(String ownerSubject, String localpart) {
+        Mono<MintedToken> guard = requireServicePassword();
+        if (guard != null) {
+            return guard;
+        }
         String user = localpart(localpart);
         // Register (or fall through to login if already registered), then persist the token.
         return matrixRegister(user, null)
@@ -151,6 +176,10 @@ public class ServiceTokenBroker {
      * its hash is written to the gateway registry. Returns the in-process token.
      */
     public Mono<MintedToken> mintMastodon(String ownerSubject, String localpart) {
+        Mono<MintedToken> guard = requireServicePassword();
+        if (guard != null) {
+            return guard;
+        }
         String user = localpart(localpart);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("grant_type", "password");
