@@ -51,6 +51,9 @@
     "name" : "Account status",
     "description" : "Polling endpoint for the caller's own account status (roles, domain, silence)."
   }, {
+    "name" : "Character-moderation (internal receiver)",
+    "description" : "SERVICE-PRINCIPAL ONLY part/sticker status flip (PENDING→ACTIVE/REJECTED) when a moderator resolves the finding. PENDING-guarded + idempotent (a no-op/unknown id is a 404)."
+  }, {
     "name" : "Notifications (in-app floor)",
     "description" : "The caller's OWN in-app notifications (owner = JWT subject, domain-scoped). The always-on in-app channel — read + mark-read only; the actions reconciler writes them."
   }, {
@@ -777,6 +780,80 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/DeliveryResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/character/stickers/{id}/moderation" : {
+      "post" : {
+        "tags" : [ "Character-moderation (internal receiver)" ],
+        "summary" : "Flip a PENDING expression STICKER to ACTIVE/REJECTED on finding resolution (SERVICE-principal only; idempotent — an unknown/already-resolved id is a 404).",
+        "operationId" : "resolveSticker",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResolveRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VnSticker"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/character/parts/{id}/moderation" : {
+      "post" : {
+        "tags" : [ "Character-moderation (internal receiver)" ],
+        "summary" : "Flip a PENDING character PART to ACTIVE/REJECTED on finding resolution (SERVICE-principal only; idempotent — an unknown/already-resolved id is a 404).",
+        "operationId" : "resolvePart",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResolveRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/VnCharacterPart"
                 }
               }
             }
@@ -2096,6 +2173,26 @@
           }
         }
       },
+      "ResolveRequest" : {
+        "required" : [ "status" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "minLength" : 1,
+            "pattern" : "^(ACTIVE|REJECTED)$",
+            "type" : "string"
+          },
+          "findingId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "reviewer" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
       "VnSticker" : {
         "type" : "object",
         "properties" : {
@@ -2117,30 +2214,13 @@
           "status" : {
             "type" : "string"
           },
+          "findingId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
           "createdAt" : {
             "type" : "string",
             "format" : "date-time"
-          }
-        }
-      },
-      "SavePartRequest" : {
-        "required" : [ "svg" ],
-        "type" : "object",
-        "properties" : {
-          "name" : {
-            "maxLength" : 120,
-            "minLength" : 0,
-            "type" : "string"
-          },
-          "headArchetype" : {
-            "maxLength" : 40,
-            "minLength" : 0,
-            "type" : "string"
-          },
-          "svg" : {
-            "maxLength" : 1000000,
-            "minLength" : 0,
-            "type" : "string"
           }
         }
       },
@@ -2168,9 +2248,34 @@
           "headArchetype" : {
             "type" : "string"
           },
+          "findingId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
           "createdAt" : {
             "type" : "string",
             "format" : "date-time"
+          }
+        }
+      },
+      "SavePartRequest" : {
+        "required" : [ "svg" ],
+        "type" : "object",
+        "properties" : {
+          "name" : {
+            "maxLength" : 120,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "headArchetype" : {
+            "maxLength" : 40,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "svg" : {
+            "maxLength" : 1000000,
+            "minLength" : 0,
+            "type" : "string"
           }
         }
       },

@@ -69,7 +69,7 @@ class CharacterPartControllerTest {
     }
 
     private static VnCharacterPart part(String id, String owner, String svg) {
-        return new VnCharacterPart(id, owner, "default", "ear", svg, "PENDING", "protogen", Instant.now());
+        return new VnCharacterPart(id, owner, "default", "ear", svg, "PENDING", "protogen", null, Instant.now());
     }
 
     // ── save ────────────────────────────────────────────────

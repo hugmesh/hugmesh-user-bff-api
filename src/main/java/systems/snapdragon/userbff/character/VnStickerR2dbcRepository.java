@@ -1,5 +1,6 @@
 package systems.snapdragon.userbff.character;
 
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
@@ -47,4 +48,34 @@ public interface VnStickerR2dbcRepository
                                       @Param("expression") String expression,
                                       @Param("mxcUrl") String mxcUrl,
                                       @Param("status") String status);
+
+    // ---- CAPTURE-AT-FILE: stamp the federation finding id back onto the row ----
+
+    // Best-effort write-back of the federation @system finding id AFTER the row insert.
+    // OWNER-SCOPED (defence-in-depth — a capture can only stamp the caller's own row).
+    // Returns rows-affected. Mirrors VnCharacterPartR2dbcRepository.setFindingId.
+    String SET_FINDING_ID =
+            "UPDATE vn_sticker_pack SET finding_id = :findingId "
+            + "WHERE id = :id AND owner_subject = :owner";
+
+    @Modifying
+    @Query(SET_FINDING_ID)
+    Mono<Integer> setFindingId(@Param("id") String id,
+                               @Param("owner") String owner,
+                               @Param("findingId") Long findingId);
+
+    // ---- STATUS FLIP: the moderation-receiver activation/rejection ----
+
+    // Flip a PENDING row to ACTIVE/REJECTED. PENDING-GUARDED + idempotent: a second
+    // resolve (or an already-resolved / unknown row) updates ZERO rows — a safe no-op.
+    // status is a caller-validated lifecycle literal (exactly ACTIVE or REJECTED; the 017
+    // CHECK constraint is the DB backstop). Mirrors the character-part flip.
+    String FLIP_STATUS_WHERE_PENDING =
+            "UPDATE vn_sticker_pack SET status = :status "
+            + "WHERE id = :id AND status = 'PENDING'";
+
+    @Modifying
+    @Query(FLIP_STATUS_WHERE_PENDING)
+    Mono<Integer> updateStatusByIdWherePending(@Param("id") String id,
+                                               @Param("status") String status);
 }

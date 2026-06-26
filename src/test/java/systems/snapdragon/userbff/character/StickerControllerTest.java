@@ -70,7 +70,7 @@ class StickerControllerTest {
     }
 
     private static VnSticker sticker(String id, String owner, String expression) {
-        return new VnSticker(id, owner, "default", expression, "mxc://home/" + id, "PENDING", Instant.now());
+        return new VnSticker(id, owner, "default", expression, "mxc://home/" + id, "PENDING", null, Instant.now());
     }
 
     /** A minimal byte buffer that begins with the PNG magic-byte signature (8-byte header

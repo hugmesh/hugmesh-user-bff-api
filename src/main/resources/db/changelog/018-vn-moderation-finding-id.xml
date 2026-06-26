@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        vn_character_part / vn_sticker_pack — capture the FEDERATION FINDING ID on the
+        moderated row (the receiving end of the part/sticker ACTIVATION loop).
+
+        Foundation: federation findings now carry an optional subjectRef back to the row
+        that produced them (federation-api #70) and user-bff already stores the PARTS
+        (#82, vn_character_part) and STICKERS (#85, vn_sticker_pack) status='PENDING'. The
+        GAP this band closes: at file-time the row did not remember WHICH @system finding
+        it produced, so when a moderator later resolves that finding nothing could find the
+        owning row to flip its status PENDING→ACTIVE/REJECTED.
+
+        This changeset adds a NULLABLE finding_id (the federation finding's bigint id) to
+        BOTH moderated tables so the save can stamp it best-effort AFTER the row insert
+        (the row id is the finding's subjectRef; the returned finding id is written back
+        here). A NULL finding_id means the best-effort capture didn't complete (a
+        federation outage at file-time) — the row is still a valid PENDING row a moderator
+        can resolve by id; the column is the convenience back-link, not a hard FK (the
+        finding lives in another service's database, so this is deliberately NOT a foreign
+        key). An index supports the reconciler's "find the row for this finding" lookup.
+
+        Columns added (identical shape on both tables):
+          • finding_id — bigint, NULL — the federation @system finding id this row filed
+                         (NULL until/unless the best-effort capture writes it back).
+
+        Numbered 018 — the band ABOVE the current max (017) in db.changelog-master.xml;
+        registered LAST in the master with a SINGLE <include> (#82 took 016, #85 took 017).
+    -->
+
+    <!-- ── vn_character_part.finding_id ─────────────────────────────────────── -->
+    <changeSet id="018-1-vn-character-part-finding-id" author="snapdragon">
+        <addColumn tableName="vn_character_part">
+            <column name="finding_id" type="bigint"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="vn_character_part" columnName="finding_id"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="018-2-vn-character-part-finding-id-index" author="snapdragon">
+        <createIndex tableName="vn_character_part" indexName="idx_vn_character_part_finding_id">
+            <column name="finding_id"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="vn_character_part" indexName="idx_vn_character_part_finding_id"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ── vn_sticker_pack.finding_id ───────────────────────────────────────── -->
+    <changeSet id="018-3-vn-sticker-pack-finding-id" author="snapdragon">
+        <addColumn tableName="vn_sticker_pack">
+            <column name="finding_id" type="bigint"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="vn_sticker_pack" columnName="finding_id"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="018-4-vn-sticker-pack-finding-id-index" author="snapdragon">
+        <createIndex tableName="vn_sticker_pack" indexName="idx_vn_sticker_pack_finding_id">
+            <column name="finding_id"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="vn_sticker_pack" indexName="idx_vn_sticker_pack_finding_id"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

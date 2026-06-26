@@ -32,7 +32,16 @@ public final class FederationModerationModels {
      * be {@code flagged} (queued for human review) | {@code rejected} (hard-blocked).
      * The optional fields ({@code classification}, {@code confidence}, {@code policyHit},
      * {@code perceptualHash}) carry the edge-AI verdict for the moderator's context.
+     *
+     * <p>{@code subjectRef} (federation-api #70, optional) is an opaque PRODUCER-side
+     * back-reference — the id of the user-bff row (a {@code vn_character_part} /
+     * {@code vn_sticker_pack} id) that filed this finding. federation-api echoes it back
+     * unchanged so the later admin-bff reconciler can tell this BFF, when the finding is
+     * resolved, WHICH row to flip. It is NOT the moderation subject (that stays the
+     * forwarded JWT subject) — it is a convenience link, so it is nullable and ignored by
+     * surfaces that don't set it.
      */
     public record FindingRequest(String surface, String disposition, String classification,
-                                 Double confidence, Boolean policyHit, String perceptualHash) {}
+                                 Double confidence, Boolean policyHit, String perceptualHash,
+                                 String subjectRef) {}
 }

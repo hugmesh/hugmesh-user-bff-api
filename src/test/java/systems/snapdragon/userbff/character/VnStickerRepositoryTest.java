@@ -64,6 +64,47 @@ class VnStickerRepositoryTest extends PostgresTestSupport {
                 .hasSize(StickerExpression.ALL.size());
     }
 
+    // ── 018 finding_id capture + status flip ─────────────────────────────────
+
+    @Test
+    void setFindingId_stampsOwnerScoped_thenReadable() {
+        VnSticker saved = repo.save("fid-st-owner", "default", "happy", MXC, "PENDING").block();
+        assertThat(saved).isNotNull();
+        assertThat(saved.findingId()).isNull();   // null on insert
+
+        // a stamp for the WRONG owner touches nothing (owner-scoped); the right owner = 1 row.
+        assertThat(repo.setFindingId(saved.id(), "someone-else", 99L).block()).isZero();
+        assertThat(repo.setFindingId(saved.id(), "fid-st-owner", 7L).block()).isEqualTo(1);
+
+        assertThat(repo.findOwned(saved.id(), "fid-st-owner").block().findingId()).isEqualTo(7L);
+    }
+
+    @Test
+    void updateStatusByIdWherePending_flipsPendingToActive_andIsIdempotent() {
+        VnSticker saved = repo.save("st-flip-active", "default", "happy", MXC, "PENDING").block();
+        assertThat(saved).isNotNull();
+
+        // first flip: PENDING -> ACTIVE (1 row).
+        assertThat(repo.updateStatusByIdWherePending(saved.id(), "ACTIVE").block()).isEqualTo(1);
+        assertThat(repo.findOwned(saved.id(), "st-flip-active").block().status()).isEqualTo("ACTIVE");
+
+        // second flip on the now-ACTIVE row: 0 rows (the PENDING guard) — idempotent no-op.
+        assertThat(repo.updateStatusByIdWherePending(saved.id(), "REJECTED").block()).isZero();
+        assertThat(repo.findOwned(saved.id(), "st-flip-active").block().status()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void updateStatusByIdWherePending_flipsPendingToRejected() {
+        VnSticker saved = repo.save("st-flip-reject", "default", "sad", MXC, "PENDING").block();
+        assertThat(repo.updateStatusByIdWherePending(saved.id(), "REJECTED").block()).isEqualTo(1);
+        assertThat(repo.findOwned(saved.id(), "st-flip-reject").block().status()).isEqualTo("REJECTED");
+    }
+
+    @Test
+    void updateStatusByIdWherePending_unknownId_isZeroRows_noOp() {
+        assertThat(repo.updateStatusByIdWherePending("no-such-sticker-id", "ACTIVE").block()).isZero();
+    }
+
     @Nested
     class DomainScope {
         @Test

@@ -84,6 +84,13 @@
               moderation finding (surface=character-sticker). DB-generated UUID PK
               ((gen_random_uuid())::text, 015 idiom); owner_subject + domain scoped; status
               + expression CHECK parity (the expression CHECK mirrors StickerExpression.ALL).
+        018 — vn_character_part.finding_id + vn_sticker_pack.finding_id: the receiving end of
+              the part/sticker ACTIVATION loop. A NULLABLE bigint finding_id (the federation
+              @system finding id this row filed, federation-api #70 subjectRef) is stamped
+              best-effort AFTER the row insert so a later moderator resolution of that finding
+              can flip the owning row PENDING→ACTIVE/REJECTED. NOT a hard FK (the finding lives
+              in another service); an index supports the reconciler's row-for-finding lookup.
+              The SERVICE-gated /bff/user/internal/character flip endpoint is the consumer.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -103,4 +110,5 @@
     <include file="db/changelog/015-db-generated-uuid-pks.xml"/>
     <include file="db/changelog/016-vn-character-part.xml"/>
     <include file="db/changelog/017-vn-sticker-pack.xml"/>
+    <include file="db/changelog/018-vn-moderation-finding-id.xml"/>
 </databaseChangeLog>

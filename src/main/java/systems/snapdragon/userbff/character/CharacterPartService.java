@@ -23,10 +23,13 @@ import systems.snapdragon.userbff.svg.SvgSanitizerService;
  *   <li>persist the SANITIZED svg via {@link VnCharacterPartRepository} owner AND domain
  *       scoped, {@code status='PENDING'} (the row enters the moderation queue);</li>
  *   <li>file a held {@code @system} moderation finding (A3 producer, surface=
- *       {@code character-part}, disposition={@code flagged}) so a HUMAN reviews the part.
+ *       {@code character-part}, disposition={@code flagged}) so a HUMAN reviews the part,
+ *       passing the just-saved row id as the finding {@code subjectRef} (the
+ *       producer-side back-link), then write the RETURNED federation finding id back onto
+ *       the row's {@code finding_id} so a later moderator resolution can flip THIS row.
  *       BEST-EFFORT (mirrors {@code AvatarService.fileHeldFinding}): a federation outage
- *       is logged and swallowed — it must NEVER fail the user's save (the part is stored
- *       PENDING regardless and a moderator can still find it).</li>
+ *       (or a missing finding id) is logged and swallowed — it must NEVER fail the user's
+ *       save (the part is stored PENDING regardless and a moderator can still find it).</li>
  * </ol>
  *
  * <p>{@code owner} is the caller's JWT subject (passed by the controller from the
@@ -84,10 +87,12 @@ public class CharacterPartService {
             //    never persist raw client XML. Map the fail-closed exception to a clean 422.
             String safeSvg = sanitizeOr422(dirtySvg);
             // 2) persist the SANITIZED svg, status=PENDING (owner + domain scoped), then
-            // 3) best-effort file the held @system finding so a moderator reviews the part.
-            //    The finding-file is fail-soft — a federation outage must not fail the save.
+            // 3) best-effort file the held @system finding (passing the row id as the
+            //    finding subjectRef) and write the returned finding id back onto the row.
+            //    The whole capture leg is fail-soft — a federation outage must not fail the
+            //    save (the part stays PENDING and a moderator can still resolve it by id).
             return repo.save(owner, domain, name, safeSvg, STATUS_PENDING, headArchetype)
-                    .flatMap(part -> fileHeldFinding(owner).thenReturn(part));
+                    .flatMap(part -> captureFinding(owner, part).thenReturn(part));
         });
     }
 
@@ -116,26 +121,51 @@ public class CharacterPartService {
     }
 
     /**
-     * File the saved part into the federation {@code @system} findings queue (held, for
-     * moderator review). The caller's bearer is forwarded by {@link FederationApiClient},
-     * so federation derives {@code subject} = owner (a user only files about their OWN
-     * content) and stamps {@code reporter="@system"} + {@code status="held"} server-side.
-     * Fail-soft: a federation error is logged and swallowed (the part is stored PENDING
-     * either way). {@code surface="character-part"}, {@code disposition="flagged"} (queued
-     * for human review); the edge-AI verdict fields are absent (a part is reviewed by a
-     * human reading the sanitized SVG — no server-side classifier ran).
+     * CAPTURE-AT-FILE: file the saved part into the federation {@code @system} findings
+     * queue (held, for moderator review) AND write the returned finding id back onto the
+     * row's {@code finding_id} (the back-link the moderation receiver flips on). The
+     * caller's bearer is forwarded by {@link FederationApiClient}, so federation derives
+     * {@code subject} = owner (a user only files about their OWN content) and stamps
+     * {@code reporter="@system"} + {@code status="held"} server-side. The just-saved
+     * {@code part.id()} is passed as the finding {@code subjectRef} (the producer-side
+     * back-reference federation-api #70 echoes back).
+     *
+     * <p>Fail-soft end-to-end: a federation error — or a response with no usable finding
+     * id — is logged and swallowed (the part is stored PENDING either way; only the
+     * convenience back-link is lost). {@code surface="character-part"},
+     * {@code disposition="flagged"} (queued for human review); the edge-AI verdict fields
+     * are absent (a part is reviewed by a human reading the sanitized SVG — no server-side
+     * classifier ran).
      */
-    private Mono<Void> fileHeldFinding(String owner) {
+    private Mono<Void> captureFinding(String owner, VnCharacterPart part) {
         FindingRequest req = new FindingRequest(
-                FINDING_SURFACE, FINDING_DISPOSITION, null, null, null, null);
+                FINDING_SURFACE, FINDING_DISPOSITION, null, null, null, null, part.id());
         return federation.fileFinding(req)
-                .doOnNext(r -> log.info("[character-part] finding filed (held) for owner={} disposition={}",
-                        owner, FINDING_DISPOSITION))
+                .flatMap(resp -> stampFindingId(owner, part.id(), resp))
                 .onErrorResume(e -> {
-                    log.warn("[character-part] finding-file FAILED (part still stored PENDING) owner={}: {}",
+                    log.warn("[character-part] finding-capture FAILED (part still stored PENDING) owner={}: {}",
                             owner, e.toString());
                     return Mono.empty();
                 })
                 .then();
+    }
+
+    /**
+     * Read the federation finding id back from the {@code fileFinding} response Map and
+     * stamp it onto the owner's row ({@code finding_id}). A missing/non-numeric id leaves
+     * the row's back-link null (still a valid PENDING row a moderator resolves by id). The
+     * write-back is owner-scoped at the repo. Returns the stamp's rows-affected count (for
+     * the reactive chain only).
+     */
+    private Mono<Integer> stampFindingId(String owner, String rowId, java.util.Map<String, Object> resp) {
+        Long findingId = FindingIdParser.parse(resp == null ? null : resp.get("id"));
+        if (findingId == null) {
+            log.info("[character-part] finding filed (held) for owner={} disposition={} (no finding id in response)",
+                    owner, FINDING_DISPOSITION);
+            return Mono.just(0);
+        }
+        log.info("[character-part] finding filed (held) id={} for owner={} disposition={}",
+                findingId, owner, FINDING_DISPOSITION);
+        return repo.setFindingId(rowId, owner, findingId);
     }
 }

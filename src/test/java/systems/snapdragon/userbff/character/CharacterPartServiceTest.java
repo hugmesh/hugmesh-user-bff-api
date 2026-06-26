@@ -46,16 +46,18 @@ class CharacterPartServiceTest {
 
     private static VnCharacterPart storedPart(String svg) {
         return new VnCharacterPart("part-1", "alice", "default", "ear", svg, "PENDING",
-                "protogen", Instant.now());
+                "protogen", null, Instant.now());
     }
 
     @Test
-    void savePart_sanitizesStoresPending_andFilesHeldFinding() {
+    void savePart_sanitizesStoresPending_capturesFindingId() {
         String dirty = "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script>"
                 + "<path class='region-fur' d='M0 0 L10 10 Z'/></svg>";
         when(repo.save(eq("alice"), eq("default"), eq("ear"), anyString(), eq("PENDING"), eq("protogen")))
                 .thenAnswer(inv -> Mono.just(storedPart(inv.getArgument(3))));
-        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("status", "held")));
+        // federation returns the created finding with an id; the service writes it back.
+        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("id", 4242, "status", "held")));
+        when(repo.setFindingId(eq("part-1"), eq("alice"), eq(4242L))).thenReturn(Mono.just(1));
 
         VnCharacterPart out = service.savePart("alice", "default", "ear", "protogen", dirty).block();
         assertThat(out).isNotNull();
@@ -66,7 +68,8 @@ class CharacterPartServiceTest {
         verify(repo).save(eq("alice"), eq("default"), eq("ear"), svg.capture(), eq("PENDING"), eq("protogen"));
         assertThat(svg.getValue()).doesNotContainIgnoringCase("script").contains("region-fur");
 
-        // ...and a held finding is filed: surface=character-part, disposition=flagged.
+        // ...a held finding is filed: surface=character-part, disposition=flagged, and the
+        // just-saved row id is passed as the finding subjectRef (the producer back-link).
         ArgumentCaptor<FindingRequest> req = ArgumentCaptor.forClass(FindingRequest.class);
         verify(federation).fileFinding(req.capture());
         assertThat(req.getValue().surface()).isEqualTo("character-part");
@@ -75,6 +78,25 @@ class CharacterPartServiceTest {
         assertThat(req.getValue().confidence()).isNull();
         assertThat(req.getValue().policyHit()).isNull();
         assertThat(req.getValue().perceptualHash()).isNull();
+        assertThat(req.getValue().subjectRef()).isEqualTo("part-1");
+
+        // ...and the returned federation finding id (4242) is written back onto the row,
+        // owner-scoped.
+        verify(repo).setFindingId(eq("part-1"), eq("alice"), eq(4242L));
+    }
+
+    @Test
+    void savePart_findingResponseHasNoId_doesNotFailSave_noStamp() {
+        String dirty = "<svg xmlns='http://www.w3.org/2000/svg'><path d='M0 0 L1 1'/></svg>";
+        when(repo.save(eq("alice"), eq("default"), any(), anyString(), eq("PENDING"), any()))
+                .thenAnswer(inv -> Mono.just(storedPart(inv.getArgument(3))));
+        // a response with no usable id -> the save still succeeds, the back-link is left null.
+        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("status", "held")));
+
+        StepVerifier.create(service.savePart("alice", "default", null, null, dirty))
+                .assertNext(p -> assertThat(p.status()).isEqualTo("PENDING"))
+                .verifyComplete();
+        verify(repo, never()).setFindingId(anyString(), anyString(), any());
     }
 
     @Test

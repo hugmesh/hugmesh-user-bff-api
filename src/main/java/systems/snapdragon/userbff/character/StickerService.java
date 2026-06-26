@@ -116,7 +116,7 @@ public class StickerService {
             }
             return matrixMedia.upload(owner, bytes, contentType)
                     .flatMap(mxc -> repo.save(owner, domain, expression, mxc, STATUS_PENDING))
-                    .flatMap(sticker -> fileHeldFinding(owner).thenReturn(sticker));
+                    .flatMap(sticker -> captureFinding(owner, sticker).thenReturn(sticker));
         });
     }
 
@@ -143,9 +143,11 @@ public class StickerService {
      */
     private Mono<Void> fileBlockedFinding(String owner, ModerationVerdict verdict) {
         String disposition = "reject".equalsIgnoreCase(verdict.action()) ? "rejected" : FINDING_DISPOSITION_FLAGGED;
+        // subjectRef=null: a BLOCKED sticker is NEVER persisted, so there is no row id to
+        // back-link the finding to (the finding stands alone for moderator context).
         FindingRequest req = new FindingRequest(
                 FINDING_SURFACE, disposition, verdict.classification(),
-                verdict.confidence(), verdict.policyHit(), verdict.perceptualHash());
+                verdict.confidence(), verdict.policyHit(), verdict.perceptualHash(), null);
         return federation.fileFinding(req)
                 .doOnNext(r -> log.info("[sticker] finding filed (held, blocked) for owner={} disposition={}",
                         owner, disposition))
@@ -158,26 +160,50 @@ public class StickerService {
     }
 
     /**
-     * File the saved (moderated-passed) sticker into the federation {@code @system}
-     * findings queue (held, for moderator review). The caller's bearer is forwarded by
-     * {@link FederationApiClient}, so federation derives {@code subject} = owner and stamps
-     * {@code reporter="@system"} + {@code status="held"} server-side. Fail-soft: a
-     * federation error is logged and swallowed (the sticker is stored PENDING either way).
-     * {@code surface="character-sticker"}, {@code disposition="flagged"} (queued for human
-     * review); the edge-AI verdict fields are absent (the bytes passed the auto-classifier
-     * — a human reviews the rendered sticker).
+     * CAPTURE-AT-FILE: file the saved (moderated-passed) sticker into the federation
+     * {@code @system} findings queue (held, for moderator review) AND write the returned
+     * finding id back onto the row's {@code finding_id} (the back-link the moderation
+     * receiver flips on). The caller's bearer is forwarded by {@link FederationApiClient},
+     * so federation derives {@code subject} = owner and stamps {@code reporter="@system"} +
+     * {@code status="held"} server-side. The just-saved {@code sticker.id()} is passed as
+     * the finding {@code subjectRef} (the producer-side back-reference federation-api #70
+     * echoes back).
+     *
+     * <p>Fail-soft end-to-end: a federation error — or a response with no usable finding
+     * id — is logged and swallowed (the sticker is stored PENDING either way; only the
+     * convenience back-link is lost). {@code surface="character-sticker"},
+     * {@code disposition="flagged"} (queued for human review); the edge-AI verdict fields
+     * are absent (the bytes passed the auto-classifier — a human reviews the rendered
+     * sticker).
      */
-    private Mono<Void> fileHeldFinding(String owner) {
+    private Mono<Void> captureFinding(String owner, VnSticker sticker) {
         FindingRequest req = new FindingRequest(
-                FINDING_SURFACE, FINDING_DISPOSITION_FLAGGED, null, null, null, null);
+                FINDING_SURFACE, FINDING_DISPOSITION_FLAGGED, null, null, null, null, sticker.id());
         return federation.fileFinding(req)
-                .doOnNext(r -> log.info("[sticker] finding filed (held) for owner={} disposition={}",
-                        owner, FINDING_DISPOSITION_FLAGGED))
+                .flatMap(resp -> stampFindingId(owner, sticker.id(), resp))
                 .onErrorResume(e -> {
-                    log.warn("[sticker] finding-file FAILED (sticker still stored PENDING) owner={}: {}",
+                    log.warn("[sticker] finding-capture FAILED (sticker still stored PENDING) owner={}: {}",
                             owner, e.toString());
                     return Mono.empty();
                 })
                 .then();
+    }
+
+    /**
+     * Read the federation finding id back from the {@code fileFinding} response Map and
+     * stamp it onto the owner's row ({@code finding_id}). A missing/non-numeric id leaves
+     * the row's back-link null (still a valid PENDING row a moderator resolves by id). The
+     * write-back is owner-scoped at the repo.
+     */
+    private Mono<Integer> stampFindingId(String owner, String rowId, java.util.Map<String, Object> resp) {
+        Long findingId = FindingIdParser.parse(resp == null ? null : resp.get("id"));
+        if (findingId == null) {
+            log.info("[sticker] finding filed (held) for owner={} disposition={} (no finding id in response)",
+                    owner, FINDING_DISPOSITION_FLAGGED);
+            return Mono.just(0);
+        }
+        log.info("[sticker] finding filed (held) id={} for owner={} disposition={}",
+                findingId, owner, FINDING_DISPOSITION_FLAGGED);
+        return repo.setFindingId(rowId, owner, findingId);
     }
 }

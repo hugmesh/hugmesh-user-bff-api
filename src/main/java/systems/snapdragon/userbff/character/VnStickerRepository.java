@@ -29,7 +29,7 @@ public class VnStickerRepository {
     private static VnSticker toWire(VnStickerEntity e) {
         return new VnSticker(
                 e.id(), e.ownerSubject(), e.domain(), e.expression(), e.mxcUrl(),
-                e.status(), e.createdAt());
+                e.status(), e.findingId(), e.createdAt());
     }
 
     /**
@@ -68,5 +68,34 @@ public class VnStickerRepository {
     public Mono<VnSticker> findOwned(String id, String ownerSubject) {
         return repo.findByIdAndOwnerSubject(id, ownerSubject)
                 .map(VnStickerRepository::toWire);
+    }
+
+    /**
+     * CAPTURE-AT-FILE write-back: stamp the federation {@code @system} finding id onto the
+     * caller's OWN just-saved row. Owner-scoped (defence-in-depth). Best-effort: the
+     * service swallows a failure. Returns rows-affected (1 on the happy path). Mirrors
+     * {@link VnCharacterPartRepository#setFindingId(String, String, Long)}.
+     */
+    public Mono<Integer> setFindingId(String id, String owner, Long findingId) {
+        return repo.setFindingId(id, owner, findingId);
+    }
+
+    /**
+     * STATUS FLIP (the moderation receiver): flip a {@code PENDING} sticker to
+     * {@code ACTIVE} or {@code REJECTED}. PENDING-guarded + idempotent — a second resolve /
+     * an unknown or already-resolved id updates ZERO rows. Returns rows-affected (1 =
+     * flipped, 0 = no-op). The {@code status} is the controller-validated literal.
+     */
+    public Mono<Integer> updateStatusByIdWherePending(String id, String status) {
+        return repo.updateStatusByIdWherePending(id, status);
+    }
+
+    /**
+     * Read a sticker by id ACROSS owners (the SERVICE moderation receiver has no owner
+     * context). Used ONLY to return the post-flip row to the SERVICE caller. Empty when
+     * the id is unknown. Mirrors {@link VnCharacterPartRepository#findAnyById(String)}.
+     */
+    public Mono<VnSticker> findAnyById(String id) {
+        return repo.findById(id).map(VnStickerRepository::toWire);
     }
 }

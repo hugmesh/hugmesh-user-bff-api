@@ -90,9 +90,11 @@ public class AvatarService {
      */
     private Mono<Void> fileHeldFinding(String owner, ModerationVerdict verdict) {
         String disposition = "reject".equalsIgnoreCase(verdict.action()) ? "rejected" : "flagged";
+        // subjectRef=null: the avatar is stored on the profile row, not a moderated-queue
+        // row keyed by finding — there is no part/sticker id to back-link the finding to.
         FindingRequest req = new FindingRequest(
                 "profile-avatar", disposition, verdict.classification(),
-                verdict.confidence(), verdict.policyHit(), verdict.perceptualHash());
+                verdict.confidence(), verdict.policyHit(), verdict.perceptualHash(), null);
         return federation.fileFinding(req)
                 .doOnNext(r -> log.info("[avatar] finding filed (held) for owner={} disposition={}", owner, disposition))
                 .onErrorResume(e -> {

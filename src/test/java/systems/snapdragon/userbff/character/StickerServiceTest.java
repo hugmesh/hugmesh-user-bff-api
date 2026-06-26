@@ -58,16 +58,18 @@ class StickerServiceTest {
     }
 
     private static VnSticker storedSticker(String expression, String mxc) {
-        return new VnSticker("st-1", "alice", "default", expression, mxc, "PENDING", Instant.now());
+        return new VnSticker("st-1", "alice", "default", expression, mxc, "PENDING", null, Instant.now());
     }
 
     @Test
-    void save_allowed_uploadsStoresPending_andFilesHeldFinding() {
+    void save_allowed_uploadsStoresPending_capturesFindingId() {
         byte[] png = {(byte) 0x89, 'P', 'N', 'G'};
         when(media.upload(eq("alice"), eq(png), eq("image/png"))).thenReturn(Mono.just("mxc://home/h1"));
         when(repo.save(eq("alice"), eq("default"), eq("happy"), eq("mxc://home/h1"), eq("PENDING")))
                 .thenReturn(Mono.just(storedSticker("happy", "mxc://home/h1")));
-        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("status", "held")));
+        // federation returns the created finding with an id; the service writes it back.
+        when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("id", 7L, "status", "held")));
+        when(repo.setFindingId(eq("st-1"), eq("alice"), eq(7L))).thenReturn(Mono.just(1));
 
         VnSticker out = service.save("alice", "default", "happy", png, "image/png").block();
         assertThat(out).isNotNull();
@@ -79,8 +81,9 @@ class StickerServiceTest {
         verify(media).upload(eq("alice"), eq(png), eq("image/png"));
         verify(repo).save(eq("alice"), eq("default"), eq("happy"), eq("mxc://home/h1"), eq("PENDING"));
 
-        // ...and a held finding is filed: surface=character-sticker, disposition=flagged,
-        // verdict fields absent (the bytes passed the auto-classifier; a human reviews).
+        // ...a held finding is filed: surface=character-sticker, disposition=flagged,
+        // verdict fields absent (the bytes passed the auto-classifier; a human reviews) and
+        // the just-saved row id is passed as the finding subjectRef (the producer back-link).
         ArgumentCaptor<FindingRequest> req = ArgumentCaptor.forClass(FindingRequest.class);
         verify(federation).fileFinding(req.capture());
         assertThat(req.getValue().surface()).isEqualTo("character-sticker");
@@ -89,6 +92,10 @@ class StickerServiceTest {
         assertThat(req.getValue().confidence()).isNull();
         assertThat(req.getValue().policyHit()).isNull();
         assertThat(req.getValue().perceptualHash()).isNull();
+        assertThat(req.getValue().subjectRef()).isEqualTo("st-1");
+
+        // ...and the returned federation finding id (7) is written back onto the row.
+        verify(repo).setFindingId(eq("st-1"), eq("alice"), eq(7L));
     }
 
     @Test
@@ -114,6 +121,10 @@ class StickerServiceTest {
         assertThat(req.getValue().confidence()).isEqualTo(0.95);
         assertThat(req.getValue().policyHit()).isTrue();
         assertThat(req.getValue().perceptualHash()).isEqualTo("ab12");
+        // a BLOCKED sticker is never persisted, so there is no row id to back-link.
+        assertThat(req.getValue().subjectRef()).isNull();
+        // ...and no row exists to stamp.
+        verify(repo, never()).setFindingId(anyString(), anyString(), any());
     }
 
     @Test

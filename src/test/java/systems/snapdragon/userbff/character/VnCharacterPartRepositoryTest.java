@@ -62,6 +62,48 @@ class VnCharacterPartRepositoryTest extends PostgresTestSupport {
         assertThat(saved.status()).isEqualTo("PENDING");
     }
 
+    // ── 018 finding_id capture + status flip ─────────────────────────────────
+
+    @Test
+    void setFindingId_stampsOwnerScoped_thenReadable() {
+        VnCharacterPart saved = repo.save("fid-owner", "default", null, SVG, "PENDING", null).block();
+        assertThat(saved).isNotNull();
+        assertThat(saved.findingId()).isNull();   // null on insert
+
+        // a stamp for the WRONG owner touches nothing (owner-scoped); the right owner = 1 row.
+        assertThat(repo.setFindingId(saved.id(), "someone-else", 99L).block()).isZero();
+        assertThat(repo.setFindingId(saved.id(), "fid-owner", 4242L).block()).isEqualTo(1);
+
+        assertThat(repo.findOwned(saved.id(), "fid-owner").block().findingId()).isEqualTo(4242L);
+    }
+
+    @Test
+    void updateStatusByIdWherePending_flipsPendingToActive_andIsIdempotent() {
+        VnCharacterPart saved = repo.save("flip-active", "default", null, SVG, "PENDING", null).block();
+        assertThat(saved).isNotNull();
+
+        // first flip: PENDING -> ACTIVE (1 row).
+        assertThat(repo.updateStatusByIdWherePending(saved.id(), "ACTIVE").block()).isEqualTo(1);
+        assertThat(repo.findOwned(saved.id(), "flip-active").block().status()).isEqualTo("ACTIVE");
+
+        // second flip on the now-ACTIVE row: 0 rows (the PENDING guard) — idempotent no-op,
+        // and it does NOT overwrite the resolved status.
+        assertThat(repo.updateStatusByIdWherePending(saved.id(), "REJECTED").block()).isZero();
+        assertThat(repo.findOwned(saved.id(), "flip-active").block().status()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void updateStatusByIdWherePending_flipsPendingToRejected() {
+        VnCharacterPart saved = repo.save("flip-reject", "default", null, SVG, "PENDING", null).block();
+        assertThat(repo.updateStatusByIdWherePending(saved.id(), "REJECTED").block()).isEqualTo(1);
+        assertThat(repo.findOwned(saved.id(), "flip-reject").block().status()).isEqualTo("REJECTED");
+    }
+
+    @Test
+    void updateStatusByIdWherePending_unknownId_isZeroRows_noOp() {
+        assertThat(repo.updateStatusByIdWherePending("no-such-part-id", "ACTIVE").block()).isZero();
+    }
+
     @Nested
     class DomainScope {
         @Test

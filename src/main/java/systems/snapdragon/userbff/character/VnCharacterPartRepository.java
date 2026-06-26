@@ -29,7 +29,7 @@ public class VnCharacterPartRepository {
     private static VnCharacterPart toWire(VnCharacterPartEntity e) {
         return new VnCharacterPart(
                 e.id(), e.ownerSubject(), e.domain(), e.name(), e.svg(), e.status(),
-                e.headArchetype(), e.createdAt());
+                e.headArchetype(), e.findingId(), e.createdAt());
     }
 
     /**
@@ -68,5 +68,36 @@ public class VnCharacterPartRepository {
     public Mono<VnCharacterPart> findOwned(String id, String ownerSubject) {
         return repo.findByIdAndOwnerSubject(id, ownerSubject)
                 .map(VnCharacterPartRepository::toWire);
+    }
+
+    /**
+     * CAPTURE-AT-FILE write-back: stamp the federation {@code @system} finding id onto the
+     * caller's OWN just-saved row. Owner-scoped (defence-in-depth — a stamp can only touch
+     * the caller's row). Best-effort: the service swallows a failure (a missing row → 0
+     * rows, no error). Returns rows-affected (1 on the happy path).
+     */
+    public Mono<Integer> setFindingId(String id, String owner, Long findingId) {
+        return repo.setFindingId(id, owner, findingId);
+    }
+
+    /**
+     * STATUS FLIP (the moderation receiver): flip a {@code PENDING} part to {@code ACTIVE}
+     * or {@code REJECTED}. PENDING-guarded + idempotent — a second resolve / an unknown or
+     * already-resolved id updates ZERO rows (the no-op the SERVICE endpoint maps to a 404).
+     * Returns rows-affected (1 = flipped, 0 = no-op). The {@code status} is the
+     * controller-validated lifecycle literal (exactly ACTIVE or REJECTED).
+     */
+    public Mono<Integer> updateStatusByIdWherePending(String id, String status) {
+        return repo.updateStatusByIdWherePending(id, status);
+    }
+
+    /**
+     * Read a part by id ACROSS owners (the SERVICE moderation receiver has no owner
+     * context — it acts for the SYSTEM resolving a finding). Used ONLY to return the
+     * post-flip row to the SERVICE caller; the human owner-scoped reads stay
+     * {@link #findOwned(String, String)}. Empty when the id is unknown.
+     */
+    public Mono<VnCharacterPart> findAnyById(String id) {
+        return repo.findById(id).map(VnCharacterPartRepository::toWire);
     }
 }

@@ -1,5 +1,6 @@
 package systems.snapdragon.userbff.character;
 
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
@@ -47,4 +48,37 @@ public interface VnCharacterPartR2dbcRepository
                                       @Param("svg") String svg,
                                       @Param("status") String status,
                                       @Param("headArchetype") String headArchetype);
+
+    // ---- CAPTURE-AT-FILE: stamp the federation finding id back onto the row ----
+
+    // Best-effort write-back of the federation @system finding id AFTER the row insert
+    // (the row already exists; this links it to the finding it filed). OWNER-SCOPED so a
+    // capture can only ever stamp the caller's OWN row (defence-in-depth — the id is the
+    // freshly-inserted row's own id, but the owner predicate makes a cross-owner stamp
+    // impossible even if the id were ever attacker-influenced). Returns rows-affected.
+    String SET_FINDING_ID =
+            "UPDATE vn_character_part SET finding_id = :findingId "
+            + "WHERE id = :id AND owner_subject = :owner";
+
+    @Modifying
+    @Query(SET_FINDING_ID)
+    Mono<Integer> setFindingId(@Param("id") String id,
+                               @Param("owner") String owner,
+                               @Param("findingId") Long findingId);
+
+    // ---- STATUS FLIP: the moderation-receiver activation/rejection ----
+
+    // Flip a PENDING row to ACTIVE/REJECTED. PENDING-GUARDED + idempotent: the
+    // WHERE status='PENDING' predicate means a second resolve (or an already-resolved /
+    // unknown row) updates ZERO rows — a safe no-op the receiver maps to a 404/no-op.
+    // status is a caller-supplied lifecycle literal the controller has already validated
+    // to be exactly ACTIVE or REJECTED (the 016 CHECK constraint is the DB backstop).
+    String FLIP_STATUS_WHERE_PENDING =
+            "UPDATE vn_character_part SET status = :status "
+            + "WHERE id = :id AND status = 'PENDING'";
+
+    @Modifying
+    @Query(FLIP_STATUS_WHERE_PENDING)
+    Mono<Integer> updateStatusByIdWherePending(@Param("id") String id,
+                                               @Param("status") String status);
 }

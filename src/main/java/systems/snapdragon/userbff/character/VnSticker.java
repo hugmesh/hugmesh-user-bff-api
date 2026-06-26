@@ -21,6 +21,11 @@ import java.time.Instant;
  * {@code PENDING} (just saved + moderated-passed, awaiting human review) |
  * {@code ACTIVE} (a moderator approved it — only ACTIVE rows are later advertised in the
  * MSC2545 pack) | {@code REJECTED} (a moderator blocked it).
+ *
+ * <p>{@code findingId} (changelog 018, nullable) is the federation {@code @system}
+ * finding id this row filed at save time — the back-link the moderation reconciler uses
+ * to flip this row's {@code status} when the finding is resolved. {@code null} when the
+ * best-effort capture didn't complete (a federation outage at file time).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record VnSticker(
@@ -30,5 +35,6 @@ public record VnSticker(
         String expression,
         String mxcUrl,
         String status,
+        Long findingId,
         Instant createdAt) {
 }

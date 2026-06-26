@@ -19,6 +19,11 @@ import java.time.Instant;
  * <p>{@code status} vocabulary (DB-paralleled by the 016 CHECK constraint):
  * {@code PENDING} (just saved, awaiting human moderation of the sanitized SVG) |
  * {@code ACTIVE} (a moderator approved it) | {@code REJECTED} (a moderator blocked it).
+ *
+ * <p>{@code findingId} (changelog 018, nullable) is the federation {@code @system}
+ * finding id this row filed at save time — the back-link the moderation reconciler uses
+ * to flip this row's {@code status} when the finding is resolved. {@code null} when the
+ * best-effort capture didn't complete (a federation outage at file time).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record VnCharacterPart(
@@ -29,5 +34,6 @@ public record VnCharacterPart(
         String svg,
         String status,
         String headArchetype,
+        Long findingId,
         Instant createdAt) {
 }
