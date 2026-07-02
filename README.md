@@ -455,7 +455,10 @@ subject). **PR #72 open.**
   reactive security context as `Authorization: Bearer <jwt>` on every outbound
   call (`FederationWebClientConfig`).
 - `CasdoorUserClient` — reactive WebClient for self-service password/email
-  (`/api/set-password`, `/api/update-user`). Gated by `casdoor.account.enabled`.
+  (`POST /api/set-password` — urlencoded form ONLY, and
+  `POST /api/update-user?id=<org>/<name>&columns=email` — partial `{owner,name,
+  email}` body; both shapes ✅ live-confirmed against a running Casdoor, see
+  *Honest deferrals*). Gated by `casdoor.account.enabled`.
 - `MatrixBlockClient` / `MastodonBlockClient` (behind the `ExternalBlockClient` /
   `ExternalBlockConfig` abstraction seam) — reactive WebClients for the
   external self-block push. Base URLs grounded in the snapdragon-generator
@@ -736,10 +739,21 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   best-effort and the gateway revocation-write endpoint ships later.
 - **Casdoor password/email change is STUBBED by default** (`casdoor.account.enabled
   =false`). The reactive `CasdoorUserClient` flow runs end-to-end (controller →
-  service → client) and acks `casdoor: "stubbed"`; the exact Casdoor payload +
-  per-user auth (caller's own session vs. a service credential, and the
-  `send-verification-code`/`verify-code` flow for email) is version-specific and
-  must be validated against a running casdoor-all-in-one before going live.
+  service → client) and acks `casdoor: "stubbed"`. **✅ The Casdoor payload shape is
+  now CONFIRMED** (live-verified 2026-07 against the local compose stack's Casdoor
+  with a throwaway user; the earlier "unconfirmed" caveat is resolved):
+  `POST /api/set-password` accepts **only** an urlencoded form
+  (`userOwner`/`userName`/`oldPassword`/`newPassword` — a JSON body of the same
+  fields is rejected with `The user: / doesn't exist`, which the pre-fix client
+  would have hit) and verifies `oldPassword` even for admin-credential callers;
+  email goes through `POST /api/update-user?id=<org>/<name>&columns=email` with a
+  partial `{owner,name,email}` body (**`columns=email` is required** — without it
+  Casdoor full-object-validates and rejects `Display name cannot be empty`; with it
+  all other user fields are preserved). Auth: both the service client-credential
+  Basic auth and the caller's own bearer work for the caller's own user; a user
+  bearer against another user gets `Unauthorized operation`. Still deferred before
+  flipping the flag in-cluster: the `send-verification-code`/`verify-code` email
+  hardening flow and the production credential wiring.
 - **AI-cloak media-proxy ships DARK** (`app.media.poisoning.enabled=false`) until
   the round-trip survival gate is verified on a real GPU cluster. The heavy-tier
   worker is optional; the lean fallback never *forces* posting to block.
