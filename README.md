@@ -703,9 +703,16 @@ the full harness (Dependency-Check SCA + authenticated ZAP baseline + custom pro
 harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true`
 (advisory, not a hard gate) and scoped to the default branch + merge requests.
 
-> 🔭 **Roadmap (CI):** k6 load testing (part of the platform pen-test standard) is not
-> yet wired into this repo's `.gitlab-ci.yml`; nuclei already runs via the shared
-> `.pentest-*` jobs above.
+> 🚧 **k6 load job defined, first run pending:** the opt-in `pentest:load` job extends
+> the shared `.pentest-load` (k6 realistic-mixed + stress via `run-pentest.sh --load`),
+> gated on `PENTEST_LOAD == "1"` (GitLab Schedule or manual trigger — never a plain
+> MR). Caveat: `.pentest-load` (like the shared `.pentest-dast-*` jobs) executes
+> `${PENTEST_HARNESS_DIR}/run-pentest.sh`, which this repo does **not** vendor
+> (default `tests/pentest`) — until the shared harness is vendored/fetched here, the
+> load/DAST legs fail fast at the harness lookup (non-blocking, `allow_failure: true`)
+> instead of running k6/nuclei, and no executed pipeline run has been verified yet.
+> With that caveat, the job set now matches the platform pen-test standard
+> (SCA + DAST + nuclei + k6) on paper.
 
 ## Honest deferrals
 
@@ -852,11 +859,15 @@ the opaque `bff_` session lands in THIS BFF (the shared infra in `snapdragon-aut
 while the gateway keeps enforcing `amr`→`MFA_SATISFIED` for the JWT world. None is
 present today; surfaces will be marked 🚧/✅ as they land.
 
-### Generator supply-chain hardening 🚧 in-flight + CI pen-test completion 🔭 planned
+### Generator supply-chain hardening 🚧 in-flight + CI pen-test jobs 🚧 defined here
 Stage3 GPG/sha + headscale/tailscale checksum verification + de-defaulted baked creds
-are in-flight in `snapdragon-generator`; for this repo, **k6 load testing** is the
-remaining pen-test-standard tool not yet wired into `.gitlab-ci.yml` (nuclei already
-runs via the shared `.pentest-*` jobs).
+are in-flight in `snapdragon-generator`. For this repo the pen-test standard's job set
+is defined in `.gitlab-ci.yml`: **k6 load testing** as the opt-in `pentest:load` job
+(extends the shared `.pentest-load`, `PENTEST_LOAD == "1"` schedule/manual gate), with
+nuclei via the shared `.pentest-*` jobs — but the shared harness
+(`${PENTEST_HARNESS_DIR}/run-pentest.sh`) is not vendored in this repo yet, so the
+DAST/load legs fail fast at the harness lookup until it is vendored/fetched; no
+executed pipeline run has been verified (see the CI note above).
 
 ### Platform roadmap (other repos, context) 🔭 planned
 Encrypted versioned backups (Velero + kopia/restic), egress VPN (.conf drop-in),

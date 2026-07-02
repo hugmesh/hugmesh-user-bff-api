@@ -180,3 +180,13 @@ pentest:dast:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# pentest:load — the OPT-IN k6 load / DoS-resilience run from the same shared
+# harness (run-pentest.sh --load): realistic-mixed + stress k6 scenarios driven
+# as the real seeded roles against the spun-up env-test-build (429 under stress
+# = PASS, 5xx = FAIL). OFF by default: the hidden .pentest-load job gates on
+# PENTEST_LOAD == "1" (a GitLab Schedule or a manual trigger), NEVER a plain MR,
+# so this adds zero cost to normal pipelines. Completes the pen-test standard
+# for this repo (SCA + DAST + nuclei were already wired above).
+pentest:load:
+  extends: .pentest-load
