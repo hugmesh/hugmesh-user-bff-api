@@ -180,7 +180,11 @@ public class SsoAuthController {
         if (token == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "no session"));
         }
-        return adminBff.getAccount(token)
+        // Resolve the account FROM the opaque session token (admin-bff introspect → account id →
+        // full view). NOT getAccount(token): a bff_ session token is never an account id
+        // (provider:handle), so getAccount(token) always 404'd — /bff/me + /bff/session both
+        // failed (masked while the SSO surface shipped dark).
+        return adminBff.getAccountBySession(token)
                 .map(account -> {
                     Map<String, Object> out = new LinkedHashMap<>();
                     out.put("id", account.id());

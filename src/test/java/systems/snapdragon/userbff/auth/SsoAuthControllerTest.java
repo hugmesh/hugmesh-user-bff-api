@@ -85,9 +85,12 @@ class SsoAuthControllerTest {
     }
 
     @Test
-    void me_withCookie_delegatesGetAccount() {
+    void me_withCookie_resolvesAccountBySessionToken() {
+        // The cookie value is the opaque SESSION token, NOT an account id — /bff/me must
+        // resolve it via getAccountBySession (introspect → account view), never
+        // getAccount(sessionToken) (which 404's: a bff_ token is not an account primary key).
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.getAccount("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
+        when(adminBff.getAccountBySession("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
 
         client(adminBff, true).get().uri("/bff/me")
                 .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
@@ -97,7 +100,8 @@ class SsoAuthControllerTest {
                 .jsonPath("$.id").isEqualTo("acc-1")
                 .jsonPath("$.handle").isEqualTo("alice@example.test");
 
-        verify(adminBff).getAccount("bff_opaque");
+        verify(adminBff).getAccountBySession("bff_opaque");
+        verify(adminBff, never()).getAccount("bff_opaque");
     }
 
     @Test
@@ -113,7 +117,7 @@ class SsoAuthControllerTest {
         // login-ui's SessionService hydrates from GET /bff/session (permitAll, cookie-only)
         // after login — it must return the same account/session view as /bff/me.
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.getAccount("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
+        when(adminBff.getAccountBySession("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
 
         client(adminBff, true).get().uri("/bff/session")
                 .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
@@ -125,7 +129,7 @@ class SsoAuthControllerTest {
                 .jsonPath("$.registrationComplete").isEqualTo(false)
                 .jsonPath("$.roles").isArray();
 
-        verify(adminBff).getAccount("bff_opaque");
+        verify(adminBff).getAccountBySession("bff_opaque");
     }
 
     @Test

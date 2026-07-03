@@ -1,9 +1,14 @@
 package systems.snapdragon.userbff.auth;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.util.LinkedHashMap;
@@ -51,6 +56,12 @@ public class AdminBffInternalClient {
     /** A freshly-minted opaque {@code bff_} session token from admin-bff. */
     public record SessionView(String token, String accountId) {}
 
+    /** The subset of admin-bff's {@code /bff/internal/session/introspect} body we need to
+     *  resolve a session token to its account id (the rest — provider/roles/status/mfa — is
+     *  re-read from the full account view, so unknown fields are ignored). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record SessionIntrospect(String id) {}
+
     /** Null unless app.bff.oidc.enabled=true — when null every call is a fail-closed
      *  stub (Mono.error), so a disabled surface can never silently authenticate. */
     private final WebClient http;
@@ -80,7 +91,7 @@ public class AdminBffInternalClient {
                 .bodyToMono(AccountView.class);
     }
 
-    /** Fetch the account view by id (e.g. for {@code /me}). */
+    /** Fetch the account view by id (e.g. after resolving a session). */
     public Mono<AccountView> getAccount(String accountId) {
         if (http == null) {
             return stub("getAccount");
@@ -88,6 +99,38 @@ public class AdminBffInternalClient {
         return http.get().uri("/bff/internal/accounts/{id}", accountId)
                 .retrieve()
                 .bodyToMono(AccountView.class);
+    }
+
+    /**
+     * Resolve the account view from an opaque {@code bff_} SESSION token (the {@code /me} +
+     * {@code /session} hydrate path). The session token is NOT an account id — it must be
+     * introspected first: admin-bff's {@code GET /bff/internal/session/introspect} maps the
+     * {@code Authorization: Bearer bff_<token>} to its owning account, and we then fetch that
+     * account's full view (which carries {@code handle}, absent from the introspect body) by id.
+     *
+     * <p>This replaces the earlier {@code getAccount(sessionToken)} bug: a session token
+     * ({@code bff_}+random) is never an account primary key ({@code provider:handle}), so
+     * {@code GET /bff/internal/accounts/{bff_token}} always 404'd — every {@code /bff/me} and
+     * {@code /bff/session} call failed (masked while the surface shipped dark). Fail-closed
+     * stub when the OIDC surface is disabled, exactly like the other calls. Unknown/expired
+     * session ⇒ admin-bff 401 (propagated), never a fabricated view.
+     */
+    public Mono<AccountView> getAccountBySession(String bffToken) {
+        if (http == null) {
+            return stub("getAccountBySession");
+        }
+        return http.get().uri("/bff/internal/session/introspect")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bffToken)
+                .retrieve()
+                .bodyToMono(SessionIntrospect.class)
+                .flatMap(intro -> getAccount(intro.id()))
+                // An unknown/expired (or non-bff) session ⇒ admin-bff introspect 401. Surface it
+                // to the caller AS a 401 so the /me + /session hydrate path returns "no session"
+                // (the login-ui then re-logs-in) instead of a bare 500 from the raw
+                // WebClientResponseException. The dark stub path (IllegalStateException) is
+                // unaffected — it stays fail-closed.
+                .onErrorMap(WebClientResponseException.Unauthorized.class,
+                        e -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session"));
     }
 
     /** Mark the account's registration as complete (the post-profile step). */
