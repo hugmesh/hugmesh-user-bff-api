@@ -9,9 +9,6 @@
     "url" : ""
   } ],
   "tags" : [ {
-    "name" : "Mastodon proxy (D6)",
-    "description" : "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Ships dark behind app.hs-token.enabled."
-  }, {
     "name" : "Home guide",
     "description" : "Per-user home/getting-started guide dismissal (owner = JWT subject)."
   }, {
@@ -36,14 +33,11 @@
     "name" : "Notification preferences",
     "description" : "Per-category notification preferences (owner = JWT subject, domain-scoped). account-restriction is forced-on / un-silenceable."
   }, {
+    "name" : "Matrix proxy (D6)",
+    "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
+  }, {
     "name" : "Cards",
     "description" : "The caller's OWN federation bundles (owner = JWT subject), via snapdragon-federation-api."
-  }, {
-    "name" : "User preferences",
-    "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default — the per-user AI-poison default the compose toggle persists."
-  }, {
-    "name" : "Matrix proxy (D6)",
-    "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Ships dark behind app.hs-token.enabled."
   }, {
     "name" : "Self-silence",
     "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
@@ -54,6 +48,9 @@
     "name" : "Character-moderation (internal receiver)",
     "description" : "SERVICE-PRINCIPAL ONLY part/sticker status flip (PENDING→ACTIVE/REJECTED) when a moderator resolves the finding. PENDING-guarded + idempotent (a no-op/unknown id is a 404)."
   }, {
+    "name" : "Mastodon proxy (D6)",
+    "description" : "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
+  }, {
     "name" : "Notifications (in-app floor)",
     "description" : "The caller's OWN in-app notifications (owner = JWT subject, domain-scoped). The always-on in-app channel — read + mark-read only; the actions reconciler writes them."
   }, {
@@ -62,6 +59,9 @@
   }, {
     "name" : "OIDC login callback",
     "description" : "Casdoor OIDC browser-PKCE callback. Ships dark behind app.bff.oidc.enabled; 503 when disabled."
+  }, {
+    "name" : "User preferences",
+    "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default (the per-user AI-poison default the compose toggle persists) and the mastodon.appearance.* keys (the mastodon-ui appearance panel)."
   }, {
     "name" : "Connected clients",
     "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."

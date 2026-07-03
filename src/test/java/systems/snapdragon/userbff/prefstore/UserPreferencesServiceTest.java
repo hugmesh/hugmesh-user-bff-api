@@ -158,4 +158,77 @@ class UserPreferencesServiceTest {
             assertThat(view.get(K)).isIn("glaze", "light");
         }
     }
+
+    // ── APPEARANCE (mastodon-ui PreferencesService) ─────────────────────────────
+    @Nested
+    class Appearance {
+        @Test
+        void unsetUser_appearanceKeyIsAbsent_noServerOpinion() {
+            // unlike media.poison.default, appearance keys have NO server default —
+            // absence is itself the honest signal that the user hasn't customised it.
+            Map<String, String> view = service.get("ap-1", "brandx").block();
+            assertThat(view).doesNotContainKey(UserPreferencesService.APPEARANCE_THEME);
+        }
+
+        @Test
+        void put_thenGet_appearanceChoiceIsDurable() {
+            Map<String, String> after = service.put(
+                    "ap-2", UserPreferencesService.APPEARANCE_THEME, "pastel-sky", "brandx").block();
+            assertThat(after).containsEntry(UserPreferencesService.APPEARANCE_THEME, "pastel-sky");
+            assertThat(service.get("ap-2", "brandx").block())
+                    .containsEntry(UserPreferencesService.APPEARANCE_THEME, "pastel-sky");
+        }
+
+        @Test
+        void put_booleanAppearanceKey_normalisesCase() {
+            Map<String, String> after = service.put(
+                    "ap-3", UserPreferencesService.APPEARANCE_HIGH_CONTRAST, "TRUE", "brandx").block();
+            assertThat(after).containsEntry(UserPreferencesService.APPEARANCE_HIGH_CONTRAST, "true");
+        }
+
+        @Test
+        void put_invalidAppearanceEnumValue_isBadRequest() {
+            assertThatThrownBy(() -> service.put(
+                    "ap-4", UserPreferencesService.APPEARANCE_LAYOUT, "triple-column", "brandx").block())
+                    .isInstanceOf(ApiException.class)
+                    .extracting(e -> ((ApiException) e).status().value()).isEqualTo(400);
+        }
+
+        @Test
+        void put_invalidBooleanAppearanceValue_isBadRequest() {
+            assertThatThrownBy(() -> service.put(
+                    "ap-5", UserPreferencesService.APPEARANCE_REDUCED_MOTION, "maybe", "brandx").block())
+                    .isInstanceOf(ApiException.class)
+                    .extracting(e -> ((ApiException) e).status().value()).isEqualTo(400);
+        }
+
+        @Test
+        void put_allAppearanceKeys_areAccepted() {
+            Map<String, String> valid = Map.of(
+                    UserPreferencesService.APPEARANCE_THEME, "mono",
+                    UserPreferencesService.APPEARANCE_ACCENT, "peach",
+                    UserPreferencesService.APPEARANCE_APPEARANCE, "light",
+                    UserPreferencesService.APPEARANCE_LAYOUT, "multi",
+                    UserPreferencesService.APPEARANCE_DENSITY, "compact",
+                    UserPreferencesService.APPEARANCE_MEDIA_CORNERS, "square",
+                    UserPreferencesService.APPEARANCE_FONT, "dyslexic",
+                    UserPreferencesService.APPEARANCE_TEXT_SIZE, "xl",
+                    UserPreferencesService.APPEARANCE_HIGH_CONTRAST, "true",
+                    UserPreferencesService.APPEARANCE_REDUCED_MOTION, "false");
+            Map<String, String> resolved = Map.of();
+            for (var entry : valid.entrySet()) {
+                resolved = service.put("ap-6", entry.getKey(), entry.getValue(), "brandx").block();
+            }
+            for (var entry : valid.entrySet()) {
+                assertThat(resolved).containsEntry(entry.getKey(), entry.getValue());
+            }
+        }
+
+        @Test
+        void ownerIsolation_appearanceChoiceByADoesNotAffectB() {
+            service.put("ap-a", UserPreferencesService.APPEARANCE_THEME, "mono", "brandx").block();
+            Map<String, String> viewB = service.get("ap-b", "brandx").block();
+            assertThat(viewB).doesNotContainKey(UserPreferencesService.APPEARANCE_THEME);
+        }
+    }
 }
