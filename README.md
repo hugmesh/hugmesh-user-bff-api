@@ -15,9 +15,10 @@ mod BFF. It talks to:
 
 - **Casdoor** (the IdP) as an OAuth2 resource server — validates the JWT, and is
   the destination for the self-service password/email change. Casdoor is the SSO
-  IdP for the whole platform; `login-ui` runs the OIDC authorization-code (PKCE)
-  redirect and this BFF does the server-side code→token exchange and holds per-session
-  JWT custody/refresh (see *Auth model / SSO relocation*).
+  IdP for the whole platform but is **never browser-exposed**: `login-ui` shows a
+  native username/password form that POSTs to `/bff/login`, and this BFF runs the
+  PKCE flow against the internal Casdoor **server-side** (code→token exchange) and
+  holds per-session JWT custody/refresh (see *Auth model / SSO relocation*).
 - **snapdragon-federation-api** — for the caller's federation **cards** (bundles)
   and the instance-block **recommendation** chain (caller JWT forwarded per request).
 - **snapdragon-admin-bff-api** `/bff/internal` (over mTLS + `X-Internal-Token`) — the
@@ -30,7 +31,7 @@ mod BFF. It talks to:
 
 ```mermaid
 flowchart LR
-    LoginUI["login-ui<br/>(Casdoor OIDC PKCE redirect)"]:::planned
+    LoginUI["login-ui<br/>(native username/password form → POST /bff/login)"]:::planned
     UI["snapdragon-user-ui<br/>(later; ng-openapi-gen)"]:::planned
     GW["snapdragon gateway<br/>(Casdoor-JWT RS + bff_→JWT swap + route-access gate)"]
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
@@ -73,8 +74,9 @@ amber-dashed homeserver leg is the ✅-shipped-but-**gated** stub-seam (off by d
 The platform's auth is being consolidated this cycle, and this BFF is the new home
 for the user-facing slice of it. Ground truth as of 2026-06-25:
 
-- **Casdoor is the SSO IdP, and it is NEVER browser-exposed.** There are two ways in,
-  both terminating server-side in this BFF so the user's browser only ever holds an
+- **Casdoor is the SSO IdP, and it is NEVER browser-exposed.** Native login is the
+  **sole** browser login entry, terminating server-side in this BFF so the user's
+  browser only ever holds an
   **opaque `bff_`-prefixed** httpOnly session — never a Casdoor JWT, refresh token, id
   token, PKCE verifier, `state`, or even a Casdoor URL:
   - **Native login (`POST /bff/login`) — the headline model.** The browser posts only
@@ -84,11 +86,13 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
     `http://casdoor:8000` — the in-cluster base, never the browser-facing issuer), and
     on success redeems the returned one-time authorization `code` for tokens. No Casdoor
     redirect ever reaches the browser.
-  - **Browser-PKCE callback (`POST /bff/auth/callback`).** `login-ui` performs a Casdoor
-    OIDC authorization-code (PKCE) redirect and hands the `code` back here; this BFF does
-    the server-side code→token exchange.
+  - **~~Browser-PKCE callback (`POST /bff/auth/callback`)~~ — REMOVED (historical).** The
+    old model had `login-ui` perform a Casdoor OIDC authorization-code (PKCE) redirect and
+    hand the `code` back here for the server-side exchange. That browser-visible Casdoor
+    redirect and the browser-driven `/bff/auth/callback` no longer exist — native
+    `POST /bff/login` is now the SOLE browser login entry.
 
-  Both legs converge on **one** shared completion path — `OidcLoginCompletionService`
+  Native login converges on **one** shared completion path — `OidcLoginCompletionService`
   (exchange `code`→tokens via auth-core `OidcExchangeClient` → provision account + mint
   session via admin-bff → AES-256-GCM custody-stamp the tokens via `BffCustodyCipher` →
   mint the `bff_` cookie) — so the security-critical crypto/session logic lives in
