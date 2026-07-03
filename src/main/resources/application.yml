@@ -170,6 +170,21 @@ app:
       client-secret: "${APP_BFF_OIDC_CLIENT_SECRET:}"
       redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://snapdragon.systems/login/callback}"
       default-expiry-seconds: 3600
+      # ── NATIVE LOGIN (server-side credential check) ───────────────────────────
+      # POST /bff/login verifies username+password SERVER-SIDE against Casdoor's
+      # /api/login over THIS internal, in-cluster base — NEVER the browser-facing
+      # CASDOOR_ISSUER_URI. Casdoor is never browser-exposed and the browser never
+      # receives a JWT/token, the PKCE verifier, the state, or any Casdoor URL. The
+      # CasdoorLoginClient ships DARK behind app.bff.oidc.enabled (fail-closed stub
+      # until the flag flips). login-base default is the in-cluster Casdoor service;
+      # compose sets APP_BFF_OIDC_LOGIN_BASE=http://casdoor:8000. client-id is REUSED
+      # from client-id above so the /api/login authorize call and the token exchange
+      # present the SAME OIDC client (a PKCE code is only redeemable by its requester).
+      login-base: "${APP_BFF_OIDC_LOGIN_BASE:http://casdoor.snapdragon-pki.svc.cluster.local:8000}"
+      login-path: "${APP_BFF_OIDC_LOGIN_PATH:/api/login}"
+      application: "${APP_BFF_OIDC_APPLICATION:app-user-bff}"
+      organization: "${APP_BFF_OIDC_ORGANIZATION:${casdoor.organization:snapdragon}}"
+      scope: "${APP_BFF_OIDC_SCOPE:openid profile email}"
     custody-key: "${APP_BFF_CUSTODY_KEY:}"
   # The opaque bff_ session cookie (auth-core SessionCookieService). LIVE BY DEFAULT:
   # enabled=true ⇒ /bff/login (and the OIDC callback) emit the HttpOnly Set-Cookie so

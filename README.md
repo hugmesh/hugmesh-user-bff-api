@@ -73,11 +73,40 @@ amber-dashed homeserver leg is the ✅-shipped-but-**gated** stub-seam (off by d
 The platform's auth is being consolidated this cycle, and this BFF is the new home
 for the user-facing slice of it. Ground truth as of 2026-06-25:
 
-- **Casdoor is the SSO IdP.** `login-ui` performs a Casdoor OIDC authorization-code
-  (PKCE) redirect; **this BFF does the server-side code→token exchange** and holds
-  per-session **JWT custody / refresh**. The browser only ever holds an **opaque
-  `bff_`-prefixed session** (localStorage or httpOnly cookie) — the user NEVER sees
-  their own Casdoor JWT.
+- **Casdoor is the SSO IdP, and it is NEVER browser-exposed.** There are two ways in,
+  both terminating server-side in this BFF so the user's browser only ever holds an
+  **opaque `bff_`-prefixed** httpOnly session — never a Casdoor JWT, refresh token, id
+  token, PKCE verifier, `state`, or even a Casdoor URL:
+  - **Native login (`POST /bff/login`) — the headline model.** The browser posts only
+    `{username, password}`. This BFF generates a PKCE pair + `state` **server-side**,
+    verifies the credentials by POSTing to the **internal** Casdoor `/api/login`
+    (`CasdoorLoginClient`, pointed at `app.bff.oidc.login-base`, e.g.
+    `http://casdoor:8000` — the in-cluster base, never the browser-facing issuer), and
+    on success redeems the returned one-time authorization `code` for tokens. No Casdoor
+    redirect ever reaches the browser.
+  - **Browser-PKCE callback (`POST /bff/auth/callback`).** `login-ui` performs a Casdoor
+    OIDC authorization-code (PKCE) redirect and hands the `code` back here; this BFF does
+    the server-side code→token exchange.
+
+  Both legs converge on **one** shared completion path — `OidcLoginCompletionService`
+  (exchange `code`→tokens via auth-core `OidcExchangeClient` → provision account + mint
+  session via admin-bff → AES-256-GCM custody-stamp the tokens via `BffCustodyCipher` →
+  mint the `bff_` cookie) — so the security-critical crypto/session logic lives in
+  exactly one place, never copy-pasted between controllers.
+
+  **Native-login request / response contract:**
+  ```
+  POST /bff/login   (permitAll at the BFF; reached via be-gateway)
+  → { "username": string, "password": string,
+      "mfaPasscode"?: string, "mfaType"?: string }
+
+  200 (success)      { "registrationComplete": bool, "status": "active",
+                       "mfaRequired": false }        + Set-Cookie: bff_… (httpOnly)
+  200 (MFA needed)   { "mfaRequired": true, "mfaType": [ … ] }   (NO cookie, NO session)
+  401 (bad creds)    { "error": "invalid_credentials", "message": <casdoor msg> }
+  ```
+  The success body carries **only** non-secret routing hints — the opaque session token
+  appears solely in the `Set-Cookie` header, never in the body.
 - **The gateway stays a pure Casdoor-JWT OAuth2 resource server.** A pre-security
   exchange filter swaps the `bff_` session → the internal custody JWT, so the
   gateway's JWT validation + role gate run unchanged.
@@ -93,16 +122,19 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
 > ✅ Already on `main` here: the JWT-only `/bff/user/**` surfaces, the Casdoor
 > resource-server config, the canonical `CasdoorAuthorities` converter, and
 > issuer-keyed domain-scoping. ✅ Also on `main` but **shipped DARK** (default-off
-> flags, fail-closed-stubbed, byte-identical runtime when off): the server-side
-> code→token exchange (`OidcCallbackController`, PKCE), the `bff_` session custody
-> (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
+> flags, fail-closed-stubbed, byte-identical runtime when off): the **native login**
+> server-side credential check (`CasdoorLoginClient` → internal Casdoor `/api/login`),
+> the server-side code→token exchange (`OidcCallbackController`, PKCE), the one shared
+> completion path (`OidcLoginCompletionService`) both login legs use, the `bff_` session
+> custody (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
 > admin-bff `/bff/internal` account/session client (`AdminBffInternalClient`), and
 > the `snapdragon-auth-core` adoption. 🚧 What genuinely remains is the **live
 > flag-flip** (gating off `app.bff.oidc.enabled` / `app.bff.custody-key` /
-> `app.internal.token`, pinning the admin-bff #112 contract + the cross-repo egress
-> NetworkPolicy) and **SSO e2e**. Until that flip, login stays operationally owned by
-> admin-bff: the new `/bff/login` + `/bff/register` routes exist but 503 / are inert
-> while the flags are off.
+> `app.internal.token`, wiring `app.bff.oidc.login-base` to the in-cluster Casdoor,
+> pinning the admin-bff #112 contract + the cross-repo egress NetworkPolicy) and
+> **SSO e2e**. Until that flip, login stays operationally owned by admin-bff: the
+> `/bff/login` (native) + `/bff/register` routes exist but 503 / are inert while the
+> flags are off.
 
 ## The core invariant: owner-enforcement
 

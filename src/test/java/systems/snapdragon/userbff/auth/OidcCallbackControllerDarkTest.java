@@ -26,8 +26,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link OidcCallbackController} ships-dark + happy-path behaviour, exercised through a
- * {@link WebTestClient#bindToController bound} controller (no full context). Proves:
+ * {@link OidcCallbackController} + the shared {@link OidcLoginCompletionService} ships-dark +
+ * happy-path behaviour, exercised through a {@link WebTestClient#bindToController bound}
+ * controller (no full context). The controller now delegates exchange→provision→custody→cookie
+ * to the shared service (the SAME path the native {@code /bff/login} uses); this test drives
+ * that service through the callback adapter. Proves:
  * <ul>
  *   <li><b>dark (no OidcExchangeClient bean):</b> 503, no side-effects, no cookie;</li>
  *   <li><b>cipher unavailable:</b> 503, no side-effects, even when exchange client present;</li>
@@ -37,8 +40,6 @@ import static org.mockito.Mockito.when;
  *   <li><b>enabled + cookie enabled:</b> 200 OK with bff_ cookie;</li>
  *   <li><b>exchange failure:</b> error propagates (5xx), no account or session call.</li>
  * </ul>
- * The browser-PKCE model: login-ui owns state validation (sessionStorage) — the BFF
- * receives only {code, codeVerifier, redirectUri} in a POST body.
  */
 class OidcCallbackControllerDarkTest {
 
@@ -59,6 +60,15 @@ class OidcCallbackControllerDarkTest {
         };
     }
 
+    private static WebTestClient controller(ObjectProvider<OidcExchangeClient> exchange,
+                                            AdminBffInternalClient adminBff,
+                                            BffCustodyCipher cipher,
+                                            SessionCookieService cookies) {
+        OidcLoginCompletionService completion =
+                new OidcLoginCompletionService(exchange, adminBff, cipher, cookies);
+        return WebTestClient.bindToController(new OidcCallbackController(completion, REDIRECT)).build();
+    }
+
     private static Map<String, String> callbackBody() {
         return Map.of("code", "abc", "codeVerifier", "verifier", "redirectUri", REDIRECT);
     }
@@ -68,11 +78,8 @@ class OidcCallbackControllerDarkTest {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         SessionCookieService cookies = new SessionCookieService(false, true, Duration.ofHours(12));
 
-        OidcCallbackController controller = new OidcCallbackController(
-                provider(null), adminBff, availableCipher(), cookies, REDIRECT);
-        WebTestClient client = WebTestClient.bindToController(controller).build();
-
-        client.post().uri("/bff/auth/callback")
+        controller(provider(null), adminBff, availableCipher(), cookies)
+                .post().uri("/bff/auth/callback")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(callbackBody())
                 .exchange()
@@ -89,11 +96,8 @@ class OidcCallbackControllerDarkTest {
         BffCustodyCipher inert = new BffCustodyCipher("");   // blank key → not available
         SessionCookieService cookies = new SessionCookieService(false, true, Duration.ofHours(12));
 
-        OidcCallbackController controller = new OidcCallbackController(
-                provider(exchange), adminBff, inert, cookies, REDIRECT);
-        WebTestClient client = WebTestClient.bindToController(controller).build();
-
-        client.post().uri("/bff/auth/callback")
+        controller(provider(exchange), adminBff, inert, cookies)
+                .post().uri("/bff/auth/callback")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(callbackBody())
                 .exchange()
@@ -119,11 +123,8 @@ class OidcCallbackControllerDarkTest {
 
         SessionCookieService cookies = new SessionCookieService(false, true, Duration.ofHours(12));
 
-        OidcCallbackController controller = new OidcCallbackController(
-                provider(exchange), adminBff, availableCipher(), cookies, REDIRECT);
-        WebTestClient client = WebTestClient.bindToController(controller).build();
-
-        client.post().uri("/bff/auth/callback")
+        controller(provider(exchange), adminBff, availableCipher(), cookies)
+                .post().uri("/bff/auth/callback")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(callbackBody())
                 .exchange()
@@ -132,7 +133,6 @@ class OidcCallbackControllerDarkTest {
                 .expectBody(OidcCallbackController.CallbackResult.class).consumeWith(r -> {
                     OidcCallbackController.CallbackResult body = r.getResponseBody();
                     assertThat(body).isNotNull();
-                    // registrationComplete comes from AccountView(registrationComplete=false)
                     assertThat(body.registrationComplete()).isFalse();
                     assertThat(body.status()).isEqualTo("active");
                 });
@@ -158,11 +158,8 @@ class OidcCallbackControllerDarkTest {
 
         SessionCookieService cookies = new SessionCookieService(true, true, Duration.ofHours(12));
 
-        OidcCallbackController controller = new OidcCallbackController(
-                provider(exchange), adminBff, availableCipher(), cookies, REDIRECT);
-        WebTestClient client = WebTestClient.bindToController(controller).build();
-
-        client.post().uri("/bff/auth/callback")
+        controller(provider(exchange), adminBff, availableCipher(), cookies)
+                .post().uri("/bff/auth/callback")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(callbackBody())
                 .exchange()
@@ -178,11 +175,8 @@ class OidcCallbackControllerDarkTest {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         SessionCookieService cookies = new SessionCookieService(false, true, Duration.ofHours(12));
 
-        OidcCallbackController controller = new OidcCallbackController(
-                provider(exchange), adminBff, availableCipher(), cookies, REDIRECT);
-        WebTestClient client = WebTestClient.bindToController(controller).build();
-
-        client.post().uri("/bff/auth/callback")
+        controller(provider(exchange), adminBff, availableCipher(), cookies)
+                .post().uri("/bff/auth/callback")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(callbackBody())
                 .exchange()

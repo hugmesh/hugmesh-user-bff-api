@@ -18,11 +18,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link SsoAuthController} delegates every account/session op to a MOCKED
- * {@link AdminBffInternalClient} — there is NO local auth-core AccountStore /
- * BffSessionRepository bean (user-bff has no account/session DB). Bound via
- * {@link WebTestClient#bindToController} (no full context). Proves the delegation
- * shapes for /login, /register, /me, /session and the cookie-ships-dark posture.
+ * {@link SsoAuthController}'s register / me / session / sessionOut legs delegate every
+ * account/session op to a MOCKED {@link AdminBffInternalClient} — there is NO local auth-core
+ * AccountStore / BffSessionRepository bean (user-bff has no account/session DB). Bound via
+ * {@link WebTestClient#bindToController} (no full context). The native {@code /bff/login} leg
+ * has its own {@code NativeLoginControllerTest}.
  */
 class SsoAuthControllerTest {
 
@@ -33,56 +33,17 @@ class SsoAuthControllerTest {
 
     private WebTestClient client(AdminBffInternalClient adminBff, boolean cookieEnabled) {
         SessionCookieService cookies = new SessionCookieService(cookieEnabled, true, Duration.ofHours(12));
-        return WebTestClient.bindToController(new SsoAuthController(adminBff, cookies)).build();
-    }
-
-    @Test
-    void login_delegatesAllowlistEnsureAndSession_tokenInBody() {
-        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.allowlistCheck(eq("email"), anyString())).thenReturn(Mono.just(true));
-        when(adminBff.ensureAccount(eq("email"), anyString())).thenReturn(Mono.just(ACCOUNT));
-        when(adminBff.createSession("acc-1")).thenReturn(Mono.just(SESSION));
-
-        client(adminBff, false).post().uri("/bff/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"provider\":\"email\",\"email\":\"alice@example.test\",\"username\":null}")
-                .exchange()
-                .expectStatus().isOk()
-                // cookie disabled ⇒ token in body, no Set-Cookie (parity with today)
-                .expectHeader().doesNotExist("Set-Cookie")
-                .expectBody()
-                .jsonPath("$.token").isEqualTo("bff_opaque")
-                .jsonPath("$.id").isEqualTo("acc-1");
-
-        verify(adminBff).ensureAccount("email", "alice@example.test");
-        verify(adminBff).createSession("acc-1");
-    }
-
-    @Test
-    void login_notAllowlisted_is403() {
-        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.allowlistCheck(anyString(), anyString())).thenReturn(Mono.just(false));
-
-        client(adminBff, false).post().uri("/bff/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"provider\":\"email\",\"email\":\"blocked@example.test\",\"username\":null}")
-                .exchange()
-                .expectStatus().isForbidden();
-    }
-
-    @Test
-    void login_cookieEnabled_setsBffCookie() {
-        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.allowlistCheck(anyString(), anyString())).thenReturn(Mono.just(true));
-        when(adminBff.ensureAccount(anyString(), anyString())).thenReturn(Mono.just(ACCOUNT));
-        when(adminBff.createSession("acc-1")).thenReturn(Mono.just(SESSION));
-
-        client(adminBff, true).post().uri("/bff/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"provider\":\"email\",\"email\":\"alice@example.test\",\"username\":null}")
-                .exchange()
-                .expectStatus().isOk()
-                .expectHeader().value("Set-Cookie", v -> org.assertj.core.api.Assertions.assertThat(v).contains("bff_"));
+        // The native-login collaborators are unused by these register/me/session legs; pass
+        // dark stubs so the controller wires. A dark CasdoorLoginClient + a completion service
+        // over a null exchange provider both fail closed, but neither is reached here.
+        CasdoorLoginClient casdoorLogin = new CasdoorLoginClient(null, "/api/login", "user-bff",
+                "app-user-bff", "snapdragon", "openid profile email");
+        OidcLoginCompletionService completion =
+                new OidcLoginCompletionService(NativeLoginControllerTest.provider(null),
+                        adminBff, new systems.snapdragon.authcore.casdoor.BffCustodyCipher(""), cookies);
+        return WebTestClient.bindToController(
+                new SsoAuthController(casdoorLogin, completion, adminBff, cookies,
+                        "https://snapdragon.systems/login/callback")).build();
     }
 
     @Test
@@ -104,9 +65,8 @@ class SsoAuthControllerTest {
     }
 
     /**
-     * Regression for finding #5: /register (permitAll, account-provisioning) MUST gate on the
-     * BFF-side allowlist just like /login. An unlisted email is rejected with 403 BEFORE any
-     * account is provisioned — ensureAccount/createSession are never invoked.
+     * /register (permitAll, account-provisioning) MUST gate on the BFF-side allowlist. An
+     * unlisted email is rejected with 403 BEFORE any account is provisioned.
      */
     @Test
     void register_notAllowlisted_is403_andNeverProvisions() {
@@ -151,7 +111,7 @@ class SsoAuthControllerTest {
     @Test
     void sessionGet_withCookie_returnsSameViewAsMe() {
         // login-ui's SessionService hydrates from GET /bff/session (permitAll, cookie-only)
-        // after the OIDC callback — it must return the same account/session view as /bff/me.
+        // after login — it must return the same account/session view as /bff/me.
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         when(adminBff.getAccount("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
 
