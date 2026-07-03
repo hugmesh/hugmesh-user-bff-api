@@ -22,8 +22,8 @@ import systems.snapdragon.userbff.testsupport.TestIssuer;
  * {@link SecurityConfigPathGateSliceTest} (in-process {@link TestIssuer} brands) so the
  * chain builds with NO network JWKS fetch.
  *
- * <p>Proves the pre-auth login entrypoints ({@code /bff/auth/callback}, {@code /bff/login},
- * {@code /bff/register}, {@code /bff/session}) are reachable WITHOUT a Casdoor JWT (they
+ * <p>Proves the pre-auth login entrypoints ({@code /bff/login}, {@code /bff/register},
+ * {@code /bff/session}) are reachable WITHOUT a Casdoor JWT (they
  * are how a caller obtains a session), while {@code /bff/me} and the {@code /bff/user/**}
  * floor STILL require authentication (anonymous ⇒ 401). "Reachable" means the SECURITY
  * layer admits the request — in production every one of these handlers ships dark
@@ -55,11 +55,6 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
     }
 
     // ── PRE-AUTH SSO login surface — permitAll, reachable anonymously ──────────
-
-    @Test
-    void callback_isReachable_withoutJwt() {
-        client.get().uri("/bff/auth/callback").exchange().expectStatus().isOk();
-    }
 
     @Test
     void login_isReachable_withoutJwt() {
@@ -96,7 +91,7 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
     @RestController
     static class SsoProbeController {
         @RequestMapping({
-                "/bff/auth/callback", "/bff/login", "/bff/register", "/bff/session",
+                "/bff/login", "/bff/register", "/bff/session",
                 "/bff/me", "/bff/user/_probe",
         })
         Mono<String> ok() {

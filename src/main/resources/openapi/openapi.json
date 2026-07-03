@@ -60,9 +60,6 @@
     "name" : "Sessions",
     "description" : "The caller's OWN active login sessions (owner = JWT-derived account). List + revoke."
   }, {
-    "name" : "OIDC login callback",
-    "description" : "Casdoor OIDC browser-PKCE callback. Ships dark behind app.bff.oidc.enabled; 503 when disabled."
-  }, {
     "name" : "User preferences",
     "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default (the per-user AI-poison default the compose toggle persists) and the mastodon.appearance.* keys (the mastodon-ui appearance panel)."
   }, {
@@ -1188,35 +1185,6 @@
                   "additionalProperties" : {
                     "type" : "object"
                   }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/bff/auth/callback" : {
-      "post" : {
-        "tags" : [ "OIDC login callback" ],
-        "summary" : "Casdoor OIDC callback: browser-PKCE handoff. Exchange code, provision account+session via admin-bff, set the bff_ cookie. 200+body on success. 503 when the OIDC surface is dark.",
-        "operationId" : "callback",
-        "requestBody" : {
-          "content" : {
-            "application/json" : {
-              "schema" : {
-                "$ref" : "#/components/schemas/OidcCallbackRequest"
-              }
-            }
-          },
-          "required" : true
-        },
-        "responses" : {
-          "200" : {
-            "description" : "OK",
-            "content" : {
-              "*/*" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/CallbackResult"
                 }
               }
             }
@@ -2429,31 +2397,6 @@
           "username" : {
             "maxLength" : 64,
             "minLength" : 0,
-            "type" : "string"
-          }
-        }
-      },
-      "OidcCallbackRequest" : {
-        "type" : "object",
-        "properties" : {
-          "code" : {
-            "type" : "string"
-          },
-          "codeVerifier" : {
-            "type" : "string"
-          },
-          "redirectUri" : {
-            "type" : "string"
-          }
-        }
-      },
-      "CallbackResult" : {
-        "type" : "object",
-        "properties" : {
-          "registrationComplete" : {
-            "type" : "boolean"
-          },
-          "status" : {
             "type" : "string"
           }
         }

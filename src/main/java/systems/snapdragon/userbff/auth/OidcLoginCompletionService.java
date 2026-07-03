@@ -15,16 +15,11 @@ import systems.snapdragon.authcore.config.SessionCookieService;
 /**
  * The ONE shared login-completion path: EXCHANGE a Casdoor authorization {@code code} for
  * tokens, PROVISION the account + opaque {@code bff_} session via admin-bff, CUSTODY-STAMP
- * the exchanged tokens (AES-256-GCM), and MINT the {@code bff_} cookie. Both login legs
- * feed a {@code code} into this single method so the security-critical crypto/session logic
- * lives in exactly one place:
- *
- * <ul>
- *   <li>{@link OidcCallbackController} — the browser-PKCE redirect callback (login-ui owns
- *       the verifier);</li>
- *   <li>{@link SsoAuthController} — the native {@code POST /bff/login} (this BFF owns the
- *       verifier, generated server-side alongside the credential check).</li>
- * </ul>
+ * the exchanged tokens (AES-256-GCM), and MINT the {@code bff_} cookie. The sole caller is
+ * {@link SsoAuthController} — the native {@code POST /bff/login}, where this BFF owns the
+ * PKCE verifier (generated server-side alongside the credential check) and feeds the
+ * resulting {@code code} into this single method, so the security-critical crypto/session
+ * logic lives in exactly one place.
  *
  * <p>INVARIANT: the exchanged access/refresh/id tokens NEVER leave this service in a
  * response — only the opaque {@code bff_} session token is minted, and only into the

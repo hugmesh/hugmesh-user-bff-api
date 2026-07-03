@@ -150,16 +150,15 @@ app:
     enabled: "${APP_TEST_SEED_ENABLED:false}"
 
   # ── SSO LOGIN RELOCATION (user-bff owns OIDC login) — SHIPS DARK ─────────────
-  # The whole OIDC-login surface (/bff/auth/callback + /bff/login|register|session,
-  # the OidcCallbackController + SsoAuthController + the AdminBffInternalClient) is
-  # inert until app.bff.oidc.enabled flips to true:
+  # The whole native-login surface (/bff/login|register|session, the SsoAuthController
+  # + the AdminBffInternalClient) is inert until app.bff.oidc.enabled flips to true:
   #   • enabled=false ⇒ auth-core OidcExchangeConfig contributes NO OidcExchangeClient
-  #     bean (the callback 503s), AND the AdminBffInternalClient is a fail-closed stub
-  #     (every account/session op errors — never a silent auth).
+  #     bean (the login exchange 503s), AND the AdminBffInternalClient is a fail-closed
+  #     stub (every account/session op errors — never a silent auth).
   # bff.custody-key: the AES-256-GCM data key the BffCustodyCipher uses to encrypt the
   # exchanged access/refresh tokens at rest BEFORE handing the ciphertext to admin-bff.
   # ESO/Vault-sourced at deploy, NEVER a literal in git. BLANK ⇒ the cipher is INERT
-  # and the callback 503s even if oidc.enabled=true (the OidcCustodyBootGuard ALSO
+  # and login 503s even if oidc.enabled=true (the OidcCustodyBootGuard ALSO
   # fails the boot for that combination — fail-closed, no plaintext token at rest).
   bff:
     oidc:

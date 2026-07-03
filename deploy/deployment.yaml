@@ -213,9 +213,9 @@ spec:
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
             # ── SSO LOGIN RELOCATION (user-bff owns OIDC login) — SHIPS DARK ──────
-            # The whole /bff/auth/callback + /bff/login|register|session surface is
+            # The whole /bff/login|register|session native-login surface is
             # inert until APP_BFF_OIDC_ENABLED flips true: with it false the auth-core
-            # OidcExchangeClient bean is absent (callback 503s) and the
+            # OidcExchangeClient bean is absent (the login exchange 503s) and the
             # AdminBffInternalClient is a fail-closed stub. This block only PROVISIONS
             # the wiring; a later enablement step flips it AFTER the custody key + the
             # internal token are seeded and the user-bff -> admin-bff egress NetworkPolicy

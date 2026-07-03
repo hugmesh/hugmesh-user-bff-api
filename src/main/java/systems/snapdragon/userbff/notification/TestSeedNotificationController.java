@@ -49,7 +49,7 @@ import java.util.UUID;
  *
  * <p><b>SHIPS DARK by default</b> — gated by {@code app.test-seed.enabled} (default
  * {@code false}), the same "ships dark behind a property" idiom as
- * {@code app.bff.oidc.enabled} ({@link systems.snapdragon.userbff.auth.OidcCallbackController}).
+ * {@code app.bff.oidc.enabled} ({@link systems.snapdragon.userbff.auth.SsoAuthController}).
  * When the flag is off the route still exists (so a misconfigured e2e run gets a loud,
  * honest 503 rather than a 404 that could be mistaken for "wrong path"), but it performs
  * NO write and reaches the delivery service ZERO times — never a silent no-op 200. Set

@@ -86,11 +86,12 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
     `http://casdoor:8000` — the in-cluster base, never the browser-facing issuer), and
     on success redeems the returned one-time authorization `code` for tokens. No Casdoor
     redirect ever reaches the browser.
-  - **~~Browser-PKCE callback (`POST /bff/auth/callback`)~~ — REMOVED (historical).** The
-    old model had `login-ui` perform a Casdoor OIDC authorization-code (PKCE) redirect and
-    hand the `code` back here for the server-side exchange. That browser-visible Casdoor
-    redirect and the browser-driven `/bff/auth/callback` no longer exist — native
-    `POST /bff/login` is now the SOLE browser login entry.
+
+  > Historical: an earlier model had `login-ui` perform a browser-visible Casdoor OIDC
+  > authorization-code (PKCE) redirect and hand the `code` back to a browser-PKCE callback
+  > endpoint for the server-side exchange. That browser-exposed-Casdoor model — and its
+  > callback controller — have been **retired**; native `POST /bff/login` is now the SOLE
+  > browser login entry.
 
   Native login converges on **one** shared completion path — `OidcLoginCompletionService`
   (exchange `code`→tokens via auth-core `OidcExchangeClient` → provision account + mint
@@ -128,8 +129,8 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
 > issuer-keyed domain-scoping. ✅ Also on `main` but **shipped DARK** (default-off
 > flags, fail-closed-stubbed, byte-identical runtime when off): the **native login**
 > server-side credential check (`CasdoorLoginClient` → internal Casdoor `/api/login`),
-> the server-side code→token exchange (`OidcCallbackController`, PKCE), the one shared
-> completion path (`OidcLoginCompletionService`) both login legs use, the `bff_` session
+> the server-side code→token exchange (PKCE), the one shared
+> completion path (`OidcLoginCompletionService`) native login uses, the `bff_` session
 > custody (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
 > admin-bff `/bff/internal` account/session client (`AdminBffInternalClient`), and
 > the `snapdragon-auth-core` adoption. 🚧 What genuinely remains is the **live

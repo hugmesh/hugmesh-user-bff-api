@@ -11,10 +11,9 @@ import java.util.Base64;
  * {@code code_challenge} = BASE64URL(SHA-256(verifier)). Both are held ONLY on the server
  * for the duration of the (synchronous) login exchange and are NEVER sent to the browser.
  *
- * <p>Unlike the browser-PKCE {@code /bff/auth/callback} leg (where login-ui owns the
- * verifier in sessionStorage), the native-login leg does the whole authorize→code→token
- * round-trip inside this BFF, so the verifier proves the same party made both calls and
- * the challenge/verifier pair never leaves the process.
+ * <p>The native-login leg does the whole authorize→code→token round-trip inside this BFF,
+ * so the verifier proves the same party made both calls and the challenge/verifier pair
+ * never leaves the process.
  */
 public record Pkce(String verifier, String challenge) {
 
