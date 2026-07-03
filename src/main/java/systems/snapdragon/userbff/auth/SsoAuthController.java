@@ -37,6 +37,10 @@ import java.util.Map;
  *   <li>{@code DELETE /bff/session} — the {@code /sessionOut} leg (revoke the session);</li>
  *   <li>{@code GET /bff/me} — the caller's account view (from admin-bff, NOT a local DB);
  *       kept AUTHENTICATED (matches admin-bff) — NOT in the permitAll set.</li>
+ *   <li>{@code GET /bff/session} — the SAME account/session view, but permitAll +
+ *       cookie-authenticated (no JWT) so the login SPA can hydrate its session right after the
+ *       OIDC callback (when it holds only the {@code bff_} cookie). This is the contract
+ *       {@code login-ui}'s {@code SessionService} calls.</li>
  * </ul>
  *
  * <p>SHIPS DARK: with {@code app.bff.oidc.enabled=false} (the default) the
@@ -106,13 +110,31 @@ public class SsoAuthController {
             + "503 when the SSO surface is dark.")
     @GetMapping("/me")
     public Mono<Map<String, Object>> me(ServerWebExchange exchange) {
+        return sessionView(exchange);
+    }
+
+    @Operation(summary = "The caller's session view (from admin-bff), read from the bff_ cookie. "
+            + "PermitAll + cookie-authenticated (NO JWT) so the login SPA can hydrate its session "
+            + "straight after the OIDC callback — when the browser holds only the bff_ cookie, not a "
+            + "gateway-minted JWT (which is what /me requires). Same body as /me. 401 when there is no "
+            + "session; 503 when the SSO surface is dark.")
+    @GetMapping("/session")
+    public Mono<Map<String, Object>> session(ServerWebExchange exchange) {
+        return sessionView(exchange);
+    }
+
+    /**
+     * The caller's account/session view, keyed on the opaque {@code bff_} cookie and resolved
+     * via admin-bff (#112). Shared by {@code GET /bff/me} (JWT-authenticated) and
+     * {@code GET /bff/session} (permitAll, cookie-only — the login-ui hydrate path). 401 when no
+     * cookie; fail-closed 503 (stub error) while the SSO surface is dark — never a fabricated
+     * local view (user-bff has no account DB).
+     */
+    private Mono<Map<String, Object>> sessionView(ServerWebExchange exchange) {
         String token = bffTokenFrom(exchange);
         if (token == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "no session"));
         }
-        // The session token resolves to an account view via admin-bff (#112). Until that
-        // contract is pinned the internal client errors (stub) — fail closed, never a
-        // fabricated local view.
         return adminBff.getAccount(token)
                 .map(account -> {
                     Map<String, Object> out = new LinkedHashMap<>();

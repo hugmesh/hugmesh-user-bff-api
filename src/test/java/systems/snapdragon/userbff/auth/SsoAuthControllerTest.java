@@ -149,6 +149,34 @@ class SsoAuthControllerTest {
     }
 
     @Test
+    void sessionGet_withCookie_returnsSameViewAsMe() {
+        // login-ui's SessionService hydrates from GET /bff/session (permitAll, cookie-only)
+        // after the OIDC callback — it must return the same account/session view as /bff/me.
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(adminBff.getAccount("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
+
+        client(adminBff, true).get().uri("/bff/session")
+                .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.id").isEqualTo("acc-1")
+                .jsonPath("$.handle").isEqualTo("alice@example.test")
+                .jsonPath("$.registrationComplete").isEqualTo(false)
+                .jsonPath("$.roles").isArray();
+
+        verify(adminBff).getAccount("bff_opaque");
+    }
+
+    @Test
+    void sessionGet_noCookie_is401() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        client(adminBff, true).get().uri("/bff/session")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
     void session_delete_revokesAndExpiresCookie() {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         when(adminBff.deleteSession("bff_opaque")).thenReturn(Mono.empty());
