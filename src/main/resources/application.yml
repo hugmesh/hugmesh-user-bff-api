@@ -137,6 +137,18 @@ app:
   tenancy:
     issuers: "${APP_TENANCY_ISSUERS:}"
 
+  # TEST/SEED-ONLY: POST /bff/user/notifications/test-seed (TestSeedNotificationController)
+  # lets an ORDINARY authenticated human persona create a real user_notifications row for
+  # THEMSELVES ONLY (never another user), through the SAME InternalNotificationDeliveryService
+  # the production ROLE_SERVICE-gated reconciler path uses — no parallel write, no bypass of
+  # category-preference suppression. SHIPS DARK: enabled=false (the default, and the only
+  # setting in production) ⇒ every call is a real 503, not a silent no-op. Flip
+  # APP_TEST_SEED_ENABLED=true ONLY in the e2e/dev compose+cluster profile so Playwright specs
+  # can seed notification fixtures deterministically without the ROLE_SERVICE client-credentials
+  # token the harness does not carry.
+  test-seed:
+    enabled: "${APP_TEST_SEED_ENABLED:false}"
+
   # ── SSO LOGIN RELOCATION (user-bff owns OIDC login) — SHIPS DARK ─────────────
   # The whole OIDC-login surface (/bff/auth/callback + /bff/login|register|session,
   # the OidcCallbackController + SsoAuthController + the AdminBffInternalClient) is

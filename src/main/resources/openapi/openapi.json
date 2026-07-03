@@ -27,6 +27,9 @@
     "name" : "Profile",
     "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
   }, {
+    "name" : "Notifications (TEST-SEED, self only)",
+    "description" : "TEST/SEED-ONLY. Ships dark behind app.test-seed.enabled (default false). Creates a real in-app notification for the CALLER ONLY via the same delivery service the production ROLE_SERVICE internal-deliver path uses — never a parallel write."
+  }, {
     "name" : "Self-block",
     "description" : "The caller's OWN blocks (owner = JWT subject) + instance-block recommendation."
   }, {
@@ -703,6 +706,35 @@
         "responses" : {
           "204" : {
             "description" : "No Content"
+          }
+        }
+      }
+    },
+    "/bff/user/notifications/test-seed" : {
+      "post" : {
+        "tags" : [ "Notifications (TEST-SEED, self only)" ],
+        "summary" : "TEST/SEED-ONLY: create a real in-app notification for the CALLING user (self only), through the production delivery service. 503 when app.test-seed.enabled=false (ships dark).",
+        "operationId" : "seed",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SeedRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SeedResult"
+                }
+              }
+            }
           }
         }
       }
@@ -1554,6 +1586,38 @@
         }
       }
     },
+    "/bff/session" : {
+      "get" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "The caller's session view (from admin-bff), read from the bff_ cookie. PermitAll + cookie-authenticated (NO JWT) so the login SPA can hydrate its session straight after the OIDC callback — when the browser holds only the bff_ cookie, not a gateway-minted JWT (which is what /me requires). Same body as /me. 401 when there is no session; 503 when the SSO surface is dark.",
+        "operationId" : "session",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "Revoke the caller's session (sessionOut) and expire the bff_ cookie. 503 when the SSO surface is dark.",
+        "operationId" : "sessionOut",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
     "/bff/me" : {
       "get" : {
         "tags" : [ "SSO auth" ],
@@ -1758,18 +1822,6 @@
           },
           "500" : {
             "description" : "Database error."
-          }
-        }
-      }
-    },
-    "/bff/session" : {
-      "delete" : {
-        "tags" : [ "SSO auth" ],
-        "summary" : "Revoke the caller's session (sessionOut) and expire the bff_ cookie. 503 when the SSO surface is dark.",
-        "operationId" : "sessionOut",
-        "responses" : {
-          "200" : {
-            "description" : "OK"
           }
         }
       }
@@ -2112,6 +2164,51 @@
             "minLength" : 0,
             "type" : "string",
             "format" : "email"
+          }
+        }
+      },
+      "SeedRequest" : {
+        "required" : [ "category" ],
+        "type" : "object",
+        "properties" : {
+          "category" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "pattern" : "^[a-z][a-z-]{0,63}$",
+            "type" : "string"
+          },
+          "title" : {
+            "maxLength" : 512,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "body" : {
+            "maxLength" : 100000,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "sourceId" : {
+            "maxLength" : 128,
+            "minLength" : 0,
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type" : "string"
+          }
+        }
+      },
+      "SeedResult" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "delivered" : {
+            "type" : "boolean"
+          },
+          "deduped" : {
+            "type" : "boolean"
+          },
+          "reason" : {
+            "type" : "string"
           }
         }
       },

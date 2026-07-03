@@ -365,6 +365,36 @@ class RawApiDenyOwnerScopedIdorTest extends PostgresTestSupport {
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // TEST-SEED GATE — honest disclosure: disabled-by-default ships DARK, no silent no-op
+    // ════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Test-seed gate — app.test-seed.enabled is unset here (production default false)")
+    class TestSeedGate {
+
+        @Test
+        @DisplayName("POST /bff/user/notifications/test-seed: default-disabled is 503, zero rows written (re-read)")
+        void testSeed_defaultDisabled_is503_andWritesNothing() {
+            // This suite runs the PRODUCTION-shaped profile (no app.test-seed.enabled
+            // override anywhere in this class's @DynamicPropertySource) — exactly the
+            // configuration a real deployment would carry. Even a genuine, authenticated
+            // ROLE_USER principal must get a REAL 503, never a silent no-op 200: the
+            // honest-disclosure invariant the seed mechanism is required to uphold.
+            String sub = victim("test-seed-gate");
+            http.post().uri("/bff/user/notifications/test-seed")
+                    .header("Authorization", "Bearer " + bearerX(sub))
+                    .header("Content-Type", "application/json")
+                    .bodyValue(Map.of("category", "role-change"))
+                    .exchange()
+                    .expectStatus().isEqualTo(503);
+
+            // RE-READ: no notification row was created for this subject in any domain.
+            List<UserNotification> rows = notifications.listForOwner(sub, null, 50).collectList().block();
+            assertThat(rows).as("a disabled test-seed route must write nothing").isEmpty();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // FAIL-CLOSED — anonymous + forged/unknown-issuer + tampered signature → 401
     // ════════════════════════════════════════════════════════════════════════
 
