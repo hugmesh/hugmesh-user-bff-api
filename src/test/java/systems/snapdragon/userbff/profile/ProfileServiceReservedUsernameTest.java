@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
+import systems.snapdragon.userbff.support.StubFederationApiClient;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
 import systems.snapdragon.authcore.reserved.ReservedNames;
 import systems.snapdragon.commons.web.ApiException;
@@ -28,7 +29,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @DataR2dbcTest
 @Import({TestDatabaseConfig.class, UserProfileRepository.class,
-        ProfileServiceReservedUsernameTest.StubCasdoor.class, ProfileService.class})
+        ProfileServiceReservedUsernameTest.StubCasdoor.class, StubFederationApiClient.class,
+        ProfileService.class})
 class ProfileServiceReservedUsernameTest {
 
     @TestConfiguration(proxyBeanMethods = false)

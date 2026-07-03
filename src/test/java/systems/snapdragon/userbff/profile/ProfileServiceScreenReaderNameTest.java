@@ -6,6 +6,7 @@ import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import systems.snapdragon.userbff.support.StubFederationApiClient;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
 import systems.snapdragon.commons.web.ApiException;
 
@@ -26,7 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DataR2dbcTest
 @Import({TestDatabaseConfig.class, UserProfileRepository.class,
-        ProfileServiceScreenReaderNameTest.StubCasdoor.class, ProfileService.class})
+        ProfileServiceScreenReaderNameTest.StubCasdoor.class, StubFederationApiClient.class,
+        ProfileService.class})
 class ProfileServiceScreenReaderNameTest {
 
     @TestConfiguration(proxyBeanMethods = false)

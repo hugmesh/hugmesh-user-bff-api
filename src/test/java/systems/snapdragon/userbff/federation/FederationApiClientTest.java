@@ -8,6 +8,8 @@ import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
+import systems.snapdragon.commons.web.ApiException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,6 +47,9 @@ class FederationApiClientTest {
                         + "\"contentHash\":\"abc\",\"visibility\":\"internal\"}]";
             } else if (path.endsWith("/moderation")) {
                 body = "{\"id\":7,\"kind\":\"instance-block\",\"status\":\"recommended\",\"requester\":\"alice\"}";
+            } else if (path.contains("/vanity/")) { // PUT publish
+                body = "{\"slug\":\"profile-alice\",\"ownerUserId\":\"alice\",\"visibility\":\"public\","
+                        + "\"enabled\":true}";
             } else { // PUT bundle
                 body = "{\"id\":2,\"ownerUserId\":\"alice\",\"slug\":\"my-card\",\"contentHash\":\"def\"}";
             }
@@ -109,5 +114,85 @@ class FederationApiClientTest {
         assertThat(rec.last().method()).isEqualTo(HttpMethod.POST);
         assertThat(rec.last().url().getPath()).endsWith("/api/federation/moderation");
         assertThat(resp).containsEntry("status", "recommended").containsEntry("kind", "instance-block");
+    }
+
+    // ---- vanity self-publish / self-unpublish ----
+
+    @Test
+    void publishVanity_putsVanityUsername_exactPath() {
+        Recorder rec = new Recorder();
+        var resp = clientFor(rec).publishVanity("alice", "Alice's Page").block();
+        assertThat(rec.last().method()).isEqualTo(HttpMethod.PUT);
+        assertThat(rec.last().url().getPath()).endsWith("/api/federation/vanity/alice");
+        assertThat(resp).containsEntry("visibility", "public").containsEntry("enabled", true);
+    }
+
+    @Test
+    void unpublishVanity_deletesVanityUsername_exactPath() {
+        Recorder rec = new Recorder();
+        clientFor(rec).unpublishVanity("alice").block();
+        assertThat(rec.last().method()).isEqualTo(HttpMethod.DELETE);
+        assertThat(rec.last().url().getPath()).endsWith("/api/federation/vanity/alice");
+    }
+
+    /** A recording {@link ExchangeFunction} that always returns a given error status
+     *  with a body, so the client's error-mapping seam can be exercised. */
+    private static ExchangeFunction erroring(HttpStatus status, String body) {
+        return request -> Mono.just(ClientResponse.create(status)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .build());
+    }
+
+    /**
+     * HONEST FAILURE: a 404 from federation-api (e.g. "no bundle uploaded yet for
+     * profile-alice") must surface to the caller as an {@link ApiException} carrying
+     * the SAME 404 status — never a generic 500, and never silently swallowed into a
+     * fabricated success. This is the propagation contract {@link ProfileService}
+     * relies on.
+     */
+    @Test
+    void publishVanity_upstream404_mapsToApiException404_neverFakesSuccess() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.NOT_FOUND,
+                        "{\"error\":\"no uploaded bundle for profile-alice\"}"))
+                .build());
+
+        StepVerifier.create(client.publishVanity("alice", null))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(e.getMessage()).contains("publish vanity profile");
+                })
+                .verify();
+    }
+
+    @Test
+    void publishVanity_upstream403_mapsToApiException403() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.FORBIDDEN, "{\"error\":\"not owner\"}"))
+                .build());
+
+        StepVerifier.create(client.publishVanity("alice", null))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.FORBIDDEN);
+                })
+                .verify();
+    }
+
+    @Test
+    void unpublishVanity_upstreamError_mapsToApiException_neverFakesSuccess() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.SERVICE_UNAVAILABLE, "down for maintenance"))
+                .build());
+
+        StepVerifier.create(client.unpublishVanity("alice"))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(e.getMessage()).contains("unpublish vanity profile");
+                })
+                .verify();
     }
 }

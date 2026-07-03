@@ -147,6 +147,25 @@ a reactive `CasdoorUserClient` (the BFF never stores credentials). See deferrals
 skeleton is a recomputable defence-in-depth cache, never a DB identity — the exact
 UNIQUE + the 004 `vanity_username` CHECK remain the DB backstop.
 
+**Vanity PUBLISH sync (cross-service, `FederationApiClient`)** — ✅ SHIPPED. Every
+username-threaded `ProfileService.save` now calls snapdragon-federation-api's
+owner-scoped `PUT`/`DELETE /api/federation/vanity/{username}` (see that repo's
+README) to keep the `federation_modules` fragment in lockstep with the local
+`visibility`/`vanitySubdomainEnabled` flags:
+- `vanitySubdomainEnabled && visibility=='public'` → self-publish. This is the
+  user's ACTIVE, explicit intent, so a federation-api FAILURE (most commonly: no
+  `PUT /bff/user/cards/{slug}` bundle uploaded yet for `profile-<username>`) FAILS
+  the whole profile save — never a silently-degraded "saved" while the fragment was
+  never actually published upstream.
+- otherwise → self-unpublish, deliberately BEST-EFFORT (logged, swallowed): this
+  leg fires on every non-public save, including edits that never touched vanity at
+  all, so a federation-api outage must never block an unrelated pronoun/timezone
+  edit. The local row is already correctly private the moment the save returns; a
+  lagging federation unpublish converges on the next successful sync.
+
+See `FederationApiClient#publishVanity`/`#unpublishVanity` (the honest-propagation
+status mapping) and `ProfileServiceFederationSyncTest` / `FederationApiClientTest`.
+
 **`screenReaderName` (a11y)** — the ASCII-only aria-label / spoken name a screen
 reader announces (`@SafeScreenReaderName` + the `ScreenReaderNames` engine; 008
 `screen_reader_name` column). When `displayName` is pure **ASCII** the screen-reader

@@ -1,10 +1,13 @@
 package systems.snapdragon.userbff.profile;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.authcore.reserved.ReservedNames;
 import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.commons.web.ApiException;
+import systems.snapdragon.userbff.federation.FederationApiClient;
 import systems.snapdragon.userbff.web.ScreenReaderNames;
 
 /**
@@ -23,16 +26,48 @@ import systems.snapdragon.userbff.web.ScreenReaderNames;
  *
  * <p>Password + email changes are NOT stored here — they go to the Casdoor IdP via
  * {@link CasdoorUserClient}, again keyed to the caller's own username.
+ *
+ * <h2>Vanity PUBLISH sync (the federation-api "missing link")</h2>
+ * <p>The username-threading overloads ({@link #save(String, String, UserProfile)} /
+ * {@link #save(String, String, UserProfile, String)}) additionally SYNC the caller's
+ * federation-api vanity fragment on every save, via {@link FederationApiClient}:
+ * <ul>
+ *   <li>{@code vanitySubdomainEnabled && visibility=='public'} → {@code PUT
+ *       /api/federation/vanity/{username}} (self-publish, owner-scoped upstream).
+ *       This is the user's ACTIVE, explicit intent, so a federation-api FAILURE
+ *       (e.g. no bundle uploaded yet, or an upstream outage) FAILS THE WHOLE
+ *       {@code save} call — never swallowed into a silently-degraded success, so
+ *       the caller (and the UI) never sees {@code visibility=public} reported as
+ *       saved while the federation registry never actually got the fragment.</li>
+ *   <li>otherwise → {@code DELETE /api/federation/vanity/{username}} (self-unpublish;
+ *       idempotent no-op upstream when nothing was ever published). This call fires
+ *       on EVERY non-public save — including profile edits that never touched
+ *       vanity at all — so it is deliberately BEST-EFFORT: a federation-api failure
+ *       here is logged and does NOT fail the save (an unrelated pronoun/timezone
+ *       edit must not 500 because the vanity-unpublish leg, or federation-api
+ *       itself, is unreachable). The local {@code user_profile} row — this
+ *       platform's own source of truth for visibility — is already correctly
+ *       private the moment the save completes; a lagging federation unpublish
+ *       converges on the next successful sync. See {@link #syncVanityPublish}.</li>
+ * </ul>
+ * The back-compat overload {@link #save(String, UserProfile)} threads NO username,
+ * so it can never sync (there is no vanity target) — unchanged from its pre-existing
+ * contract.
  */
 @Service
 public class ProfileService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProfileService.class);
+
     private final UserProfileRepository repo;
     private final CasdoorUserClient casdoor;
+    private final FederationApiClient federation;
 
-    public ProfileService(UserProfileRepository repo, CasdoorUserClient casdoor) {
+    public ProfileService(UserProfileRepository repo, CasdoorUserClient casdoor,
+                          FederationApiClient federation) {
         this.repo = repo;
         this.casdoor = casdoor;
+        this.federation = federation;
     }
 
     /** The owner's own profile; an empty default if they have none yet. Back-compat
@@ -98,6 +133,11 @@ public class ProfileService {
      * is REJECTED with 422 so the registration/profile-save flow prompts for one (see
      * {@link ScreenReaderNames}). Its ASCII charset is also re-checked here (service
      * leg) alongside the {@code @SafeScreenReaderName} API-leg constraint.
+     *
+     * <p>FEDERATION SYNC: once persisted, the caller's federation-api vanity fragment
+     * is synced to match (publish or unpublish — see the class Javadoc). A federation
+     * failure fails this call (honest propagation), even though the local row was
+     * already written — see {@link #syncVanityPublish}.
      */
     public Mono<UserProfile> save(String owner, String username, UserProfile body, String domain) {
         requireOwner(owner);
@@ -135,7 +175,64 @@ public class ProfileService {
                                 + "and cannot be used as a vanity subdomain or public profile"));
             }
         }
-        return repo.save(owned, domain);
+        String normalizedUsername = normalize(username);
+        return repo.save(owned, domain)
+                .flatMap(saved -> syncVanityPublish(normalizedUsername, wantsVanity && wantsPublic,
+                        saved.displayName())
+                        .thenReturn(saved));
+    }
+
+    /**
+     * Syncs the caller's federation-api vanity fragment to match the just-saved
+     * profile's public/vanity state — the cross-service half of a profile save (see
+     * the class Javadoc). No-ops when no username was threaded through (the
+     * back-compat {@link #save(String, UserProfile)} overload — there is no vanity
+     * DNS label to sync against, matching its documented pre-existing contract).
+     *
+     * <p><b>Asymmetric error handling, by design:</b>
+     * <ul>
+     *   <li><b>publish</b> (the user's active, explicit intent) — an error from
+     *       {@link FederationApiClient#publishVanity} (already mapped to an
+     *       {@link ApiException} carrying the real upstream status) PROPAGATES,
+     *       failing the enclosing {@code save} Mono. Never a silent downgrade to
+     *       "saved" while the fragment was never actually published.</li>
+     *   <li><b>unpublish</b> (fires on every non-public save, most of which never
+     *       touched vanity) — an error from
+     *       {@link FederationApiClient#unpublishVanity} is LOGGED and swallowed;
+     *       the save still succeeds. The durable local row already reflects the
+     *       caller's true (private) intent; a stuck-public federation fragment
+     *       converges on the next successful sync rather than blocking every
+     *       unrelated profile edit on federation-api's availability.</li>
+     * </ul>
+     *
+     * @param normalizedUsername the lower-cased vanity username, or {@code null}
+     *                           when none was threaded through this save
+     * @param shouldBePublic     {@code true} iff the just-saved profile wants
+     *                           {@code vanitySubdomainEnabled && visibility=='public'}
+     * @param displayName        the profile's current display name, forwarded as the
+     *                           fragment's cosmetic name on a publish
+     */
+    private Mono<Void> syncVanityPublish(String normalizedUsername, boolean shouldBePublic, String displayName) {
+        if (normalizedUsername == null || normalizedUsername.isBlank()) {
+            return Mono.empty();
+        }
+        if (shouldBePublic) {
+            return federation.publishVanity(normalizedUsername, displayName).then();
+        }
+        return federation.unpublishVanity(normalizedUsername)
+                .onErrorResume(e -> {
+                    log.warn("[vanity] best-effort unpublish sync failed for {}: {}",
+                            normalizedUsername, e.toString());
+                    return Mono.empty();
+                });
+    }
+
+    /** Lower-cased/trimmed username — mirrors {@link UserProfile#withVanityUsername}'s
+     *  normalization so the federation sync target always matches what was (or would
+     *  have been) persisted as {@code vanity_username}. {@code null}/blank in, {@code
+     *  null} out. */
+    private static String normalize(String username) {
+        return (username == null || username.isBlank()) ? null : username.trim().toLowerCase();
     }
 
     /**

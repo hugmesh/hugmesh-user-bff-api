@@ -2,11 +2,14 @@ package systems.snapdragon.userbff.federation;
 
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.commons.web.ApiException;
 import systems.snapdragon.userbff.federation.FederationModerationModels.FindingRequest;
 import systems.snapdragon.userbff.federation.FederationModerationModels.SubmitRequest;
 
@@ -32,6 +35,9 @@ import java.util.Map;
  *       current bundle for a slug;</li>
  *   <li>POST {@code /api/federation/moderation} — submit a moderation request
  *       (kind=instance-block; status is set to 'recommended' server-side).</li>
+ *   <li>PUT/DELETE {@code /api/federation/vanity/{username}} — self-publish /
+ *       self-unpublish the caller's vanity profile fragment (see
+ *       {@link #publishVanity(String, String)} / {@link #unpublishVanity(String)}).</li>
  * </ul>
  */
 public class FederationApiClient {
@@ -203,6 +209,75 @@ public class FederationApiClient {
                 .bodyValue(req)
                 .retrieve()
                 .bodyToMono(MAP_TYPE);
+    }
+
+    /**
+     * SELF-PUBLISH the caller's vanity profile — proxies federation-api's
+     * owner-scoped {@code PUT /api/federation/vanity/{username}}. federation-api
+     * upserts the {@code profile-<username>} fragment FROM the caller's own
+     * already-uploaded bundle (see {@link #put}); {@code remoteEntryUrl} /
+     * {@code contentHash} are derived server-side there, never sent from here.
+     *
+     * <p><b>Honest failure</b>: a non-2xx upstream response (404 = no bundle
+     * uploaded yet; 400 = reserved/confusable username; 403 = not the bundle's
+     * owner) is mapped to an {@link ApiException} carrying the SAME status, so the
+     * caller (ProfileService) sees a real failure — never a silently-downgraded
+     * success. See {@link #toApiException(WebClientResponseException, String)}.
+     *
+     * @param username    the caller's own (already-normalized) vanity username
+     * @param displayName optional display name to stamp on the fragment; {@code
+     *                    null}/blank omits the field (federation-api keeps the
+     *                    existing/derived name)
+     * @return a {@code Mono} emitting the upserted fragment's wire shape
+     */
+    public Mono<Map<String, Object>> publishVanity(String username, String displayName) {
+        Map<String, Object> body = (displayName == null || displayName.isBlank())
+                ? Map.of() : Map.of("displayName", displayName);
+        return http.put()
+                .uri(uri -> uri.path("/api/federation/vanity/{username}").build(username))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(MAP_TYPE)
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "publish vanity profile"));
+    }
+
+    /**
+     * SELF-UNPUBLISH the caller's vanity profile — proxies federation-api's
+     * owner-scoped {@code DELETE /api/federation/vanity/{username}}. Idempotent
+     * upstream (a no-op when the profile was never published); still mapped to a
+     * real {@link ApiException} on failure (see {@link #publishVanity}) so a
+     * transient federation-api outage is never reported as "unpublished".
+     *
+     * @param username the caller's own (already-normalized) vanity username
+     * @return a {@code Mono<Void>} completing once federation-api confirms
+     */
+    public Mono<Void> unpublishVanity(String username) {
+        return http.delete()
+                .uri(uri -> uri.path("/api/federation/vanity/{username}").build(username))
+                .retrieve()
+                .toBodilessEntity()
+                .then()
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "unpublish vanity profile"));
+    }
+
+    /**
+     * Maps a raw {@link WebClientResponseException} from a vanity publish/unpublish
+     * call to an {@link ApiException} carrying the SAME HTTP status federation-api
+     * returned (falling back to {@code BAD_GATEWAY} for a status Spring cannot
+     * resolve), with the upstream response body appended for diagnostics. This is
+     * the honest-propagation seam: a caller downstream (ProfileService) sees the
+     * real failure reason instead of a generic 500 or — worse — a silently eaten
+     * error that would let a "publish" report success it never achieved.
+     */
+    private static ApiException toApiException(WebClientResponseException ex, String action) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        String detail = ex.getResponseBodyAsString();
+        String message = "federation " + action + " failed (HTTP " + ex.getStatusCode().value() + ")"
+                + (detail == null || detail.isBlank() ? "" : ": " + detail);
+        return new ApiException(status != null ? status : HttpStatus.BAD_GATEWAY, message);
     }
 
     @SuppressWarnings("unchecked")

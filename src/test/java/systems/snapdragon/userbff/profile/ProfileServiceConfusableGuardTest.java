@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
+import systems.snapdragon.userbff.support.StubFederationApiClient;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
 import systems.snapdragon.commons.web.ApiException;
 
@@ -33,7 +34,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @DataR2dbcTest
 @Import({TestDatabaseConfig.class, UserProfileRepository.class,
-        ProfileServiceConfusableGuardTest.StubCasdoor.class, ProfileService.class})
+        ProfileServiceConfusableGuardTest.StubCasdoor.class, StubFederationApiClient.class,
+        ProfileService.class})
 class ProfileServiceConfusableGuardTest {
 
     @TestConfiguration(proxyBeanMethods = false)
