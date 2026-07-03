@@ -11,6 +11,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.web.ApiException;
 import systems.snapdragon.userbff.federation.FederationModerationModels.FindingRequest;
+import systems.snapdragon.userbff.federation.FederationModerationModels.RecommendInstanceBlockRequest;
 import systems.snapdragon.userbff.federation.FederationModerationModels.SubmitRequest;
 
 import java.util.Map;
@@ -33,8 +34,9 @@ import java.util.Map;
  *       body + entryFile/visibility/manifest query params);</li>
  *   <li>DELETE {@code /api/federation/bundles/{slug}} — delete the caller's own
  *       current bundle for a slug;</li>
- *   <li>POST {@code /api/federation/moderation} — submit a moderation request
- *       (kind=instance-block; status is set to 'recommended' server-side).</li>
+ *   <li>POST {@code /api/federation/moderation/recommend-instance-block} — the
+ *       recommend-instance-block chain start (self-service; ROLE_MATRIX/MASTODON
+ *       gated at federation-api; status is set to 'recommended' server-side).</li>
  *   <li>PUT/DELETE {@code /api/federation/vanity/{username}} — self-publish /
  *       self-unpublish the caller's vanity profile fragment (see
  *       {@link #publishVanity(String, String)} / {@link #unpublishVanity(String)}).</li>
@@ -116,16 +118,27 @@ public class FederationApiClient {
     }
 
     /**
-     * Start the recommend-instance-block chain: POST a moderation request to
-     * federation-api with {@code kind=instance-block}. federation-api's
-     * {@code ModerationController.submit} sets the status to {@code recommended}
-     * server-side (the chain start: USER recommends -> MOD refers -> ADMIN decides).
-     * The request body is the federation {@code SubmitRequest(kind, target, reason)}.
+     * Start the recommend-instance-block chain: POST to federation-api's narrower,
+     * self-service {@code /api/federation/moderation/recommend-instance-block}
+     * surface (kind is hardcoded server-side to {@code instance-block}; status to
+     * {@code recommended} — the chain start: USER files -> MOD refers -> ADMIN
+     * decides). The request body is the federation
+     * {@code RecommendInstanceBlockRequest(target, reason)}.
+     *
+     * <p><b>NOT</b> {@code POST /api/federation/moderation} (the mod/admin-only
+     * {@code SubmitRequest} surface) — that path's {@code hasAnyRole('MOD','ADMIN',
+     * 'SUPERADMIN')} path-level gate has no {@code RoleHierarchy} edge that admits a
+     * plain {@code ROLE_MATRIX}/{@code ROLE_MASTODON} caller, so a call to it from
+     * here always 403'd downstream (this endpoint's forwarded bearer is the
+     * caller's OWN, never a mod/admin's — see {@link
+     * systems.snapdragon.userbff.block.BlockController#recommendInstanceBlock}).
+     * See {@link RecommendInstanceBlockRequest}'s javadoc for the full root-cause
+     * writeup.
      */
     public Mono<Map<String, Object>> recommendInstanceBlock(String instance, String reason) {
-        SubmitRequest req = new SubmitRequest("instance-block", instance, reason);
+        RecommendInstanceBlockRequest req = new RecommendInstanceBlockRequest(instance, reason);
         return http.post()
-                .uri("/api/federation/moderation")
+                .uri("/api/federation/moderation/recommend-instance-block")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(req)
                 .retrieve()

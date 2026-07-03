@@ -45,7 +45,7 @@ class FederationApiClientTest {
             if (path.endsWith("/bundles/mine") || path.contains("/bundles/slug/")) {
                 body = "[{\"id\":1,\"ownerUserId\":\"alice\",\"slug\":\"my-card\","
                         + "\"contentHash\":\"abc\",\"visibility\":\"internal\"}]";
-            } else if (path.endsWith("/moderation")) {
+            } else if (path.contains("/moderation")) {
                 body = "{\"id\":7,\"kind\":\"instance-block\",\"status\":\"recommended\",\"requester\":\"alice\"}";
             } else if (path.contains("/vanity/")) { // PUT publish
                 body = "{\"slug\":\"profile-alice\",\"ownerUserId\":\"alice\",\"visibility\":\"public\","
@@ -108,11 +108,15 @@ class FederationApiClientTest {
     }
 
     @Test
-    void recommendInstanceBlock_postsModeration_withKindInstanceBlock() {
+    void recommendInstanceBlock_postsToNarrowerRecommendPath_notTheModOnlySubmitSurface() {
+        // Root-cause regression guard: this must hit the narrower, self-service
+        // /recommend-instance-block sub-path — NOT the bare mod/admin-only
+        // /api/federation/moderation submit surface — or a plain ROLE_MATRIX/
+        // ROLE_MASTODON caller's forwarded bearer 403s downstream (the original bug).
         Recorder rec = new Recorder();
         var resp = clientFor(rec).recommendInstanceBlock("evil.example", "spam").block();
         assertThat(rec.last().method()).isEqualTo(HttpMethod.POST);
-        assertThat(rec.last().url().getPath()).endsWith("/api/federation/moderation");
+        assertThat(rec.last().url().getPath()).endsWith("/api/federation/moderation/recommend-instance-block");
         assertThat(resp).containsEntry("status", "recommended").containsEntry("kind", "instance-block");
     }
 

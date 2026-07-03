@@ -12,12 +12,45 @@ public final class FederationModerationModels {
     /**
      * The body federation-api's {@code POST /api/federation/moderation} expects:
      * {@code (kind, target, reason)}. The {@code status} is NOT a request field —
-     * federation-api sets it to {@code recommended} server-side on submit. For the
-     * user recommend-instance-block flow, {@code kind="instance-block"} and
-     * {@code target} is the instance (homeserver/domain) being recommended for a
-     * block.
+     * federation-api sets it to {@code recommended} server-side on submit.
+     *
+     * <p><b>NOT used by the recommend-instance-block flow.</b> That surface is
+     * {@code ROLE_MOD}/{@code ROLE_ADMIN}/{@code ROLE_SUPERADMIN}-gated at
+     * federation-api (a mod/admin's own submit) — a plain
+     * {@code ROLE_MATRIX}/{@code ROLE_MASTODON} user forwarded here would always
+     * 403 (this WAS the bug; see {@link #RecommendInstanceBlockRequest} below for
+     * the fix). Currently used only by {@link FederationApiClient
+     * #requestSelfSilenceReactivation}.
      */
     public record SubmitRequest(String kind, String target, String reason) {}
+
+    /**
+     * The body federation-api's narrower, self-service {@code POST
+     * /api/federation/moderation/recommend-instance-block} expects:
+     * {@code (target, reason)} — deliberately NO {@code kind} field, matched
+     * field-for-field to {@code ModerationController.RecommendInstanceBlockRequest}
+     * in snapdragon-federation-api. {@code kind} is hardcoded server-side to
+     * {@code instance-block}; {@code status} likewise server-side to
+     * {@code recommended}.
+     *
+     * <p><b>Root-cause fix</b>: {@code BlockController.recommendInstanceBlock}
+     * requires only {@code ROLE_MATRIX}/{@code ROLE_MASTODON} and forwards the
+     * caller's own bearer unmodified to federation-api. It used to POST to the
+     * mod-only {@code /api/federation/moderation} ({@code SubmitRequest}), whose
+     * path-level gate ({@code hasAnyRole('MOD','ADMIN','SUPERADMIN')}) NO
+     * {@code RoleHierarchy} edge lets a plain platform participant pass — so the
+     * ONE caller who could ever legitimately reach this BFF endpoint always got
+     * 403'd downstream, end-to-end unreachable. federation-api added this narrower
+     * surface (exactly {@code ROLE_MATRIX}/{@code ROLE_MASTODON}, nothing wider —
+     * NOT list/refer/decide) rather than widening the mod-only gate, because the
+     * mod-only surface is deliberately staff-only (its javadoc: "the mod's Casdoor
+     * subject", "ROLE_MOD, ROLE_ADMIN, or ROLE_SUPERADMIN may submit") and every
+     * OTHER real caller of it ({@code snapdragon-mod-bff-api}) is itself
+     * {@code hasAnyRole('MOD','ADMIN')}-gated.
+     *
+     * @see FederationApiClient#recommendInstanceBlock(String, String)
+     */
+    public record RecommendInstanceBlockRequest(String target, String reason) {}
 
     /**
      * The body federation-api's {@code POST /api/federation/findings} expects, matched
