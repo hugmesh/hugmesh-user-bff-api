@@ -6,6 +6,11 @@ spring:
       resourceserver:
         jwt:
           issuer-uri: "${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}"
+          # Explicit JWKS so the resource server does NOT do OIDC discovery against issuer-uri
+          # (unreachable in-container when issuer-uri is the browser-facing localhost:8000, which
+          # 500s every authenticated call). Mirrors snapdragon-actions + the gateway; compose sets
+          # CASDOOR_JWKS_URI=http://casdoor:8000/.well-known/jwks. iss is still validated via issuer-uri.
+          jwk-set-uri: "${CASDOOR_JWKS_URI:${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}/.well-known/jwks}"
 
   # Runtime data access is REACTIVE (R2DBC) over the config datastore: the owner-
   # keyed user_profile / user_preference / user_block tables.
