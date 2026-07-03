@@ -7,6 +7,7 @@ import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.web.ApiException;
 
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * The RECEIVING half of the part/sticker ACTIVATION loop: flip a moderated row's
@@ -110,8 +111,8 @@ public class CharacterModerationService {
      * 0-row no-op return EMPTY (the receiver maps that to a 404). {@code requireTerminal}
      * runs INSIDE the update supplier so the 400 surfaces reactively before any DB write.
      */
-    private <T> Mono<T> flip(java.util.function.Supplier<Mono<Integer>> update,
-                             java.util.function.Supplier<Mono<T>> reread,
+    private <T> Mono<T> flip(Supplier<Mono<Integer>> update,
+                             Supplier<Mono<T>> reread,
                              String kind, String id, String status, Long findingId, String reviewer) {
         return Mono.defer(update)
                 .flatMap(rows -> {

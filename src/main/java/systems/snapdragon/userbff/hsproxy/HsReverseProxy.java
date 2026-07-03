@@ -6,6 +6,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
@@ -199,9 +200,7 @@ public class HsReverseProxy {
     }
 
     /** Relay one upstream response: copy status + headers + body. Returns false on 401 for re-mint. */
-    private Mono<Boolean> relayResponse(
-            org.springframework.web.reactive.function.client.ClientResponse resp,
-            ServerWebExchange exchange) {
+    private Mono<Boolean> relayResponse(ClientResponse resp, ServerWebExchange exchange) {
         if (resp.statusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
             // Let the caller re-mint + retry; release this body first.
             return resp.releaseBody().thenReturn(Boolean.FALSE);

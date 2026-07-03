@@ -36,7 +36,7 @@ flowchart LR
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
     subgraph BFF["snapdragon-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
-        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE)"]
+        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE) ·<br/>character/parts · character/stickers"]
         Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
@@ -355,7 +355,46 @@ never *forced* to block. Ships **dark** by default (`app.media.poisoning.enabled
 =false` ⇒ the controller is mounted but every upload forwards through `status=none`)
 until the survival gate is verified on a real GPU cluster.
 
-### Homeserver proxy (D6) — `MatrixProxyController` / `MastodonProxyController` (`/bff/user/{matrix,mastodon}/**`) 🚧 ships dark
+### Character studio — VN-character drawn parts & expression stickers (`character` package)
+Two owner-scoped, moderation-queued surfaces backing the VN/character-studio feature, plus
+the internal receiver that resolves a queued item once a moderator acts. Own R2DBC tables
+`vn_character_part` (016) and `vn_sticker_pack` (017); 018 adds the `finding_id` back-link
+column to both.
+
+**Drawn parts — `CharacterPartController` (`/bff/user/character/parts`)** — a user-drawn SVG
+part (e.g. a hairstyle/outfit layer). `ROLE_USER` floor.
+- `POST /bff/user/character/parts` — the dirty client SVG is SANITIZED
+  (`SvgSanitizerService`, fails closed to a 422 on malformed/non-svg input) before storage;
+  the row is stored `status=PENDING` and a held `@system` federation moderation finding is
+  filed (`surface=character-part`, best-effort — a federation outage never fails the save).
+- `GET /bff/user/character/parts` — list MY parts (newest first).
+- `GET /bff/user/character/parts/{id}/svg` — serve MY stored sanitized SVG as a hardened
+  image (`image/svg+xml`, a locked-down `default-src 'none'; sandbox` CSP, `nosniff`,
+  `Content-Disposition: inline`); a foreign id is a 404, never a 403 (no cross-owner
+  existence leak).
+
+**Expression stickers — `StickerController` (`/bff/user/character/stickers`)** — a rendered
+PNG snapshot of the character rig at a canonical expression (Phase B1; mirrors the avatar
+upload path). `ROLE_USER` floor.
+- `POST /bff/user/character/stickers` — multipart `file` (PNG) + `expression`. The client
+  `Content-Type` is never trusted: bytes are magic-byte-sniffed (`ImageSniffer`, which
+  deliberately rejects SVG — the stored-XSS gap), capped at 1 MB, edge-AI moderated (a
+  blocked sticker is a 422), uploaded to the homeserver media repo, then stored
+  `status=PENDING` + a moderation finding filed. There is deliberately **no BFF serve
+  endpoint** — a sticker's pixels live on the homeserver (`mxc://`) and are fetched
+  direct-to-homeserver by the Matrix client, never proxied through this BFF.
+- `GET /bff/user/character/stickers` — list MY stickers (newest first).
+
+**Internal moderation receiver — `InternalCharacterModerationController`
+(`/bff/user/internal/character/{parts,stickers}/{id}/moderation`)** — **SERVICE-PRINCIPAL
+ONLY** (same `/bff/user/internal/**` gate as the notifications deliver endpoint: `ROLE_SERVICE`
+exclusively, not even SUPERADMIN). The ONLY production flipper of a row's `status` from
+`PENDING` to `ACTIVE`/`REJECTED`, called by the admin-bff moderation reconciler (a later PR)
+when a moderator resolves the filed finding. The flip is PENDING-guarded and idempotent — a
+second resolve, or a resolve of an unknown/already-resolved id, flips zero rows and is a 404;
+an invalid `status` (not `ACTIVE`/`REJECTED`) is a 400.
+
+### Homeserver proxy (D6) — `MatrixProxyController` / `MastodonProxyController` (`/bff/user/{matrix,mastodon}/**`) ✅ live by default
 Owner-scoped reverse-proxy passthrough to the Matrix (tuwunel) / Mastodon (Akkoma)
 homeserver client APIs **through the per-pod mTLS proxy sidecars**, so the user-ui
 never holds homeserver credentials: the BFF injects a server-held homeserver-native
@@ -371,10 +410,14 @@ is no baked default; a missing value fails context start (fail-closed).
 - `GET|PUT|POST|DELETE|PATCH /bff/user/mastodon/**` → Akkoma client API via the
   `akkoma-proxy` sidecar.
 
-**SHIPS DARK:** every method 503s when `app.hs-token.enabled=false` (default) or the
-custody cipher key is blank — the JSON response decode runs off the WebFlux codec
-path (read-as-String + Jackson-2 `readTree`) because Boot 4's reactive codec is
-Jackson 3 and cannot decode the Jackson-2 `JsonNode` type directly.
+**LIVE BY DEFAULT** (`app.hs-token.enabled=true`, `APP_HS_TOKEN_ENABLED`): every method
+still 503s until the custody cipher key (`app.hs-token.key`) AND the homeserver
+service-account password (`app.hs-token.svc-password`) are provisioned (fail-closed, no
+baked default) and the `tuwunel-proxy`/`akkoma-proxy` mTLS sidecars exist — so an
+unconfigured deploy degrades to a clean 503 rather than serving a broken proxy. Set
+`APP_HS_TOKEN_ENABLED=false` to fully dark the surface instead. The JSON response decode
+runs off the WebFlux codec path (read-as-String + Jackson-2 `readTree`) because Boot 4's
+reactive codec is Jackson 3 and cannot decode the Jackson-2 `JsonNode` type directly.
 
 ### Account status — `AccountStatusController` (`/bff/user/status`) ✅ shipped
 A `ROLE_USER`-floor, owner-scoped, **read-only polling** endpoint. There is no write
@@ -433,10 +476,12 @@ external channels that build on top.
 
 > **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is still dark in normal operation — nothing writes `user_notifications` yet outside tests, so the SSE stream emits only when the `snapdragon-actions` reconciler (separate repo, later PR) starts calling the internal deliver endpoint. The SSE wiring itself is ✅ shipped.
 
-### Real-time SSE stream 🚧 in-flight
+### Real-time SSE stream ✅ shipped
 `GET /bff/user/notifications/events` — a **server-sent event stream** (`text/event-stream`)
 for real-time in-app notification push. `ROLE_USER` floor, owner-enforced (owner = JWT
-subject). **PR #72 open.**
+subject). Merged in #72; ships DARK in the sense that nothing writes `user_notifications`
+in normal operation yet (see the in-app-floor MVP note above), but the SSE wiring itself is
+live on `main`.
 
 - **Wire protocol:** events carry `{id, category, title, body}` as JSON. The connection
   has a **4-minute server-side timeout**; the client is expected to reconnect
@@ -458,7 +503,7 @@ subject). **PR #72 open.**
 
 | Concern | Destination |
 | --- | --- |
-| Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`) |
+| Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs, VN-character parts + expression stickers | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`, `vn_character_part`, `vn_sticker_pack`) |
 | Account / session data for the relocated login/session surfaces | **`snapdragon-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
@@ -665,7 +710,7 @@ admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
 Reactive WebFlux everywhere (Mono/Flux, reactive WebClient; no `.block()` /
 `Thread.sleep` on the event loop). R2DBC for all runtime data; JDBC only for the
-Liquibase migrations (`db/changelog`, **001–015**). 010 = domain-scoping (the
+Liquibase migrations (`db/changelog`, **001–018**). 010 = domain-scoping (the
 `domain` column on every owner-keyed table); 011 = `user_preferences_store` (the
 durable per-user/per-brand preferences table backing `/bff/user/preferences`,
 domain-first composite PK `(user_id, pref_key, domain)`); 012 = the notifications
@@ -675,7 +720,10 @@ domain-scoped, `account-restriction` forced-on with a DB CHECK backstop); 013 =
 `user_profile.avatar_url` (the profile picture as a Matrix `mxc://` URL); 015 =
 DB-generated UUID primary keys (`(gen_random_uuid())::text` column DEFAULT,
 byte-identical to the prior `UUID.randomUUID().toString()`; adopts admin-bff #133 /
-mod-bff #36). Spring
+mod-bff #36); 016 = `vn_character_part` (user-drawn character-studio SVG parts,
+`status` PENDING/ACTIVE/REJECTED-checked); 017 = `vn_sticker_pack` (VN-character
+expression stickers, same status lifecycle + an `expression` CHECK); 018 = adds the
+`finding_id` federation-moderation back-link column to both 016/017 tables. Spring
 Native: `native` profile + native-maven-plugin, surefire `argLine
 -Dnet.bytebuddy.experimental=true`, `NativeHintsConfig` with reflection hints for the
 JSON-bound DTOs + swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps
@@ -788,6 +836,12 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   + per-query domain predicate are live (see *Multi-tenancy / domain-scoping* above).
   Only the per-brand provisioning (ApplicationSet) and multi-issuer *live wiring* are
   roadmap (in `snapdragon-generator`), not this BFF's code.
+- **Character-studio moderation resolve is a receiver waiting for its caller.** The
+  save/list/serve (parts) and save/list (stickers) endpoints are fully live; the
+  `InternalCharacterModerationController` SERVICE-only resolve receiver is wired and
+  idempotent, but the admin-bff moderation reconciler that is meant to call it when a
+  human moderator resolves the filed finding has not landed yet (a later PR) — until
+  then a saved part/sticker stays `PENDING` indefinitely.
 - **Notifications floor ships DARK.** The read/mark-read inbox + per-category prefs +
   the SERVICE-only deliver endpoint are wired and tested, but nothing writes
   `user_notifications` in normal operation yet — the `snapdragon-actions` reconciler
@@ -823,7 +877,9 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   avatar upload (dark)), home-guide, durable preferences, cards proxy, self-block +
   instance-block recommendation, self-silence (atomic activate), connected-clients
   audit, active login-session management, AI-cloak media proxy (dark), account-status
-  polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark).
+  polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark), and the VN character-studio drawn-parts + expression-sticker surfaces (sanitized-SVG / magic-byte-sniffed PNG, both moderation-queued with a SERVICE-only internal resolve receiver).
+- ✅ **Homeserver proxy (D6) live by default** (`app.hs-token.enabled=true`); still
+  fail-closed (503) until the custody key + service-account password are provisioned.
 - ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons:2.7.0`
   (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on

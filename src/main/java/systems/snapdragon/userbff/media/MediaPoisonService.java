@@ -12,6 +12,8 @@ import systems.snapdragon.userbff.media.PoisonModels.PoisonResult;
 import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.commons.web.ApiException;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -112,7 +114,7 @@ public class MediaPoisonService {
         // Return an unmodifiable view so callers cannot mutate the internal map.
         @Override
         public Map<String, Object> homeserver() {
-            return homeserver == null ? Map.of() : java.util.Collections.unmodifiableMap(homeserver);
+            return homeserver == null ? Map.of() : Collections.unmodifiableMap(homeserver);
         }
     }
 
@@ -408,19 +410,6 @@ public class MediaPoisonService {
     }
 
     // -------------------------------------------------------------------------
-    // Status query
-    // -------------------------------------------------------------------------
-
-    /** The caller's capability view (worker backend + offered modes + ETA) for the
-     *  media-poison badge. See {@link PoisonWorkerClient#capability()}.
-     *
-     * @return a {@code Mono} emitting the current worker {@link PoisonModels.Health};
-     *         never errors — a missing worker resolves to {@code backend=none}
-     */
-
-    // (capability() body below)
-
-    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
@@ -462,7 +451,7 @@ public class MediaPoisonService {
      * @return a non-null list of re-fetchable served URL strings; empty when none
      */
     static List<String> servedUrls(String platform, Map<String, Object> hs) {
-        var out = new java.util.ArrayList<String>();
+        var out = new ArrayList<String>();
         if (hs == null) return out;
         if ("matrix".equals(platform)) {
             Object uri = hs.get("content_uri");

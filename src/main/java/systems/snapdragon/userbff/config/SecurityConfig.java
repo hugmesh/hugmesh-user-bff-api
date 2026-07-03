@@ -17,6 +17,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.ReactiveJwtAuthenticationConverter;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.header.ReferrerPolicyServerHttpHeadersWriter;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import systems.snapdragon.commons.security.CasdoorAuthorities;
@@ -144,12 +145,6 @@ public class SecurityConfig {
     };
 
     /**
-     * Shared route rules common to BOTH the dev/test and prod filter chains. The
-     * ONLY difference between the two profiles is how {@link #SPEC_PATHS} is gated,
-     * so every other route lives here to keep the two chains in lockstep and make it
-     * impossible to loosen a non-spec route by editing only one chain.
-     */
-    /**
      * Reactive HTTP RESPONSE-HEADER hardening — the API-DEFENSIVE MINIMUM for a
      * pure-JSON BFF resource server, applied to EVERY {@link SecurityWebFilterChain}.
      *
@@ -179,11 +174,15 @@ public class SecurityConfig {
                         "default-src 'none'; frame-ancestors 'none'"))
                 // Keep Spring's nosniff + X-Frame-Options:DENY + Cache-Control defaults
                 // (NOT disabled); make Referrer-Policy:no-referrer explicit.
-                .referrerPolicy(rp -> rp.policy(
-                        org.springframework.security.web.server.header
-                                .ReferrerPolicyServerHttpHeadersWriter.ReferrerPolicy.NO_REFERRER));
+                .referrerPolicy(rp -> rp.policy(ReferrerPolicyServerHttpHeadersWriter.ReferrerPolicy.NO_REFERRER));
     }
 
+    /**
+     * Shared route rules common to BOTH the dev/test and prod filter chains. The
+     * ONLY difference between the two profiles is how {@link #SPEC_PATHS} is gated,
+     * so every other route lives here to keep the two chains in lockstep and make it
+     * impossible to loosen a non-spec route by editing only one chain.
+     */
     private static void commonRoutes(ServerHttpSecurity.AuthorizeExchangeSpec ex) {
         // Probes are public so k8s/Docker healthchecks need no token.
         ex.pathMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll();

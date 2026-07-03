@@ -20,6 +20,9 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.xml.sax.ErrorHandler;
+import org.xml.sax.SAXException;
+import org.xml.sax.SAXParseException;
 
 /**
  * AUTHORITATIVE server-side SVG sanitizer for user-authored character parts.
@@ -90,10 +93,10 @@ public class SvgSanitizerService {
             dbf.setNamespaceAware(true);
             DocumentBuilder db = dbf.newDocumentBuilder();
             // rethrow parse problems (so we fail closed) WITHOUT the default stderr dump
-            db.setErrorHandler(new org.xml.sax.ErrorHandler() {
-                @Override public void warning(org.xml.sax.SAXParseException e) { /* ignore */ }
-                @Override public void error(org.xml.sax.SAXParseException e) throws org.xml.sax.SAXException { throw e; }
-                @Override public void fatalError(org.xml.sax.SAXParseException e) throws org.xml.sax.SAXException { throw e; }
+            db.setErrorHandler(new ErrorHandler() {
+                @Override public void warning(SAXParseException e) { /* ignore */ }
+                @Override public void error(SAXParseException e) throws SAXException { throw e; }
+                @Override public void fatalError(SAXParseException e) throws SAXException { throw e; }
             });
             return db.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
         } catch (InvalidSvgException e) {
