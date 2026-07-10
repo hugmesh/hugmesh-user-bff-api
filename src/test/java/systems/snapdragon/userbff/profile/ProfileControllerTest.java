@@ -12,8 +12,12 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient.AccountView;
 import systems.snapdragon.userbff.config.SecurityConfig;
 import systems.snapdragon.userbff.security.PrincipalDomain;
+
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -62,6 +66,11 @@ class ProfileControllerTest {
     @MockitoBean ProfileService profiles;
     @MockitoBean AvatarService avatars;
     @MockitoBean PrincipalDomain principalDomain;
+    // Present so BffSessionAuthenticationWebFilter — auto-discovered into this
+    // @WebFluxTest slice like any other @Component WebFilter — has something to call
+    // for the bff_-session tests below; absent/disabled for every mockJwt() test above
+    // (enabled() defaults to Mockito's false), so those are completely unaffected.
+    @MockitoBean AdminBffInternalClient adminBffClient;
 
     private static UserProfile stubProfile(String userId) {
         return new UserProfile(userId, null, null, null, "Display", "internal", false, null, null);
@@ -144,5 +153,56 @@ class ProfileControllerTest {
         // Service was called with "alice" (JWT subject), never "bob" (body field).
         verify(profiles).save(eq("alice"), eq("alice"), any(), eq("default"));
         verify(profiles, never()).save(eq("bob"), anyString(), any(), any());
+    }
+
+    // ── BUG 2 self-review: a REAL Jwt-typed controller, driven by a bff_ session,
+    //    through the REAL BffSessionAuthenticationWebFilter (auto-discovered into this
+    //    slice, not hand-constructed) + the REAL SecurityConfig chain. No mockJwt()
+    //    mutator anywhere below — the Jwt principal ProfileController.me() receives is
+    //    entirely the synthetic one BffSessionAuthenticationWebFilter built. Pre-fix,
+    //    @AuthenticationPrincipal Jwt jwt resolved to null for a String-principal
+    //    Authentication, and jwt.getSubject() (the FIRST expression evaluated inside
+    //    profiles.get(jwt.getSubject(), ...)) NPE'd before principalDomain.forScope was
+    //    ever reached — live-reproduced by the reviewer as a 500. ──────────────────────
+
+    @Test
+    void bffSessionHeader_realJwtTypedController_noNpe_returns200() {
+        AccountView view = new AccountView("acct-bff-1", "native", "bffuser", true, List.of("user"));
+        when(adminBffClient.enabled()).thenReturn(true);
+        when(adminBffClient.getAccountBySession("bff_profiletoken")).thenReturn(Mono.just(view));
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(profiles.get(eq("acct-bff-1"), eq("default")))
+                .thenReturn(Mono.just(stubProfile("acct-bff-1")));
+
+        client.get().uri("/bff/user/profile")
+                .header("Authorization", "Bearer bff_profiletoken")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.userId").isEqualTo("acct-bff-1");
+
+        verify(profiles).get(eq("acct-bff-1"), eq("default"));
+    }
+
+    @Test
+    void bffSessionCookie_realJwtTypedController_noNpe_returns200() {
+        // Same proof, cookie carrier — SsoAuthController's own documented native-login
+        // convention, and the ONLY carrier BffSessionAuthenticationSliceTest's probe-
+        // controller-based coverage exercised before this PR.
+        AccountView view = new AccountView("acct-bff-2", "native", "bffuser2", true, List.of("user"));
+        when(adminBffClient.enabled()).thenReturn(true);
+        when(adminBffClient.getAccountBySession("bff_profilecookie")).thenReturn(Mono.just(view));
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(profiles.get(eq("acct-bff-2"), eq("default")))
+                .thenReturn(Mono.just(stubProfile("acct-bff-2")));
+
+        client.get().uri("/bff/user/profile")
+                .cookie("bff_session", "bff_profilecookie")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.userId").isEqualTo("acct-bff-2");
+
+        verify(profiles).get(eq("acct-bff-2"), eq("default"));
     }
 }

@@ -91,7 +91,7 @@ abstract class SecuritySliceSupport {
         SecurityWebFilterChain chain = config.filterChain(ServerHttpSecurity.http());
         WebFilterChainProxy securityFilter = new WebFilterChainProxy(chain);
         BffSessionAuthenticationWebFilter bffFilter =
-                new BffSessionAuthenticationWebFilter(adminBffClient, 3000L);
+                new BffSessionAuthenticationWebFilter(adminBffClient, 3000L, registry);
 
         return WebTestClient.bindToController(controllers)
                 .webFilter(bffFilter, securityFilter)

@@ -10,6 +10,8 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
@@ -17,6 +19,7 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient.AccountView;
 
@@ -57,8 +60,16 @@ class BffSessionAuthenticationWebFilterTest {
         return client;
     }
 
+    /** Empty registry (no issuer-uri configured) — {@code DomainRegistry.domainOf}
+     *  short-circuits to {@code DEFAULT_DOMAIN} regardless of the synthetic Jwt's
+     *  {@code iss} claim, so these unit tests stay agnostic to the single- vs
+     *  multi-issuer distinction {@link BffSessionSyntheticJwtDomainTest} covers directly. */
+    private static DomainRegistry emptyRegistry() {
+        return new DomainRegistry("", "");
+    }
+
     private static BffSessionAuthenticationWebFilter filter(AdminBffInternalClient client) {
-        return new BffSessionAuthenticationWebFilter(providerOf(client), TEST_TIMEOUT_MS);
+        return new BffSessionAuthenticationWebFilter(providerOf(client), TEST_TIMEOUT_MS, emptyRegistry());
     }
 
     /**
@@ -110,6 +121,19 @@ class BffSessionAuthenticationWebFilterTest {
 
         var authorities = chain.auth.get().getAuthorities().stream().map(a -> a.getAuthority()).toList();
         assertThat(authorities).containsExactlyInAnyOrder("ROLE_USER", "ROLE_ADMIN");
+
+        // BUG 2 proof: the principal is a real, non-null Jwt (not a plain String) so
+        // every @AuthenticationPrincipal Jwt jwt controller resolves correctly instead of
+        // NPE'ing (Spring's AuthenticationPrincipalArgumentResolver silently resolves a
+        // type-mismatched principal to null rather than throwing).
+        assertThat(chain.auth.get()).isInstanceOf(JwtAuthenticationToken.class);
+        Jwt jwt = (Jwt) chain.auth.get().getPrincipal();
+        assertThat(jwt).isNotNull();
+        assertThat(jwt.getSubject()).isEqualTo("acct-1");
+        assertThat(jwt.getClaimAsStringList("roles")).containsExactlyInAnyOrder("user", "admin");
+        // provider "native" (not "google") -> best-effort preferred_username, not email.
+        assertThat(jwt.getClaimAsString("preferred_username")).isEqualTo("user1");
+        assertThat(jwt.getClaimAsString("email")).isNull();
     }
 
     // ── happy path: bff_session cookie ────────────────────────────────────────
@@ -132,6 +156,10 @@ class BffSessionAuthenticationWebFilterTest {
         assertThat(chain.forwarded.get()).isEqualTo(1);
         assertThat(chain.auth.get()).isNotNull();
         assertThat(chain.auth.get().getName()).isEqualTo("acct-2");
+        // BUG 2 proof, cookie-carrier leg (see the header-carrier leg's fuller assertion
+        // above): the principal is a real, non-null Jwt via the cookie path too.
+        assertThat(chain.auth.get().getPrincipal()).isInstanceOf(Jwt.class);
+        assertThat(((Jwt) chain.auth.get().getPrincipal()).getSubject()).isEqualTo("acct-2");
     }
 
     // ── no bff_ token: Casdoor JWT bearer → pass-through, no admin-bff call ───
@@ -176,7 +204,8 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void noClientAvailable_passesThrough_unauthenticated() {
-        BffSessionAuthenticationWebFilter f = new BffSessionAuthenticationWebFilter(providerOf(null), TEST_TIMEOUT_MS);
+        BffSessionAuthenticationWebFilter f =
+                new BffSessionAuthenticationWebFilter(providerOf(null), TEST_TIMEOUT_MS, emptyRegistry());
 
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer bff_abc123")
@@ -348,6 +377,13 @@ class BffSessionAuthenticationWebFilterTest {
         assertThat(chain.forwarded.get()).isEqualTo(1);
         var authorities = chain.auth.get().getAuthorities().stream().map(a -> a.getAuthority()).toList();
         assertThat(authorities).containsExactly("ROLE_USER");
+        // The synthetic Jwt's "roles" claim must mirror the SAME registrationComplete
+        // gating as the authorities, so Roles.fromJwt(jwt) / Roles.isAdmin(jwt) (the
+        // raw-Jwt-reading overloads) never disagree with getAuthorities() on this same
+        // Authentication — "admin" must NOT leak into the claim just because it was in
+        // the account's roles list.
+        Jwt jwt = (Jwt) chain.auth.get().getPrincipal();
+        assertThat(jwt.getClaimAsStringList("roles")).isEmpty();
     }
 
     // ── ROLE_SERVICE leakage guard (belt-and-suspenders on top of the buildAuthorities

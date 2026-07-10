@@ -12,6 +12,7 @@ import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
+import systems.snapdragon.userbff.config.BffSessionAuthenticationWebFilter;
 
 /**
  * Wires the reactive {@link WebClient} the {@link FederationApiClient} uses to call
@@ -60,6 +61,22 @@ public class FederationWebClientConfig {
      * exact filter so the caller's bearer is forwarded only as far as the BFF on the
      * real homeserver upload too — one bearer-forward implementation, no service
      * credential anywhere.
+     *
+     * <p><b>Synthetic native-login principal is never forwarded.</b>
+     * {@code BffSessionAuthenticationWebFilter} wraps a {@code bff_}-session caller's
+     * principal in a {@link JwtAuthenticationToken} too (so this service's own
+     * {@code @AuthenticationPrincipal Jwt jwt} controllers resolve correctly) — which
+     * means the {@code instanceof JwtAuthenticationToken} check above now also matches
+     * native-login callers, a side effect that this filter did NOT match before that
+     * change (a {@code bff_}-session {@link Authentication} used to be a plain {@code
+     * UsernamePasswordAuthenticationToken}). That synthetic {@link Jwt} is never signed,
+     * never verifiable by federation-api or the homeserver proxies, and its token value
+     * ({@link BffSessionAuthenticationWebFilter#SYNTHETIC_TOKEN_MARKER} + the caller's
+     * account id) would leak the caller's real account id in cleartext into an outbound
+     * {@code Authorization} header these downstream services previously never received
+     * anything on this path. Filtering it out here restores the exact pre-existing
+     * behavior — no {@code Authorization} header sent — for a native-login caller, while
+     * a real Casdoor JWT's token value is forwarded completely unaffected.
      */
     public static ExchangeFilterFunction bearerTokenForwardingFilter() {
         return (request, next) -> ReactiveSecurityContextHolder.getContext()
@@ -67,6 +84,7 @@ public class FederationWebClientConfig {
                 .filter(auth -> auth instanceof JwtAuthenticationToken)
                 .map(auth -> ((JwtAuthenticationToken) auth).getToken())
                 .map(Jwt::getTokenValue)
+                .filter(token -> !token.startsWith(BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER))
                 .map(token -> ClientRequest.from(request)
                         .headers(h -> h.setBearerAuth(token))
                         .build())

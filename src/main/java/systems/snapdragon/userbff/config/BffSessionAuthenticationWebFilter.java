@@ -9,11 +9,12 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -22,6 +23,7 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient.AccountView;
 
@@ -30,6 +32,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * SERVICE-LOCAL BFF SESSION AUTHENTICATION (HTTP-introspection variant) — bridges an
@@ -192,12 +195,24 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *  overload) so Spring's implicit-constructor autowiring applies unambiguously. */
     private final Duration introspectionTimeout;
 
+    /** Issuer-&gt;domain registry — consulted ONLY to populate the synthetic {@link Jwt}
+     *  principal's {@code iss} claim (see {@link #syntheticJwt}); never used to validate
+     *  anything (this filter never decodes a real token). Always present: {@code
+     *  DomainRegistry} is an unconditional {@code @Component} (via {@code
+     *  CommonsSecurityConfig}), and every {@code @WebFluxTest} slice in this repo already
+     *  {@code @Import}s {@link SecurityConfig} (which pulls it in) — confirmed by grep
+     *  across the existing slice-test suite before adding this as a required (not {@code
+     *  ObjectProvider}) dependency, matching {@link SecurityConfig}'s own convention. */
+    private final DomainRegistry domainRegistry;
+
     public BffSessionAuthenticationWebFilter(
             ObjectProvider<AdminBffInternalClient> adminBffClient,
             @Value("${app.bff-session-auth.introspection-timeout-ms:" + DEFAULT_INTROSPECTION_TIMEOUT_MS + "}")
-            long introspectionTimeoutMs) {
+            long introspectionTimeoutMs,
+            DomainRegistry domainRegistry) {
         this.adminBffClient = adminBffClient;
         this.introspectionTimeout = Duration.ofMillis(introspectionTimeoutMs);
+        this.domainRegistry = domainRegistry;
     }
 
     @Override
@@ -308,8 +323,159 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
 
     // ── authority mapping ─────────────────────────────────────────────────────
 
-    private static Authentication authenticationFor(AccountView view) {
-        return new UsernamePasswordAuthenticationToken(view.id(), null, buildAuthorities(view));
+    /**
+     * Non-secret, non-decodable token-value MARKER for {@link #syntheticJwt} — never the
+     * real {@code bff_} session token (a live bearer credential that must never be
+     * echoed into a {@link Jwt#getTokenValue()} accessor some framework/log line could
+     * surface) and deliberately NOT shaped like a real JWT (no {@code .} delimiters), so
+     * it can never be mistaken for, or misused as, an independently-verifiable
+     * credential if it ever appears in a log line.
+     *
+     * <p><b>Public</b> (not {@code private}) so outbound token-forwarding filters —
+     * {@code FederationWebClientConfig.bearerTokenForwardingFilter()} (reused by {@code
+     * MediaWebClientConfig}) — can recognize and skip re-forwarding this marker as a
+     * purported bearer credential to federation-api / the homeserver proxies. Before this
+     * filter existed, a {@code bff_}-session {@link Authentication} was a plain {@code
+     * UsernamePasswordAuthenticationToken}, which that forwarding filter's {@code
+     * instanceof JwtAuthenticationToken} check never matched, so native-login callers sent
+     * no {@code Authorization} header on those calls. Wrapping the principal in a {@link
+     * JwtAuthenticationToken} here (see {@link #authenticationFor}) made that filter start
+     * matching for the first time — an unreviewed side effect that would otherwise leak
+     * this marker (which embeds the caller's real account id in cleartext) downstream as a
+     * bearer credential. The forwarding filter's own marker check restores the pre-fix "no
+     * header sent" behavior for this specific, non-forwardable case while leaving a real
+     * Casdoor JWT's forwarding completely unaffected.
+     */
+    public static final String SYNTHETIC_TOKEN_MARKER = "bff-session-principal:";
+
+    /**
+     * Builds the {@link Authentication} for a resolved {@code bff_} session — a {@link
+     * JwtAuthenticationToken} wrapping a SYNTHETIC (never cryptographically signed,
+     * never decoded from client input) {@link Jwt}, so every one of this service's 16
+     * {@code @AuthenticationPrincipal Jwt jwt} controllers resolves a REAL, non-null
+     * {@link Jwt} — not the plain-{@link String}-principal shape this method returned
+     * before this fix, which silently resolved to a {@code null} {@code jwt} parameter
+     * (Spring's {@code AuthenticationPrincipalArgumentResolver} defaults {@code
+     * errorOnInvalidType()} to {@code false}) and NPE'd every one of those handlers
+     * (live-reproduced: 500, "Cannot invoke Jwt.getSubject() because jwt is null").
+     *
+     * <p>This is placed DIRECTLY into the {@code SecurityContext} server-side and is
+     * NEVER decoded/re-verified from client input (unlike a real resource-server JWT),
+     * so it needs no signature — see {@link #syntheticJwt}.
+     */
+    private Authentication authenticationFor(AccountView view) {
+        return new JwtAuthenticationToken(syntheticJwt(view), buildAuthorities(view));
+    }
+
+    /**
+     * Builds the Jwt-SHAPED principal for {@link #authenticationFor}. Populates every
+     * claim this service's controllers are known to read off a real Casdoor {@link Jwt}:
+     *
+     * <ul>
+     *   <li>{@code sub} = {@link AccountView#id()} — the SAME value the pre-fix plain
+     *       {@link String} principal carried, so {@code jwt.getSubject()} (the owner
+     *       key every controller scopes reads/writes by) is unchanged.</li>
+     *   <li>{@code roles} = {@link AccountView#roles()} (gated on {@code
+     *       registrationComplete}, EXACTLY mirroring {@link #buildAuthorities}) so
+     *       {@code Roles.fromJwt}/{@code Roles.isSuperadmin(Jwt)}/{@code Roles.has(Jwt,
+     *       ...)} — the raw-{@code Jwt}-reading overloads, distinct from the
+     *       already-correct authorities-collection overloads this filter already fed —
+     *       agree with the authorities on this SAME {@link Authentication}.</li>
+     *   <li>{@code email} (provider {@code "google"}) or {@code preferred_username}
+     *       (every other provider) = {@link AccountView#handle()} — best-effort so the
+     *       {@code preferred_username}-with-{@code sub}-fallback pattern used by {@code
+     *       ProfileController.usernameOf}/{@code ConnectedClientsController.localpart}/
+     *       {@code MatrixProxyController.localpart}/{@code
+     *       MastodonProxyController.localpart}/{@code SelfSilenceController.localpart}
+     *       resolves a real handle instead of falling back to the "{@code
+     *       provider:handle}" composite {@code sub} string (which is not a valid
+     *       homeserver localpart). For {@code "google"}/{@code "discord"} accounts this
+     *       ALSO makes {@code SessionsService.accountIdFromJwt} reconstruct the EXACT
+     *       account id admin-bff stored, so {@code SessionsController} (one of the 16)
+     *       works correctly end-to-end for those two provider types.
+     *       <p><b>Known residual gap (pre-existing, NOT introduced or fixed here):</b>
+     *       {@code SessionsService.accountIdFromJwt} only ever reconstructs a {@code
+     *       "google:"} or {@code "discord:"} prefixed id — it has NO branch for {@code
+     *       "casdoor"} (the native-login provider {@code AccountView} accounts mostly
+     *       carry today, per admin-bff's {@code InternalAccountController#ensureAccount}
+     *       "#112 SSO subject extraction" doc). A REAL Casdoor JWT for a casdoor-provider
+     *       account already hits this exact mismatch today (independent of this filter
+     *       or either Bug-2 fix option), so {@code SessionsController} already returns
+     *       an empty list / 404s any revoke for native-login accounts via ANY carrier;
+     *       this fix does not regress that further, but does not fix it either — flagged
+     *       here rather than silently worked around, since a real fix belongs in {@code
+     *       SessionsService}, out of this change's scope.</li>
+     *   <li>{@code iss} = {@link #singleTrustedIssuerOrNull} — see its own doc for the
+     *       single- vs multi-issuer distinction this claim exists to serve.</li>
+     * </ul>
+     *
+     * <p><b>Not populated:</b> {@code hs_token} (the homeserver-native-token claim
+     * {@code ConnectedClientsController.homeserverBearer} reads) — {@code
+     * AdminBffInternalClient}'s HTTP introspection contract carries no such field, and
+     * that accessor's OWN doc already documents it as "Absent on the our-UI Casdoor
+     * token... null-tolerant", i.e. already commonly absent even for a real JWT, so
+     * leaving it unset here is consistent with existing behaviour, not a new gap.
+     */
+    private Jwt syntheticJwt(AccountView view) {
+        List<String> claimRoles = view.registrationComplete() ? view.roles() : List.of();
+        Jwt.Builder builder = Jwt.withTokenValue(SYNTHETIC_TOKEN_MARKER + view.id())
+                .header("typ", "bff-synthetic-principal")
+                .subject(view.id())
+                .claim("roles", claimRoles);
+
+        String handle = view.handle();
+        if (handle != null && !handle.isBlank()) {
+            if ("google".equalsIgnoreCase(view.provider())) {
+                builder.claim("email", handle);
+            } else {
+                builder.claim("preferred_username", handle);
+            }
+        }
+
+        String issuer = singleTrustedIssuerOrNull(domainRegistry);
+        if (issuer != null) {
+            builder.issuer(issuer);
+        }
+
+        return builder.build();
+    }
+
+    /**
+     * The {@code iss} claim {@link #syntheticJwt} should stamp so {@code
+     * Roles.domainOf(Jwt, DomainRegistry)} (read by {@code PrincipalDomain.forScope},
+     * which 13 of the 16 Bug-2 controllers call) resolves the SAME brand-domain scope a
+     * real Casdoor JWT for this account would — closing the previously-known "low"
+     * finding that this filter's {@link Authentication} carried no {@code DOMAIN_}
+     * authority at all.
+     *
+     * <p>Correctly recoverable ONLY in single-issuer mode. {@link AccountView} carries
+     * no brand/domain field — only {@code provider}, the OAuth LOGIN provider
+     * ({@code google}/{@code discord}/{@code casdoor}), a completely different axis from
+     * the multi-BRAND per-Casdoor-instance concept {@link DomainRegistry} models — so a
+     * genuinely multi-issuer deployment has no way to recover which brand's Casdoor a
+     * {@code bff_} session's account belongs to from what admin-bff's introspection
+     * response gives us. {@link DomainRegistry#trustedIssuers()} has EXACTLY one entry
+     * in both the fully-unconfigured case (empty registry — {@code
+     * DomainRegistry.domainOf} short-circuits to {@code DEFAULT_DOMAIN} without even
+     * inspecting the {@code iss} argument, so leaving it unset there is harmless) and the
+     * single-issuer-configured case (one real issuer URI seeded to {@code
+     * DEFAULT_DOMAIN}); in BOTH, this returns that issuer (or {@code null}, which is
+     * equally safe in the empty case). Only when {@link DomainRegistry#isMultiIssuer()}
+     * (more than one trusted issuer) does this return {@code null} — no {@code iss}
+     * claim is set, and {@code PrincipalDomain.forScope} then FAILS CLOSED (denies
+     * domain-scoped rows, the {@code "__deny__"} sentinel) for a {@code bff_}-session
+     * caller rather than guessing wrong. Documented, narrowed (not fully closed) gap:
+     * single-issuer clusters (the common case) now resolve {@code DOMAIN_default}
+     * correctly; true multi-brand deployments still deny domain-scoped {@code bff_}
+     * -session reads/writes until a real brand-aware field is added to the introspection
+     * contract.
+     */
+    private static String singleTrustedIssuerOrNull(DomainRegistry registry) {
+        if (registry == null) {
+            return null;
+        }
+        Set<String> trusted = registry.trustedIssuers();
+        return trusted.size() == 1 ? trusted.iterator().next() : null;
     }
 
     /** Package-private (not private) so a unit test can exercise the mapping directly. */

@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchy;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchyImpl;
 import org.springframework.security.authentication.ReactiveAuthenticationManagerResolver;
@@ -16,10 +17,13 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.ReactiveJwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.server.authentication.ServerBearerTokenAuthenticationConverter;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.authentication.ServerAuthenticationConverter;
 import org.springframework.security.web.server.header.ReferrerPolicyServerHttpHeadersWriter;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.security.CasdoorAuthorities;
 import systems.snapdragon.commons.security.DomainRegistry;
 import systems.snapdragon.userbff.security.PrincipalDomain;
@@ -270,8 +274,32 @@ public class SecurityConfig {
      * conditional ever activates with just the lone back-compat issuer. In true
      * multi-brand mode each trusted per-brand Casdoor validates its own tokens
      * (unknown iss -> 401, fail-closed).
+     *
+     * <p><b>{@code bearerTokenConverter} skip-guard for opaque {@code bff_} sessions.</b>
+     * {@link BffSessionAuthenticationWebFilter} (this service's own bridge, {@code
+     * @Order(HIGHEST_PRECEDENCE + 10)}, runs BEFORE this chain) already resolves an
+     * opaque {@code bff_} session — carried either as the {@code bff_session} cookie or
+     * as an {@code Authorization: Bearer bff_...} header — into a real {@code
+     * Authentication} written to the {@code SecurityContext}. WITHOUT the guard below,
+     * Spring's STOCK bearer-token extraction (installed by default on either branch
+     * below) still grabs that SAME {@code Authorization: Bearer bff_...} header itself,
+     * hands the opaque token to the JWT decoder, which fails ("Invalid JWT
+     * serialization: Missing dot delimiter(s)"), and the resource server's own failure
+     * handler commits a 401 DIRECTLY — overriding the SecurityContext the filter just
+     * populated. Net effect: the header carrier for a bff_ token 401s end-to-end; only
+     * the cookie carrier works (a bare cookie is invisible to the stock bearer-token
+     * converter, so it finds nothing and contributes no authentication, leaving the
+     * filter's context standing). {@link #skipBffTokenConverter()} closes that gap by
+     * returning {@code Mono.empty()} (== "no bearer present") for a {@code bff_}-prefixed
+     * Bearer, for EITHER branch below, so the resource server never attempts to
+     * JWT-decode it; app-layer ({@link BffSessionAuthenticationWebFilter}) is the sole
+     * resolver of a bff_ session. A real Casdoor JWT Bearer is completely unaffected.
+     * EXACT port of admin-bff-api's already-merged {@code SecurityConfig
+     * .skipBffTokenConverter} (the reference fix for this same gap, confirmed live
+     * there).
      */
     private void resourceServer(ServerHttpSecurity.OAuth2ResourceServerSpec o) {
+        o.bearerTokenConverter(skipBffTokenConverter());
         ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
                 tenantAuthManagerResolver.getIfAvailable();
         if (resolver != null && domainRegistry.isMultiIssuer()) {
@@ -279,6 +307,30 @@ public class SecurityConfig {
         } else {
             o.jwt(j -> j.jwtAuthenticationConverter(jwtConverter()));
         }
+    }
+
+    /**
+     * A bearer-token converter that resolves a Casdoor JWT Bearer normally but returns
+     * EMPTY for an opaque {@link BffSessionAuthenticationWebFilter#BFF_PREFIX}-prefixed
+     * Bearer — so the resource server never attempts to JWT-decode a bff_ session token
+     * (it is resolved at the app layer, by {@link BffSessionAuthenticationWebFilter},
+     * instead). Empty == "no bearer present" to the resource server, so a bff_-only
+     * request is treated as unauthenticated-by-bearer and the {@code authorizeExchange}
+     * rules (permitAll / authenticated) apply exactly as if no Bearer had been sent —
+     * letting the filter's already-populated SecurityContext stand. References {@link
+     * BffSessionAuthenticationWebFilter#BFF_PREFIX} rather than re-declaring {@code
+     * "bff_"} as a second, driftable literal.
+     */
+    private static ServerAuthenticationConverter skipBffTokenConverter() {
+        ServerBearerTokenAuthenticationConverter delegate = new ServerBearerTokenAuthenticationConverter();
+        return exchange -> {
+            String auth = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+            if (auth != null && auth.startsWith("Bearer ")
+                    && auth.substring(7).trim().startsWith(BffSessionAuthenticationWebFilter.BFF_PREFIX)) {
+                return Mono.empty();   // opaque bff_ session -> not a JWT, app-layer resolves it.
+            }
+            return delegate.convert(exchange);
+        };
     }
 
     /**

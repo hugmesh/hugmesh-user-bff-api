@@ -87,6 +87,71 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
                 .expectStatus().isOk();
     }
 
+    // ── BUG 1: the Authorization-HEADER carrier, through the REAL chain ─────────
+
+    @Test
+    void bffSessionHeader_noCookie_reachesUserSurface() {
+        // The exact gap that shipped in the merged PR #107 code: WITHOUT
+        // SecurityConfig's bearerTokenConverter skip-guard, Spring's stock
+        // bearer-token extraction grabs this SAME "Authorization: Bearer bff_..."
+        // header, hands the opaque token to the JWT decoder ("Invalid JWT
+        // serialization: Missing dot delimiter(s)"), and the resource server's own
+        // failure handler commits a 401 DIRECTLY — overriding the SecurityContext
+        // BffSessionAuthenticationWebFilter already populated. This test combination
+        // (header carrier + the REAL SecurityConfig.filterChain + a protected route)
+        // is exactly what let the bug ship: bffSessionCookie_noJwt_reachesUserSurface
+        // above only ever exercised the cookie carrier, which the stock bearer-token
+        // converter never even looks at (no Authorization header present), so it
+        // could never have caught this.
+        AccountView view = new AccountView("acct-header-1", "native", "someone-h", true, List.of("user"));
+        AdminBffInternalClient client = enabledClientReturning("bff_headertoken", view);
+
+        clientWith(client).get().uri("/bff/user/_probe")
+                .header("Authorization", "Bearer bff_headertoken")
+                .exchange()
+                .expectStatus().isOk();
+
+        org.mockito.Mockito.verify(client).getAccountBySession("bff_headertoken");
+    }
+
+    @Test
+    void bffSessionHeader_noCookie_reachesMe() {
+        // /bff/me specifically, mirroring bffSessionCookie_noJwt_reachesMe's "Live
+        // reproduction #2" — the header carrier is SsoAuthController's OWN documented
+        // native-login calling convention too (not just the cookie), so it must also
+        // reach /bff/me through the real chain.
+        AccountView view = new AccountView("acct-header-2", "native", "someone-h2", true, List.of("user"));
+        AdminBffInternalClient client = enabledClientReturning("bff_headertoken2", view);
+
+        clientWith(client).get().uri("/bff/me")
+                .header("Authorization", "Bearer bff_headertoken2")
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void bffSessionHeader_unknownOrExpired_is401_notMisdecodedAsJwt() {
+        // Proves the skip-guard's Mono.empty() branch (not just "no converter ran at
+        // all") — an invalid/expired bff_ token via the header must still reach the
+        // filter's OWN 401 (unauthenticated pass-through -> .authenticated() 401), not
+        // Spring's JWT-decode failure 401 (same status code, but for the WRONG reason
+        // — the distinction matters because a decode-failure 401 would mean the guard
+        // never engaged, i.e. this test would pass even with Bug 1 unfixed. The
+        // verify() call below is what actually distinguishes the two: the JWT decoder
+        // path never calls admin-bff at all).
+        AdminBffInternalClient client = mock(AdminBffInternalClient.class);
+        when(client.enabled()).thenReturn(true);
+        when(client.getAccountBySession("bff_badheader"))
+                .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session")));
+
+        clientWith(client).get().uri("/bff/user/_probe")
+                .header("Authorization", "Bearer bff_badheader")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        org.mockito.Mockito.verify(client).getAccountBySession("bff_badheader");
+    }
+
     @Test
     void bffSessionCookie_noJwt_reachesMe() {
         // Live reproduction #2 from the PR description: /bff/me with ONLY a bff_session
