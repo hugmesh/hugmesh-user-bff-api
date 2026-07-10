@@ -8,6 +8,7 @@ import org.springframework.security.web.server.WebFilterChainProxy;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.server.ServerWebExchange;
 import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 
 /**
  * Shared scaffolding for the user-BFF SECURITY-SLICE tests — builds a
@@ -63,6 +64,37 @@ abstract class SecuritySliceSupport {
 
         return WebTestClient.bindToController(controllers)
                 .webFilter(securityFilter)
+                .build();
+    }
+
+    /**
+     * Like {@link #sliceClient}, but ALSO installs {@link BffSessionAuthenticationWebFilter}
+     * IN FRONT OF the security filter (array order = execution order for {@code
+     * WebTestClient.webFilter(WebFilter...)}, confirmed empirically — the first vararg
+     * runs first), exactly mirroring production {@code @Order} intent (bridge filter at
+     * {@code HIGHEST_PRECEDENCE + 10}, ahead of Spring Security's own authentication
+     * slot) without depending on {@code @Order} annotation processing, which this
+     * bind-to-controller harness (no full Spring context) never performs anyway.
+     *
+     * @param adminBffClient the (mocked) internal client provider driving the bridge
+     *                       filter's session resolution — see {@link #provider(Object)}
+     *                       for a live client or {@link #absent()} for "no bridging
+     *                       capability" (pass-through) coverage
+     */
+    static WebTestClient sliceClientWithBffSessionAuth(
+            DomainRegistry registry,
+            ObjectProvider<ReactiveAuthenticationManagerResolver<ServerWebExchange>> tenantResolver,
+            ObjectProvider<AdminBffInternalClient> adminBffClient,
+            Object... controllers) {
+
+        SecurityConfig config = new SecurityConfig(registry, tenantResolver, false, 600000L);
+        SecurityWebFilterChain chain = config.filterChain(ServerHttpSecurity.http());
+        WebFilterChainProxy securityFilter = new WebFilterChainProxy(chain);
+        BffSessionAuthenticationWebFilter bffFilter =
+                new BffSessionAuthenticationWebFilter(adminBffClient, 3000L);
+
+        return WebTestClient.bindToController(controllers)
+                .webFilter(bffFilter, securityFilter)
                 .build();
     }
 

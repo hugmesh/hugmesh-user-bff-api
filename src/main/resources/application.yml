@@ -211,6 +211,18 @@ app:
     internal:
       base-url: "${ADMIN_BFF_INTERNAL_BASE_URL:http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080}"
 
+  # BffSessionAuthenticationWebFilter — bridges a native-login bff_ session (cookie or
+  # Authorization header) into this service's OWN Spring Security context via admin-bff's
+  # /bff/internal/session/introspect + AdminBffInternalClient.getAccountBySession, so
+  # /bff/user/** and /bff/me's .authenticated() gate (JWT-only otherwise) can see a
+  # native-login caller too. introspection-timeout-ms bounds the introspection round-trip
+  # (getAccountBySession itself sets no timeout); an unknown/expired session passes
+  # through unauthenticated (clean 401), every OTHER failure (5xx/unreachable/timeout)
+  # fails CLOSED with 503 — see the filter's own class doc for the full fail-closed
+  # rationale, mirroring the gateway's own BffSessionAuthFilter precedent.
+  bff-session-auth:
+    introspection-timeout-ms: "${APP_BFF_SESSION_AUTH_INTROSPECTION_TIMEOUT_MS:3000}"
+
   # ── ACTIVE SESSION MANAGEMENT (/bff/user/sessions) — SHIPS LIVE ──────────────
   # The user-facing "list/revoke MY login sessions" feature. UNLIKE the OIDC-login
   # internal client (a fail-closed stub until app.bff.oidc.enabled flips), session

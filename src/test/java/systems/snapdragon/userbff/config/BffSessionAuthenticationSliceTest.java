@@ -1,0 +1,194 @@
+package systems.snapdragon.userbff.config;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpCookie;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.ReactiveAuthenticationManagerResolver;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Mono;
+import systems.snapdragon.commons.config.TenancyResolvers;
+import systems.snapdragon.commons.config.TenancyResourceServerConfig;
+import systems.snapdragon.commons.security.DomainRegistry;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient.AccountView;
+import systems.snapdragon.userbff.testsupport.TestIssuer;
+
+import java.util.List;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/**
+ * END-TO-END slice for {@link BffSessionAuthenticationWebFilter} INSTALLED ALONGSIDE
+ * the real {@link SecurityConfig#filterChain}, via {@link
+ * SecuritySliceSupport#sliceClientWithBffSessionAuth}. Complements the pure-unit
+ * {@link BffSessionAuthenticationWebFilterTest} (which exercises the filter in
+ * isolation with a hand-rolled {@code WebFilterChain}) by proving the bridge actually
+ * satisfies {@code SecurityConfig}'s real {@code authorizeExchange} rules — i.e. that a
+ * {@code bff_session} cookie alone (NO JWT) now reaches {@code /bff/user/**} and
+ * {@code /bff/me}, which {@code SecurityConfigPathGateSliceTest}'s LIVE REPRODUCTION
+ * (see PR description) proved was 401 BEFORE this filter existed.
+ *
+ * <p>{@code /bff/me} is deliberately included in the probe mapping — {@code
+ * SecurityConfigPathGateSliceTest}'s {@code ProbeController} never mapped it, which is
+ * exactly why the pre-existing test suite never caught the {@code /bff/me} instance of
+ * this gap (see PR description "Live reproduction #2").
+ */
+class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
+
+    private TestIssuer issuer;
+    private TestIssuer issuer2;
+
+    @BeforeEach
+    void setUp() {
+        issuer = new TestIssuer();
+        issuer2 = new TestIssuer();
+    }
+
+    @AfterEach
+    void tearDown() {
+        issuer.close();
+        issuer2.close();
+    }
+
+    private WebTestClient clientWith(AdminBffInternalClient adminBffClient) {
+        String issuersCsv = issuer.issuerUri() + "=brandx," + issuer2.issuerUri() + "=brandy";
+        DomainRegistry registry = new DomainRegistry(issuer.issuerUri(), issuersCsv);
+        TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
+        ReactiveAuthenticationManagerResolver<ServerWebExchange> resolver =
+                TenancyResolvers.tenantResolver(tenancy);
+        return sliceClientWithBffSessionAuth(registry, provider(resolver), provider(adminBffClient), new ProbeController());
+    }
+
+    private static AdminBffInternalClient enabledClientReturning(String token, AccountView view) {
+        AdminBffInternalClient client = mock(AdminBffInternalClient.class);
+        when(client.enabled()).thenReturn(true);
+        when(client.getAccountBySession(token)).thenReturn(Mono.just(view));
+        return client;
+    }
+
+    // ── the gap this filter closes: bff_session cookie alone now authenticates ──
+
+    @Test
+    void bffSessionCookie_noJwt_reachesUserSurface() {
+        AccountView view = new AccountView("acct-1", "native", "someone", true, List.of("user"));
+        AdminBffInternalClient client = enabledClientReturning("bff_validtoken", view);
+
+        clientWith(client).get().uri("/bff/user/_probe")
+                .cookie("bff_session", "bff_validtoken")
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void bffSessionCookie_noJwt_reachesMe() {
+        // Live reproduction #2 from the PR description: /bff/me with ONLY a bff_session
+        // cookie (no Authorization header) — SsoAuthController.me()'s own documented
+        // native-login calling convention — was 401'd BEFORE the controller was ever
+        // reached. This proves the bridge filter now lets it through to the handler.
+        AccountView view = new AccountView("acct-2", "native", "someone2", true, List.of("user"));
+        AdminBffInternalClient client = enabledClientReturning("bff_validtoken2", view);
+
+        clientWith(client).get().uri("/bff/me")
+                .cookie("bff_session", "bff_validtoken2")
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    // ── unknown/expired session → clean 401 (not a 500, not silently authenticated) ──
+
+    @Test
+    void bffSessionCookie_unknownOrExpired_is401() {
+        AdminBffInternalClient client = mock(AdminBffInternalClient.class);
+        when(client.enabled()).thenReturn(true);
+        when(client.getAccountBySession("bff_expired"))
+                .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session")));
+
+        clientWith(client).get().uri("/bff/user/_probe")
+                .cookie("bff_session", "bff_expired")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    // ── admin-bff outage while a bff_ token is presented → fail-closed 503 ──────
+
+    @Test
+    void bffSessionCookie_adminBffOutage_is503() {
+        AdminBffInternalClient client = mock(AdminBffInternalClient.class);
+        when(client.enabled()).thenReturn(true);
+        when(client.getAccountBySession("bff_sometoken")).thenReturn(Mono.error(
+                WebClientResponseException.create(503, "Service Unavailable",
+                        org.springframework.http.HttpHeaders.EMPTY, new byte[0], null)));
+
+        clientWith(client).get().uri("/bff/user/_probe")
+                .cookie("bff_session", "bff_sometoken")
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    // ── ROLE_SERVICE gate still holds for a human bff_ session (IDOR guard) ─────
+
+    @Test
+    void bffSessionCookie_humanUser_stillForbiddenOnInternalSurface() {
+        // A human caller authenticated purely via a native-login bff_ session must be
+        // JUST as unable to reach /bff/user/internal/** as a human JWT caller already
+        // is (SecurityConfigPathGateSliceTest.internalSurface_plainUser_isForbidden) —
+        // the bridge filter must never grant ROLE_SERVICE to an ordinary account.
+        AccountView view = new AccountView("acct-3", "native", "someone3", true, List.of("user", "admin"));
+        AdminBffInternalClient client = enabledClientReturning("bff_humantoken", view);
+
+        clientWith(client).get().uri("/bff/user/internal/notifications/deliver")
+                .cookie("bff_session", "bff_humantoken")
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
+    // ── no bff_ token at all: the real Casdoor JWT path is untouched ────────────
+
+    @Test
+    void jwtBearer_stillWorks_whenBffFilterIsAlsoInstalled() {
+        AdminBffInternalClient client = mock(AdminBffInternalClient.class);
+        when(client.enabled()).thenReturn(true);
+
+        String token = issuer.mint("p-user", List.of("user"));
+        clientWith(client).get().uri("/bff/user/_probe")
+                .header("Authorization", "Bearer " + token)
+                .exchange()
+                .expectStatus().isOk();
+        // The bridge filter must never even attempt admin-bff resolution for a JWT-only
+        // request — see BffSessionAuthenticationWebFilterTest's equivalent unit proof.
+    }
+
+    // ── anonymous (no token anywhere) still 401s exactly as before ──────────────
+
+    @Test
+    void anonymous_stillUnauthorized_whenBffFilterIsAlsoInstalled() {
+        AdminBffInternalClient client = mock(AdminBffInternalClient.class);
+        when(client.enabled()).thenReturn(true);
+
+        clientWith(client).get().uri("/bff/user/_probe")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    /** Mirrors {@code SecurityConfigPathGateSliceTest.ProbeController}, plus {@code
+     *  /bff/me} (deliberately absent there — see the class doc "Live reproduction #2"). */
+    @RestController
+    static class ProbeController {
+        @RequestMapping({
+                "/bff/user/internal/notifications/deliver",
+                "/bff/user/_probe",
+                "/bff/me",
+        })
+        Mono<String> ok() {
+            return Mono.just("ok");
+        }
+    }
+}
