@@ -82,6 +82,14 @@ class RawApiDenyOwnerScopedIdorTest extends PostgresTestSupport {
         // brand-X is also the lone back-compat issuer-uri (single-issuer fallback target),
         // but app.tenancy.issuers having two pairs makes the registry genuinely multi-issuer.
         r.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", BRANDX::issuerUri);
+        // Pin jwk-set-uri at the in-process fallback issuer (brand-X). The app defaults jwk-set-uri
+        // to prod (id.snapdragon.systems/.well-known/jwks) and the resource server fetches KEYS from
+        // it, so the single-issuer fallback decoder otherwise 500s ("could not obtain the keys") on
+        // every request. The multi-issuer resolver still discovers BRANDX/BRANDY per-issuer, and a
+        // rogue/foreign token is still rejected — this only supplies the fallback decoder REAL
+        // in-process public keys, so the fail-closed assertions keep verifying genuine crypto.
+        r.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
+                () -> BRANDX.issuerUri() + "/.well-known/jwks.json");
         r.add("app.tenancy.issuers", () ->
                 BRANDX.issuerUri() + "=" + DOMAIN_X + "," + BRANDY.issuerUri() + "=" + DOMAIN_Y);
     }
