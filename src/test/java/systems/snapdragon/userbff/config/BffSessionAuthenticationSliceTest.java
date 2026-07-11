@@ -70,7 +70,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
     private static AdminBffInternalClient enabledClientReturning(String token, AccountView view) {
         AdminBffInternalClient client = mock(AdminBffInternalClient.class);
         when(client.enabled()).thenReturn(true);
-        when(client.getAccountBySession(token)).thenReturn(Mono.just(view));
+        when(client.resolveSession(token)).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
         return client;
     }
 
@@ -111,7 +111,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
                 .exchange()
                 .expectStatus().isOk();
 
-        org.mockito.Mockito.verify(client).getAccountBySession("bff_headertoken");
+        org.mockito.Mockito.verify(client).resolveSession("bff_headertoken");
     }
 
     @Test
@@ -141,7 +141,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
         // path never calls admin-bff at all).
         AdminBffInternalClient client = mock(AdminBffInternalClient.class);
         when(client.enabled()).thenReturn(true);
-        when(client.getAccountBySession("bff_badheader"))
+        when(client.resolveSession("bff_badheader"))
                 .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session")));
 
         clientWith(client).get().uri("/bff/user/_probe")
@@ -149,7 +149,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
                 .exchange()
                 .expectStatus().isUnauthorized();
 
-        org.mockito.Mockito.verify(client).getAccountBySession("bff_badheader");
+        org.mockito.Mockito.verify(client).resolveSession("bff_badheader");
     }
 
     @Test
@@ -173,7 +173,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
     void bffSessionCookie_unknownOrExpired_is401() {
         AdminBffInternalClient client = mock(AdminBffInternalClient.class);
         when(client.enabled()).thenReturn(true);
-        when(client.getAccountBySession("bff_expired"))
+        when(client.resolveSession("bff_expired"))
                 .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session")));
 
         clientWith(client).get().uri("/bff/user/_probe")
@@ -188,7 +188,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
     void bffSessionCookie_adminBffOutage_is503() {
         AdminBffInternalClient client = mock(AdminBffInternalClient.class);
         when(client.enabled()).thenReturn(true);
-        when(client.getAccountBySession("bff_sometoken")).thenReturn(Mono.error(
+        when(client.resolveSession("bff_sometoken")).thenReturn(Mono.error(
                 WebClientResponseException.create(503, "Service Unavailable",
                         org.springframework.http.HttpHeaders.EMPTY, new byte[0], null)));
 

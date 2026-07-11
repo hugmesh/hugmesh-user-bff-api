@@ -169,7 +169,7 @@ class ProfileControllerTest {
     void bffSessionHeader_realJwtTypedController_noNpe_returns200() {
         AccountView view = new AccountView("acct-bff-1", "native", "bffuser", true, List.of("user"));
         when(adminBffClient.enabled()).thenReturn(true);
-        when(adminBffClient.getAccountBySession("bff_profiletoken")).thenReturn(Mono.just(view));
+        when(adminBffClient.resolveSession("bff_profiletoken")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
         when(principalDomain.forScope(any())).thenReturn("default");
         when(profiles.get(eq("acct-bff-1"), eq("default")))
                 .thenReturn(Mono.just(stubProfile("acct-bff-1")));
@@ -191,7 +191,7 @@ class ProfileControllerTest {
         // controller-based coverage exercised before this PR.
         AccountView view = new AccountView("acct-bff-2", "native", "bffuser2", true, List.of("user"));
         when(adminBffClient.enabled()).thenReturn(true);
-        when(adminBffClient.getAccountBySession("bff_profilecookie")).thenReturn(Mono.just(view));
+        when(adminBffClient.resolveSession("bff_profilecookie")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
         when(principalDomain.forScope(any())).thenReturn("default");
         when(profiles.get(eq("acct-bff-2"), eq("default")))
                 .thenReturn(Mono.just(stubProfile("acct-bff-2")));

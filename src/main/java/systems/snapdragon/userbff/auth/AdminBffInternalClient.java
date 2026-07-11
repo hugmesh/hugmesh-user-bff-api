@@ -56,11 +56,27 @@ public class AdminBffInternalClient {
     /** A freshly-minted opaque {@code bff_} session token from admin-bff. */
     public record SessionView(String token, String accountId) {}
 
-    /** The subset of admin-bff's {@code /bff/internal/session/introspect} body we need to
-     *  resolve a session token to its account id (the rest — provider/roles/status/mfa — is
-     *  re-read from the full account view, so unknown fields are ignored). */
+    /** The fields of admin-bff's {@code GET /bff/internal/session/introspect} body this
+     *  client consumes. {@code id} resolves the account (then re-fetched in full for its
+     *  {@code handle}, absent here); {@code status} + {@code mfaSatisfied} are live,
+     *  session-scoped facts that the account view does NOT carry — kept so the session
+     *  bridge can deny a suspended/banned session and grant {@code MFA_SATISFIED} (see
+     *  {@link #resolveSession}). Unknown fields ignored; {@code null} status defaults to
+     *  {@code "active"} so a partial row never NPEs the mapping. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record SessionIntrospect(String id) {}
+    private record SessionIntrospect(String id, String status, boolean mfaSatisfied) {
+        SessionIntrospect {
+            if (status == null) status = "active";
+        }
+    }
+
+    /** A resolved {@code bff_} session: the owning account view PLUS the two live,
+     *  session-scoped facts the introspect body carries that {@link AccountView} does not
+     *  ({@code status} — active/suspended/banned, live-checked server-side; {@code
+     *  mfaSatisfied} — this session's MFA step-up state). Returned by {@link
+     *  #resolveSession} for the session-auth bridge; the plain {@link #getAccountBySession}
+     *  drops these for the {@code /bff/me} hydrate path that doesn't need them. */
+    public record SessionResolution(AccountView account, String status, boolean mfaSatisfied) {}
 
     /** Null unless app.bff.oidc.enabled=true — when null every call is a fail-closed
      *  stub (Mono.error), so a disabled surface can never silently authenticate. */
@@ -116,19 +132,33 @@ public class AdminBffInternalClient {
      * session ⇒ admin-bff 401 (propagated), never a fabricated view.
      */
     public Mono<AccountView> getAccountBySession(String bffToken) {
+        return resolveSession(bffToken).map(SessionResolution::account);
+    }
+
+    /**
+     * Resolve a {@code bff_} SESSION token to its account view AND the two live,
+     * session-scoped facts ({@code status}, {@code mfaSatisfied}) the introspect body
+     * carries but {@link AccountView} does not — for the session-auth bridge, which must
+     * deny a suspended/banned session and grant {@code MFA_SATISFIED}. Same two-hop shape
+     * {@link #getAccountBySession} always used (introspect resolves token → account id +
+     * status/mfa; {@code getAccount(id)} then fetches the full view for its {@code handle},
+     * absent from the introspect body), just no longer discarding status/mfa on the way.
+     *
+     * <p>Unknown/expired (or non-bff) session ⇒ admin-bff introspect 401, surfaced AS a
+     * 401 {@link ResponseStatusException} (so the caller returns "no session" instead of a
+     * bare 500 from the raw {@link WebClientResponseException}). Fail-closed stub when the
+     * OIDC surface is disabled, exactly like the other calls.
+     */
+    public Mono<SessionResolution> resolveSession(String bffToken) {
         if (http == null) {
-            return stub("getAccountBySession");
+            return stub("resolveSession");
         }
         return http.get().uri("/bff/internal/session/introspect")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + bffToken)
                 .retrieve()
                 .bodyToMono(SessionIntrospect.class)
-                .flatMap(intro -> getAccount(intro.id()))
-                // An unknown/expired (or non-bff) session ⇒ admin-bff introspect 401. Surface it
-                // to the caller AS a 401 so the /me + /session hydrate path returns "no session"
-                // (the login-ui then re-logs-in) instead of a bare 500 from the raw
-                // WebClientResponseException. The dark stub path (IllegalStateException) is
-                // unaffected — it stays fail-closed.
+                .flatMap(intro -> getAccount(intro.id())
+                        .map(account -> new SessionResolution(account, intro.status(), intro.mfaSatisfied())))
                 .onErrorMap(WebClientResponseException.Unauthorized.class,
                         e -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session"));
     }

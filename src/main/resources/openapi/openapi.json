@@ -18,11 +18,11 @@
     "name" : "Character-stickers",
     "description" : "The caller's OWN VN-character expression stickers (owner = JWT subject). Each is a rendered PNG, edge-AI moderated before publish and reviewed by a moderator."
   }, {
+    "name" : "SSO auth",
+    "description" : "Native login (server-side credential check) / register / session. Ships dark behind app.bff.oidc.enabled."
+  }, {
     "name" : "Character-parts",
     "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
-  }, {
-    "name" : "SSO auth",
-    "description" : "Login / register / session surface, delegating to admin-bff internal. Ships dark behind app.bff.oidc.enabled."
   }, {
     "name" : "Profile",
     "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
@@ -1163,13 +1163,13 @@
     "/bff/login" : {
       "post" : {
         "tags" : [ "SSO auth" ],
-        "summary" : "Provider login: ensure the account and mint an opaque bff_ session (cookie + body). 503 when the SSO surface is dark.",
+        "summary" : "Native login: verify username+password SERVER-SIDE at Casdoor, then exchange the code, provision the account+session and set the bff_ cookie. 200 {registrationComplete,status,mfaRequired:false} on success; 200 {mfaRequired:true} when a second factor is needed (no cookie); 401 invalid_credentials on bad creds. 503 when the SSO surface is dark.",
         "operationId" : "login",
         "requestBody" : {
           "content" : {
             "application/json" : {
               "schema" : {
-                "$ref" : "#/components/schemas/LoginRequest"
+                "$ref" : "#/components/schemas/NativeLoginRequest"
               }
             }
           },
@@ -1181,10 +1181,7 @@
             "content" : {
               "*/*" : {
                 "schema" : {
-                  "type" : "object",
-                  "additionalProperties" : {
-                    "type" : "object"
-                  }
+                  "type" : "object"
                 }
               }
             }
@@ -1557,7 +1554,7 @@
     "/bff/session" : {
       "get" : {
         "tags" : [ "SSO auth" ],
-        "summary" : "The caller's session view (from admin-bff), read from the bff_ cookie. PermitAll + cookie-authenticated (NO JWT) so the login SPA can hydrate its session straight after the OIDC callback — when the browser holds only the bff_ cookie, not a gateway-minted JWT (which is what /me requires). Same body as /me. 401 when there is no session; 503 when the SSO surface is dark.",
+        "summary" : "The caller's session view (from admin-bff), read from the bff_ cookie. PermitAll + cookie-authenticated (NO JWT) so the login SPA can hydrate its session straight after login — when the browser holds only the bff_ cookie, not a gateway-minted JWT (which is what /me requires). Same body as /me. 401 when there is no session; 503 when the SSO surface is dark.",
         "operationId" : "session",
         "responses" : {
           "200" : {
@@ -2382,21 +2379,19 @@
           }
         }
       },
-      "LoginRequest" : {
+      "NativeLoginRequest" : {
         "type" : "object",
         "properties" : {
-          "provider" : {
-            "pattern" : "(?i)google|discord",
-            "type" : "string"
-          },
-          "email" : {
-            "maxLength" : 320,
-            "minLength" : 0,
-            "type" : "string"
-          },
           "username" : {
-            "maxLength" : 64,
-            "minLength" : 0,
+            "type" : "string"
+          },
+          "password" : {
+            "type" : "string"
+          },
+          "mfaPasscode" : {
+            "type" : "string"
+          },
+          "mfaType" : {
             "type" : "string"
           }
         }

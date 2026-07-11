@@ -31,7 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -70,23 +70,31 @@ import java.util.Set;
  * <h3>Authority mapping</h3>
  * Mirrors {@code BffCookieAuthenticationWebFilter.buildAuthorities} / the gateway's
  * {@code BffSessionAuthFilter.buildAuthorities}: {@code ROLE_USER} floor always; if
- * {@code !registrationComplete}, ONLY the floor; otherwise each role maps to
- * {@code ROLE_<UPPER>}, deduplicated against the floor.
+ * {@code !registrationComplete}, ONLY the floor (no roles, no {@code MFA_SATISFIED});
+ * otherwise each role maps to {@code ROLE_<UPPER>} (deduplicated against the floor) and
+ * {@link #MFA_SATISFIED} is appended when the session's MFA challenge is satisfied.
  *
- * <p><b>{@code MFA_SATISFIED} is deliberately OMITTED</b> — grep-verified: no
- * {@code @PreAuthorize}/{@code hasAuthority("MFA_SATISFIED")} gate exists anywhere in
- * user-bff-api's controllers today (every {@code @PreAuthorize} here is a plain
- * {@code hasRole(...)}), so there is nothing for it to satisfy. It is also not
- * currently PLUMBABLE: admin-bff's {@code /bff/internal/session/introspect} response
- * carries {@code mfaSatisfied}, but {@link AdminBffInternalClient#getAccountBySession}
- * discards everything from that response except the account id (see its private
- * {@code SessionIntrospect(String id)} projection) and re-fetches the account via
- * {@link AdminBffInternalClient#getAccount}, whose {@link AccountView} record has no
- * {@code mfaSatisfied} field at all. If an MFA-gated endpoint is ever added to this
- * service, plumbing that flag through will need either a new
- * {@code AdminBffInternalClient} method that reads the introspect response's own
- * {@code mfaSatisfied}/{@code status} fields directly, or extending
- * {@code SessionIntrospect}. Tracked as a documented gap, not a silent omission.
+ * <p><b>{@code MFA_SATISFIED} is now plumbed with full fidelity.</b> The earlier version
+ * of this filter deliberately omitted it because {@link
+ * AdminBffInternalClient#getAccountBySession} discarded everything from the introspect
+ * response except the account id. This filter now resolves via {@link
+ * AdminBffInternalClient#resolveSession}, which carries the introspect body's
+ * {@code status} + {@code mfaSatisfied} through the (unchanged, two-hop) resolution
+ * alongside the account view, so {@code MFA_SATISFIED} is granted with the same fidelity
+ * the gateway's own filter grants it. No {@code hasAuthority("MFA_SATISFIED")} gate exists
+ * in this service's controllers TODAY, but granting it now means a future MFA-gated
+ * endpoint here cannot silently ship ungated the way it would have before.
+ *
+ * <h3>Suspended/banned accounts — explicit deny, mirroring the gateway</h3>
+ * admin-bff's introspect body may report {@code status: "suspended"|"banned"} on a
+ * still-live session (the suspension check is live, not cached). Exactly like the
+ * gateway's own {@code BffSessionAuthFilter} and mod-bff-api's filter, this is an
+ * explicit {@code 403} + {@code X-Bff-Denied} — the exchange is completed directly and
+ * {@code chain.filter(exchange)} is NEVER called on that branch — rather than silently
+ * degrading to "unauthenticated" (which would still 401, but would blur a deliberate ban
+ * into an ordinary invalid/absent token). Defence-in-depth: the gateway already denies a
+ * banned session before proxying here in production, but this service's own gate should
+ * not depend on that for correctness.
  *
  * <h3>Fail-closed posture</h3>
  * <ul>
@@ -171,8 +179,17 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
     /** Token prefix that uniquely identifies opaque BFF session tokens. */
     static final String BFF_PREFIX = "bff_";
 
+    /** Authority granted when the session's MFA challenge has been satisfied. Matches the
+     *  gateway's own {@code BffSessionAuthFilter.MFA_SATISFIED} and auth-core /
+     *  mod-bff-api's {@code BffCookieAuthenticationWebFilter.MFA_SATISFIED} constant. */
+    static final String MFA_SATISFIED = "MFA_SATISFIED";
+
+    /** Response header naming why a request was explicitly denied by this filter
+     *  (suspended/banned branch only) — mirrors the gateway's {@code X-BFF-Denied}. */
+    private static final String DENIED_HEADER = "X-Bff-Denied";
+
     /** Default bounded wait on the admin-bff introspection round-trip. {@code
-     *  AdminBffInternalClient.getAccountBySession} sets no timeout of its own (unlike
+     *  AdminBffInternalClient.resolveSession} sets no timeout of its own (unlike
      *  the gateway's equivalent call), so an unresponsive-but-still-connected admin-bff
      *  would otherwise hang this request indefinitely instead of failing closed. */
     static final long DEFAULT_INTROSPECTION_TIMEOUT_MS = 3000L;
@@ -232,24 +249,43 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
         }
 
         return resolve(client, token)
-                .flatMap(maybeAuth -> maybeAuth.isPresent()
-                        ? chain.filter(exchange).contextWrite(
-                                ReactiveSecurityContextHolder.withAuthentication(maybeAuth.get()))
-                        : chain.filter(exchange))
+                .flatMap(decision -> apply(decision, exchange, chain))
                 .onErrorResume(IntrospectionFailure.class, ex -> failClosed(exchange, ex));
     }
 
+    private Mono<Void> apply(Decision d, ServerWebExchange exchange, WebFilterChain chain) {
+        return switch (d.kind()) {
+            case AUTHENTICATE -> chain.filter(exchange)
+                    .contextWrite(ReactiveSecurityContextHolder.withAuthentication(d.authentication()));
+            case PASS_THROUGH -> chain.filter(exchange);
+            case FORBIDDEN -> reject(exchange, HttpStatus.FORBIDDEN, "account-" + d.reason());
+        };
+    }
+
+    /** The outcome of a bff_ token lookup, branched on exactly once by {@link #apply}.
+     *  Package-private so a unit test can assert on decisions directly. */
+    enum Kind { AUTHENTICATE, PASS_THROUGH, FORBIDDEN }
+
+    record Decision(Kind kind, Authentication authentication, String reason) {
+        static Decision authenticate(Authentication a) { return new Decision(Kind.AUTHENTICATE, a, null); }
+        static Decision passThrough() { return new Decision(Kind.PASS_THROUGH, null, null); }
+        static Decision forbidden(String reason) { return new Decision(Kind.FORBIDDEN, null, reason); }
+    }
+
     /**
-     * Resolves the token to {@code Optional.of(authentication)} on success, {@code
-     * Optional.empty()} on an unknown/expired session (mapped 401), or an error signal
-     * (wrapped as {@link IntrospectionFailure}) for anything else. Composed entirely
-     * BEFORE {@link #filter}'s {@code flatMap} that calls {@code chain.filter} — see the
-     * exactly-once invariant discussion in the class doc.
+     * Resolves the token to a {@link Decision}: AUTHENTICATE (synthetic-Jwt principal) for
+     * a live account, FORBIDDEN for a suspended/banned session (an explicit 403, mirroring
+     * the gateway's own {@code BffSessionAuthFilter} and mod-bff-api's filter — a deliberate
+     * ban decision must not blur into an ordinary "unauthenticated" 401), PASS_THROUGH for
+     * an unknown/expired session (mapped 401), or an error signal (wrapped as {@link
+     * IntrospectionFailure}) for anything else. Composed entirely BEFORE {@link #filter}'s
+     * {@code flatMap} that calls {@code chain.filter} — see the exactly-once invariant
+     * discussion in the class doc.
      */
-    private Mono<Optional<Authentication>> resolve(AdminBffInternalClient client, String token) {
-        return client.getAccountBySession(token)
+    private Mono<Decision> resolve(AdminBffInternalClient client, String token) {
+        return client.resolveSession(token)
                 .timeout(introspectionTimeout)
-                // getAccountBySession() is documented to always emit exactly one AccountView
+                // resolveSession() is documented to always emit exactly one SessionResolution
                 // or error — but WebClient.bodyToMono() completes EMPTY (no item, no error)
                 // for a 2xx response with no/blank body, which would otherwise fall straight
                 // through map/onErrorResume/onErrorMap untouched (none of them run on an
@@ -259,18 +295,34 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
                 // 503 branch as every other unexpected admin-bff response shape.
                 .switchIfEmpty(Mono.error(new IllegalStateException(
                         "admin-bff introspection returned no body for a 2xx response")))
-                .map(view -> Optional.of(authenticationFor(view)))
+                .map(this::decide)
                 .onErrorResume(ResponseStatusException.class, ex -> {
                     if (ex.getStatusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
                         // Unknown/expired session — pass through unauthenticated.
-                        return Mono.just(Optional.<Authentication>empty());
+                        return Mono.just(Decision.passThrough());
                     }
                     // Not the mapped-401 case (shouldn't normally happen — see
-                    // getAccountBySession's own onErrorMap — but don't silently swallow
+                    // resolveSession's own onErrorMap — but don't silently swallow
                     // an unexpected status either): fail closed like everything else.
                     return Mono.error(ex);
                 })
                 .onErrorMap(ex -> !(ex instanceof IntrospectionFailure), IntrospectionFailure::new);
+    }
+
+    /** Package-private so a unit test can exercise the status/authority decision directly. */
+    Decision decide(AdminBffInternalClient.SessionResolution resolution) {
+        String status = resolution.status();
+        if ("suspended".equalsIgnoreCase(status) || "banned".equalsIgnoreCase(status)) {
+            log.warn("[bff-session] denied — account status={} id={}", status, resolution.account().id());
+            return Decision.forbidden(status.toLowerCase(Locale.ROOT));
+        }
+        return Decision.authenticate(authenticationFor(resolution.account(), resolution.mfaSatisfied()));
+    }
+
+    private static Mono<Void> reject(ServerWebExchange exchange, HttpStatus status, String reason) {
+        exchange.getResponse().setStatusCode(status);
+        exchange.getResponse().getHeaders().add(DENIED_HEADER, reason);
+        return exchange.getResponse().setComplete();
     }
 
     private static Mono<Void> failClosed(ServerWebExchange exchange, IntrospectionFailure ex) {
@@ -363,8 +415,8 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      * NEVER decoded/re-verified from client input (unlike a real resource-server JWT),
      * so it needs no signature — see {@link #syntheticJwt}.
      */
-    private Authentication authenticationFor(AccountView view) {
-        return new JwtAuthenticationToken(syntheticJwt(view), buildAuthorities(view));
+    private Authentication authenticationFor(AccountView view, boolean mfaSatisfied) {
+        return new JwtAuthenticationToken(syntheticJwt(view), buildAuthorities(view, mfaSatisfied));
     }
 
     /**
@@ -478,8 +530,19 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
         return trusted.size() == 1 ? trusted.iterator().next() : null;
     }
 
-    /** Package-private (not private) so a unit test can exercise the mapping directly. */
+    /** Overload without the MFA flag — retained for the existing authority-mapping unit
+     *  tests; equivalent to {@code buildAuthorities(view, false)}. */
     static List<GrantedAuthority> buildAuthorities(AccountView view) {
+        return buildAuthorities(view, false);
+    }
+
+    /** Package-private (not private) so a unit test can exercise the mapping directly.
+     *  Mirrors the gateway's {@code BffSessionAuthFilter.buildAuthorities} exactly: the
+     *  {@code ROLE_USER} floor is always present; an incomplete registration gets ONLY the
+     *  floor (no roles, no {@code MFA_SATISFIED}, even if the session's MFA is satisfied);
+     *  otherwise each role maps to {@code ROLE_<UPPER>} (deduped against the floor) and
+     *  {@link #MFA_SATISFIED} is appended when {@code mfaSatisfied}. */
+    static List<GrantedAuthority> buildAuthorities(AccountView view, boolean mfaSatisfied) {
         var authorities = new ArrayList<GrantedAuthority>();
         authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
 
@@ -496,6 +559,10 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
                     }
                 }
             }
+        }
+
+        if (mfaSatisfied) {
+            authorities.add(new SimpleGrantedAuthority(MFA_SATISFIED));
         }
 
         return authorities;

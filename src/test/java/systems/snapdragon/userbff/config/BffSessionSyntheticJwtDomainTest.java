@@ -51,7 +51,7 @@ class BffSessionSyntheticJwtDomainTest {
     private static AdminBffInternalClient clientReturning(String token, AccountView view) {
         AdminBffInternalClient client = mock(AdminBffInternalClient.class);
         when(client.enabled()).thenReturn(true);
-        when(client.getAccountBySession(token)).thenReturn(Mono.just(view));
+        when(client.resolveSession(token)).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
         return client;
     }
 

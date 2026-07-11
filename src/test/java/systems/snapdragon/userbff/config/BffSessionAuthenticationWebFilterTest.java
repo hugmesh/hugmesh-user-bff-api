@@ -60,6 +60,10 @@ class BffSessionAuthenticationWebFilterTest {
         return client;
     }
 
+    private static AdminBffInternalClient.SessionResolution active(AccountView view) {
+        return new AdminBffInternalClient.SessionResolution(view, "active", false);
+    }
+
     /** Empty registry (no issuer-uri configured) — {@code DomainRegistry.domainOf}
      *  short-circuits to {@code DEFAULT_DOMAIN} regardless of the synthetic Jwt's
      *  {@code iss} claim, so these unit tests stay agnostic to the single- vs
@@ -103,7 +107,7 @@ class BffSessionAuthenticationWebFilterTest {
     void bearerHeader_validToken_populatesSecurityContext() {
         AccountView view = new AccountView("acct-1", "native", "user1", true, List.of("user", "admin"));
         AdminBffInternalClient client = enabledClient();
-        when(client.getAccountBySession("bff_abc123")).thenReturn(Mono.just(view));
+        when(client.resolveSession("bff_abc123")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
 
         BffSessionAuthenticationWebFilter f = filter(client);
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
@@ -142,7 +146,7 @@ class BffSessionAuthenticationWebFilterTest {
     void cookie_validToken_populatesSecurityContext() {
         AccountView view = new AccountView("acct-2", "native", "user2", true, List.of("user"));
         AdminBffInternalClient client = enabledClient();
-        when(client.getAccountBySession("bff_cookieval")).thenReturn(Mono.just(view));
+        when(client.resolveSession("bff_cookieval")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
 
         BffSessionAuthenticationWebFilter f = filter(client);
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/me")
@@ -179,7 +183,7 @@ class BffSessionAuthenticationWebFilterTest {
 
         assertThat(chain.forwarded.get()).isEqualTo(1);
         assertThat(chain.auth.get()).isNull();
-        verify(client, never()).getAccountBySession(anyString());
+        verify(client, never()).resolveSession(anyString());
     }
 
     // ── no token at all → pass-through ────────────────────────────────────────
@@ -197,7 +201,7 @@ class BffSessionAuthenticationWebFilterTest {
 
         assertThat(chain.forwarded.get()).isEqualTo(1);
         assertThat(chain.auth.get()).isNull();
-        verify(client, never()).getAccountBySession(anyString());
+        verify(client, never()).resolveSession(anyString());
     }
 
     // ── no AdminBffInternalClient bean available (e.g. a slice-test context) ──
@@ -237,18 +241,18 @@ class BffSessionAuthenticationWebFilterTest {
 
         assertThat(chain.forwarded.get()).isEqualTo(1);
         assertThat(chain.auth.get()).isNull();
-        // The disabled stub's getAccountBySession() would throw IllegalStateException —
+        // The disabled stub's resolveSession() would throw IllegalStateException —
         // proving it's never even called is what makes this pass-through deliberate
         // rather than accidental (see class doc "Fail-closed posture").
-        verify(client, never()).getAccountBySession(anyString());
+        verify(client, never()).resolveSession(anyString());
     }
 
-    // ── unknown/expired session (admin-bff 401, mapped by getAccountBySession) ──
+    // ── unknown/expired session (admin-bff 401, mapped by resolveSession) ──
 
     @Test
     void unknownOrExpiredSession_passesThrough_unauthenticated() {
         AdminBffInternalClient client = enabledClient();
-        when(client.getAccountBySession("bff_expired"))
+        when(client.resolveSession("bff_expired"))
                 .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session")));
 
         BffSessionAuthenticationWebFilter f = filter(client);
@@ -272,7 +276,7 @@ class BffSessionAuthenticationWebFilterTest {
         AdminBffInternalClient client = enabledClient();
         WebClientResponseException ex500 = WebClientResponseException.create(
                 500, "Internal Server Error", HttpHeaders.EMPTY, new byte[0], null);
-        when(client.getAccountBySession("bff_sometoken")).thenReturn(Mono.error(ex500));
+        when(client.resolveSession("bff_sometoken")).thenReturn(Mono.error(ex500));
 
         BffSessionAuthenticationWebFilter f = filter(client);
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
@@ -295,7 +299,7 @@ class BffSessionAuthenticationWebFilterTest {
         WebClientRequestException connRefused = new WebClientRequestException(
                 new java.net.ConnectException("Connection refused"), org.springframework.http.HttpMethod.GET,
                 java.net.URI.create("http://admin-bff/bff/internal/session/introspect"), HttpHeaders.EMPTY);
-        when(client.getAccountBySession("bff_sometoken")).thenReturn(Mono.error(connRefused));
+        when(client.resolveSession("bff_sometoken")).thenReturn(Mono.error(connRefused));
 
         BffSessionAuthenticationWebFilter f = filter(client);
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
@@ -316,9 +320,9 @@ class BffSessionAuthenticationWebFilterTest {
     void introspectionTimesOut_failsClosed_returns503() {
         AdminBffInternalClient client = enabledClient();
         // Never completes — simulates an admin-bff that accepted the connection but
-        // never responds. getAccountBySession() itself sets no timeout, so without this
+        // never responds. resolveSession() itself sets no timeout, so without this
         // filter's own .timeout(...) the request would hang indefinitely.
-        when(client.getAccountBySession("bff_hangs")).thenReturn(Mono.never());
+        when(client.resolveSession("bff_hangs")).thenReturn(Mono.never());
 
         BffSessionAuthenticationWebFilter f = filter(client);
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
@@ -341,7 +345,7 @@ class BffSessionAuthenticationWebFilterTest {
     @Test
     void unexpectedResponseStatusException_notMapped401_failsClosed503() {
         AdminBffInternalClient client = enabledClient();
-        when(client.getAccountBySession("bff_weird"))
+        when(client.resolveSession("bff_weird"))
                 .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "unexpected")));
 
         BffSessionAuthenticationWebFilter f = filter(client);
@@ -363,7 +367,7 @@ class BffSessionAuthenticationWebFilterTest {
     void incompleteRegistration_onlyRoleUser_noAdminAuthority() {
         AccountView view = new AccountView("acct-3", "native", "newuser", false, List.of("user", "admin"));
         AdminBffInternalClient client = enabledClient();
-        when(client.getAccountBySession("bff_newusertoken")).thenReturn(Mono.just(view));
+        when(client.resolveSession("bff_newusertoken")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
 
         BffSessionAuthenticationWebFilter f = filter(client);
         MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
@@ -467,6 +471,114 @@ class BffSessionAuthenticationWebFilterTest {
                     .map(a -> a.getAuthority()).toList();
             assertThat(authorities).as("roles=%s", roles).doesNotContain("ROLE_SERVICE");
         }
+    }
+
+    // ── suspended/banned: explicit 403, downstream NEVER reached ──────────────
+
+    @Test
+    void suspendedSession_rejected403_chainNeverInvoked() {
+        AccountView view = new AccountView("acct-s", "casdoor", "susp", true, List.of("user", "admin"));
+        AdminBffInternalClient client = enabledClient();
+        when(client.resolveSession("bff_suspended")).thenReturn(Mono.just(
+                new AdminBffInternalClient.SessionResolution(view, "suspended", false)));
+
+        BffSessionAuthenticationWebFilter f = filter(client);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/bff/user/profile")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer bff_suspended").build());
+        CapturingChain chain = new CapturingChain();
+
+        StepVerifier.create(f.filter(exchange, chain)).verifyComplete();
+
+        assertThat(chain.forwarded.get()).isEqualTo(0);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(exchange.getResponse().getHeaders().getFirst("X-Bff-Denied")).isEqualTo("account-suspended");
+    }
+
+    @Test
+    void bannedSession_rejected403_evenWithElevatedRolesAndMfa() {
+        // A ban wins over everything: elevated roles + a satisfied MFA challenge do not matter.
+        AccountView view = new AccountView("acct-b", "casdoor", "ban", true, List.of("user", "superadmin"));
+        AdminBffInternalClient client = enabledClient();
+        when(client.resolveSession("bff_banned")).thenReturn(Mono.just(
+                new AdminBffInternalClient.SessionResolution(view, "BANNED", true)));
+
+        BffSessionAuthenticationWebFilter f = filter(client);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/bff/user/profile")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer bff_banned").build());
+        CapturingChain chain = new CapturingChain();
+
+        StepVerifier.create(f.filter(exchange, chain)).verifyComplete();
+
+        assertThat(chain.forwarded.get()).isEqualTo(0);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        // case-insensitive status match, lower-cased reason — mirrors the gateway.
+        assertThat(exchange.getResponse().getHeaders().getFirst("X-Bff-Denied")).isEqualTo("account-banned");
+    }
+
+    // ── MFA_SATISFIED plumb-through ───────────────────────────────────────────
+
+    @Test
+    void mfaSatisfiedSession_grantsMfaSatisfiedAuthority() {
+        AccountView view = new AccountView("acct-m", "casdoor", "m", true, List.of("user", "admin"));
+        AdminBffInternalClient client = enabledClient();
+        when(client.resolveSession("bff_mfa")).thenReturn(Mono.just(
+                new AdminBffInternalClient.SessionResolution(view, "active", true)));
+
+        BffSessionAuthenticationWebFilter f = filter(client);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/bff/user/profile")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer bff_mfa").build());
+        CapturingChain chain = new CapturingChain();
+
+        StepVerifier.create(f.filter(exchange, chain)).verifyComplete();
+
+        var authorities = chain.auth.get().getAuthorities().stream().map(a -> a.getAuthority()).toList();
+        assertThat(authorities).containsExactlyInAnyOrder("ROLE_USER", "ROLE_ADMIN", "MFA_SATISFIED");
+    }
+
+    @Test
+    void mfaSatisfied_butRegistrationIncomplete_onlyFloor_noMfaSatisfied() {
+        // registration-incomplete floor rule wins: no elevated roles AND no MFA_SATISFIED.
+        AccountView view = new AccountView("acct-i", "casdoor", "i", false, List.of("user", "admin"));
+        AdminBffInternalClient client = enabledClient();
+        when(client.resolveSession("bff_inc")).thenReturn(Mono.just(
+                new AdminBffInternalClient.SessionResolution(view, "active", true)));
+
+        BffSessionAuthenticationWebFilter f = filter(client);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/bff/user/profile")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer bff_inc").build());
+        CapturingChain chain = new CapturingChain();
+
+        StepVerifier.create(f.filter(exchange, chain)).verifyComplete();
+
+        var authorities = chain.auth.get().getAuthorities().stream().map(a -> a.getAuthority()).toList();
+        assertThat(authorities).containsExactly("ROLE_USER");
+    }
+
+    // ── decision + authority-with-mfa unit tests ──────────────────────────────
+
+    @Test
+    void decide_suspended_isForbidden_caseInsensitive() {
+        BffSessionAuthenticationWebFilter f = filter(enabledClient());
+        AccountView view = new AccountView("acct-d", "casdoor", "d", true, List.of("user"));
+        var d = f.decide(new AdminBffInternalClient.SessionResolution(view, "Suspended", false));
+        assertThat(d.kind()).isEqualTo(BffSessionAuthenticationWebFilter.Kind.FORBIDDEN);
+        assertThat(d.reason()).isEqualTo("suspended");
+    }
+
+    @Test
+    void buildAuthorities_mfaSatisfied_appendsAuthority_onlyWhenComplete() {
+        AccountView complete = new AccountView("a", "casdoor", "h", true, List.of("user"));
+        assertThat(BffSessionAuthenticationWebFilter.buildAuthorities(complete, true)
+                .stream().map(a -> a.getAuthority()).toList())
+                .containsExactlyInAnyOrder("ROLE_USER", "MFA_SATISFIED");
+        AccountView incomplete = new AccountView("a", "casdoor", "h", false, List.of("user"));
+        assertThat(BffSessionAuthenticationWebFilter.buildAuthorities(incomplete, true)
+                .stream().map(a -> a.getAuthority()).toList())
+                .containsExactly("ROLE_USER");
     }
 
     // ── token extraction unit tests ───────────────────────────────────────────
