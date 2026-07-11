@@ -74,15 +74,128 @@ class ServiceTokenBrokerTest {
                 .verifyComplete();
     }
 
+    // ── Mastodon mint = the REAL OAuth contract (app creds + grant/register) ─────
+    // The old bare {grant_type,username,password} body (mock-bff port) never worked
+    // against any real doorkeeper (401 invalid_client). These drive the full flow
+    // with a PATH-ROUTED stub: /api/v1/apps → creds; /oauth/token consumed in call
+    // order (password grant first, client_credentials second); /api/v1/accounts.
+
+    private static final String APP_CREDS =
+            "{\"client_id\":\"cid-1\",\"client_secret\":\"csec-1\"}";
+
+    /** Routes by request path; each path's responses are consumed IN ORDER (last repeats). */
+    private static ExchangeFunction routedStub(java.util.Map<String, java.util.List<ClientResponse>> routes,
+                                               java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> hits) {
+        return request -> {
+            String path = request.url().getPath();
+            java.util.List<ClientResponse> rs = routes.get(path);
+            if (rs == null) {
+                return Mono.just(ClientResponse.create(HttpStatus.NOT_FOUND)
+                        .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"error\":\"unrouted path " + path + "\"}").build());
+            }
+            int n = hits.computeIfAbsent(path, k -> new java.util.concurrent.atomic.AtomicInteger())
+                    .getAndIncrement();
+            return Mono.just(rs.get(Math.min(n, rs.size() - 1)));
+        };
+    }
+
+    private static ClientResponse json(HttpStatus status, String body) {
+        return ClientResponse.create(status)
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .body(body).build();
+    }
+
+    private static ServiceTokenBroker mastodonBroker(java.util.Map<String, java.util.List<ClientResponse>> routes,
+                                                     java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> hits) {
+        WebClient hs = WebClient.builder().exchangeFunction(routedStub(routes, hits)).build();
+        HsTokenCustody custody = mock(HsTokenCustody.class);
+        when(custody.upsert(any(), any(), any(), any(), any(), any())).thenReturn(Mono.empty());
+        HsTokenRevocationHashWriter hashWriter = mock(HsTokenRevocationHashWriter.class);
+        when(hashWriter.recordBrokered(any(), any(), any())).thenReturn(Mono.empty());
+        return new ServiceTokenBroker(hs, hs, "svc-pw", "e2e.local", custody, hashWriter);
+    }
+
     @Test
-    void mintMastodon_decodesOauthJson_throughTheBoot4Jackson3Codec() {
-        ServiceTokenBroker broker = brokerFor(
-                "{\"access_token\":\"mst_xyz\",\"token_type\":\"Bearer\"}");
+    void mintMastodon_recoversViaPasswordGrant_withAppCreds() {
+        var hits = new java.util.HashMap<String, java.util.concurrent.atomic.AtomicInteger>();
+        ServiceTokenBroker broker = mastodonBroker(java.util.Map.of(
+                "/api/v1/apps", java.util.List.of(json(HttpStatus.OK, APP_CREDS)),
+                "/oauth/token", java.util.List.of(json(HttpStatus.OK,
+                        "{\"access_token\":\"mst_xyz\",\"token_type\":\"Bearer\"}"))), hits);
 
         StepVerifier.create(broker.mintMastodon("sub-1", "bob"))
-                .assertNext(token ->
-                        assertThat(token.accessToken()).isEqualTo("mst_xyz"))
+                .assertNext(token -> assertThat(token.accessToken()).isEqualTo("mst_xyz"))
                 .verifyComplete();
+        assertThat(hits.get("/api/v1/apps").get()).isEqualTo(1);
+        assertThat(hits.get("/oauth/token").get()).isEqualTo(1); // password grant only
+    }
+
+    @Test
+    void mintMastodon_registersWhenGrantRefused_userTokenReturnedDirectly() {
+        var hits = new java.util.HashMap<String, java.util.concurrent.atomic.AtomicInteger>();
+        ServiceTokenBroker broker = mastodonBroker(java.util.Map.of(
+                "/api/v1/apps", java.util.List.of(json(HttpStatus.OK, APP_CREDS)),
+                "/oauth/token", java.util.List.of(
+                        json(HttpStatus.BAD_REQUEST, "{\"error\":\"invalid_grant\"}"),   // password grant
+                        json(HttpStatus.OK, "{\"access_token\":\"app-tok\"}")),          // client_credentials
+                "/api/v1/accounts", java.util.List.of(json(HttpStatus.OK,
+                        "{\"access_token\":\"mst_new\",\"token_type\":\"Bearer\"}"))), hits);
+
+        StepVerifier.create(broker.mintMastodon("sub-1", "bob"))
+                .assertNext(token -> assertThat(token.accessToken()).isEqualTo("mst_new"))
+                .verifyComplete();
+        assertThat(hits.get("/oauth/token").get()).isEqualTo(2);
+        assertThat(hits.get("/api/v1/accounts").get()).isEqualTo(1);
+    }
+
+    @Test
+    void mintMastodon_appCredsCachedAcrossMints() {
+        var hits = new java.util.HashMap<String, java.util.concurrent.atomic.AtomicInteger>();
+        ServiceTokenBroker broker = mastodonBroker(java.util.Map.of(
+                "/api/v1/apps", java.util.List.of(json(HttpStatus.OK, APP_CREDS)),
+                "/oauth/token", java.util.List.of(json(HttpStatus.OK,
+                        "{\"access_token\":\"mst_xyz\"}"))), hits);
+
+        StepVerifier.create(broker.mintMastodon("sub-1", "bob")).expectNextCount(1).verifyComplete();
+        StepVerifier.create(broker.mintMastodon("sub-1", "bob")).expectNextCount(1).verifyComplete();
+        assertThat(hits.get("/api/v1/apps").get()).isEqualTo(1); // registered once, cached
+    }
+
+    @Test
+    void mintMastodon_localpartFoldedToMastodonCharset() {
+        // 'Bea59B50-15a1.x' → mastodon charset [a-z0-9_]: fold '-'/'.' to '_'.
+        assertThat(ServiceTokenBroker.mastodonLocalpart("Bea59B50-15a1.x@e2e.local"))
+                .isEqualTo("bea59b50_15a1_x");
+        assertThat(ServiceTokenBroker.mastodonLocalpart("---")).isEqualTo("user");
+        // A full casdoor-UUID handle (36 chars folded) truncates to Mastodon's 30-char cap.
+        assertThat(ServiceTokenBroker.mastodonLocalpart("bea59b50-15a1-4efc-82de-87d3fe9b2322"))
+                .isEqualTo("bea59b50_15a1_4efc_82de_87d3fe")
+                .hasSize(30);
+        var hits = new java.util.HashMap<String, java.util.concurrent.atomic.AtomicInteger>();
+        ServiceTokenBroker broker = mastodonBroker(java.util.Map.of(
+                "/api/v1/apps", java.util.List.of(json(HttpStatus.OK, APP_CREDS)),
+                "/oauth/token", java.util.List.of(json(HttpStatus.OK,
+                        "{\"access_token\":\"mst_xyz\"}"))), hits);
+        StepVerifier.create(broker.mintMastodon("sub-1", "Bea59B50-15a1.x"))
+                .assertNext(t -> assertThat(t.localpart()).isEqualTo("bea59b50_15a1_x"))
+                .verifyComplete();
+    }
+
+    @Test
+    void mintMastodon_failsClosed503_whenEmailDomainUnset() {
+        WebClient hs = WebClient.builder()
+                .exchangeFunction(jsonStub("{\"access_token\":\"should-not-be-reached\"}"))
+                .build();
+        ServiceTokenBroker broker = new ServiceTokenBroker(hs, hs, "svc-pw", "",
+                mock(HsTokenCustody.class), mock(HsTokenRevocationHashWriter.class));
+
+        StepVerifier.create(broker.mintMastodon("sub-1", "bob"))
+                .expectErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(ResponseStatusException.class)
+                        .extracting(ex -> ((ResponseStatusException) ex).getStatusCode().value())
+                        .isEqualTo(503))
+                .verify();
     }
 
     // --- 4xx bodies are PROTOCOL, not errors (Synapse UIA / register→login fallback) ----
@@ -164,13 +277,19 @@ class ServiceTokenBrokerTest {
     }
 
     @Test
-    void mintMastodon_oauth4xx_failsClosed_noTokenMinted() {
-        // A 4xx OAuth body is parsed (not thrown) but carries no access_token → the
-        // explicit "no access_token" fail-closed error, never a custody row.
-        var calls = new java.util.concurrent.atomic.AtomicInteger();
-        ServiceTokenBroker broker = brokerForSequence(calls,
-                new HttpStatus[]{HttpStatus.BAD_REQUEST},
-                new String[]{"{\"error\":\"invalid_grant\"}"});
+    void mintMastodon_bothLegsRefused_failsClosed_noTokenMinted() {
+        // Grant refused AND registration refused (e.g. the localpart is taken by an
+        // account this broker does not own — a tootctl-seeded user with a random
+        // password): 4xx bodies are parsed (not thrown) but carry no access_token →
+        // the explicit fail-closed error, never a custody row, never a takeover.
+        var hits = new java.util.HashMap<String, java.util.concurrent.atomic.AtomicInteger>();
+        ServiceTokenBroker broker = mastodonBroker(java.util.Map.of(
+                "/api/v1/apps", java.util.List.of(json(HttpStatus.OK, APP_CREDS)),
+                "/oauth/token", java.util.List.of(
+                        json(HttpStatus.BAD_REQUEST, "{\"error\":\"invalid_grant\"}"),
+                        json(HttpStatus.OK, "{\"access_token\":\"app-tok\"}")),
+                "/api/v1/accounts", java.util.List.of(json(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "{\"error\":\"Validation failed: Username has already been taken\"}"))), hits);
 
         StepVerifier.create(broker.mintMastodon("sub-1", "bob"))
                 .expectErrorSatisfies(e ->

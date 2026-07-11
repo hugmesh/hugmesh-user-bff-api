@@ -145,6 +145,41 @@ class HsReverseProxyStreamingTest {
     }
 
     @Test
+    void forwardingMetadataStripped_clientDefaultProtoWins() {
+        // Inbound X-Forwarded-* / Forwarded never reach the upstream (proxy hygiene:
+        // the BFF is the client on that leg), so the WebClient's own default
+        // X-Forwarded-Proto (asserted on plain-HTTP homeserver legs — mainline
+        // Mastodon's force_ssl 308s anything else) is authoritative. A relayed
+        // inbound "http" would override it via HttpHeaders.put and re-break the leg.
+        AtomicReference<String> xfp = new AtomicReference<>();
+        AtomicReference<String> xff = new AtomicReference<>();
+        upstream = HttpServer.create().host("127.0.0.1").port(0)
+                .route(routes -> routes.get("/api/v1/accounts/verify_credentials", (req, res) -> {
+                    xfp.set(req.requestHeaders().get("X-Forwarded-Proto"));
+                    xff.set(req.requestHeaders().get("X-Forwarded-For"));
+                    return res.sendString(Mono.just("{\"ok\":true}"));
+                }))
+                .bindNow();
+        servers.add(upstream);
+
+        WebClient upstreamClient = WebClient.builder()
+                .baseUrl("http://127.0.0.1:" + upstream.port())
+                .defaultHeader("X-Forwarded-Proto", "https")   // the HsProxyConfig plain-HTTP posture
+                .build();
+        HsReverseProxy proxy = new HsReverseProxy(upstreamClient);
+        WebClient client = proxyClient(proxy, Mono.just("NATIVE-TOKEN"), Mono.just("REMINTED"));
+
+        String body = client.get().uri("/proxy/api/v1/accounts/verify_credentials")
+                .header("X-Forwarded-Proto", "http")           // the caller's edge metadata
+                .header("X-Forwarded-For", "203.0.113.7")
+                .retrieve().bodyToMono(String.class).block(Duration.ofSeconds(10));
+
+        assertThat(body).contains("ok");
+        assertThat(xfp.get()).isEqualTo("https"); // default survived; inbound stripped
+        assertThat(xff.get()).isNull();
+    }
+
+    @Test
     void refreshOn401_secondFailureFailsClosedWith401() {
         upstream = HttpServer.create().host("127.0.0.1").port(0)
                 .route(routes -> routes.get("/_matrix/client/v3/account/whoami", (req, res) -> {

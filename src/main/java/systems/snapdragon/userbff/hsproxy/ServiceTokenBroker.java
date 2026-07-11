@@ -56,11 +56,20 @@ public class ServiceTokenBroker {
      */
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** OAuth scopes for the broker's app + minted user tokens (Mastodon/Akkoma). */
+    private static final String MASTODON_SCOPES = "read write follow";
+
     private final WebClient matrix;
     private final WebClient mastodon;
     private final String svcPassword;
+    private final String mastodonEmailDomain;
     private final HsTokenCustody custody;
     private final HsTokenRevocationHashWriter hashWriter;
+
+    /** Lazily-registered doorkeeper app creds ({@code client_id}/{@code client_secret})
+     *  — see {@link #ensureMastodonApp}. In-process cache only. */
+    private final java.util.concurrent.atomic.AtomicReference<JsonNode> mastodonApp =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
     /**
      * Base URLs default to the per-pod mTLS proxy sidecars (the D6 resolved
@@ -75,13 +84,25 @@ public class ServiceTokenBroker {
             @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl,
             @Value("${app.hs-token.mastodon-url:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}") String mastodonUrl,
             @Value("${app.hs-token.svc-password}") String svcPassword,
+            @Value("${app.hs-token.mastodon-email-domain:}") String mastodonEmailDomain,
             HsTokenCustody custody,
             HsTokenRevocationHashWriter hashWriter) {
         HttpClient httpClient = mtls.customize(HttpClient.create());
         ReactorClientHttpConnector connector = new ReactorClientHttpConnector(httpClient);
         this.matrix = WebClient.builder().baseUrl(matrixUrl).clientConnector(connector).build();
-        this.mastodon = WebClient.builder().baseUrl(mastodonUrl).clientConnector(connector).build();
+        // Plain-HTTP homeserver base (the compose stack talks to mastodon-web:3000
+        // directly, no TLS sidecar): assert the edge protocol so mainline Mastodon's
+        // force_ssl doesn't 308 every API call (its /health is exempt, so the service
+        // LOOKS fine while every real call bounces). The cluster's akkoma-proxy leg is
+        // https, so the header is never added there — the sidecar owns proto metadata.
+        WebClient.Builder mastodonBuilder = WebClient.builder()
+                .baseUrl(mastodonUrl).clientConnector(connector);
+        if (mastodonUrl != null && mastodonUrl.startsWith("http://")) {
+            mastodonBuilder.defaultHeader("X-Forwarded-Proto", "https");
+        }
+        this.mastodon = mastodonBuilder.build();
         this.svcPassword = svcPassword;
+        this.mastodonEmailDomain = mastodonEmailDomain;
         this.custody = custody;
         this.hashWriter = hashWriter;
     }
@@ -93,8 +114,16 @@ public class ServiceTokenBroker {
      */
     ServiceTokenBroker(WebClient matrix, WebClient mastodon, String svcPassword,
                        HsTokenCustody custody, HsTokenRevocationHashWriter hashWriter) {
+        this(matrix, mastodon, svcPassword, "e2e.local", custody, hashWriter);
+    }
+
+    /** Test seam with an explicit mastodon email domain. */
+    ServiceTokenBroker(WebClient matrix, WebClient mastodon, String svcPassword,
+                       String mastodonEmailDomain,
+                       HsTokenCustody custody, HsTokenRevocationHashWriter hashWriter) {
         this.matrix = matrix;
         this.mastodon = mastodon;
+        this.mastodonEmailDomain = mastodonEmailDomain;
         this.svcPassword = svcPassword;
         this.custody = custody;
         this.hashWriter = hashWriter;
@@ -170,24 +199,143 @@ public class ServiceTokenBroker {
     }
 
     /**
-     * Mint (or re-mint) a Mastodon homeserver-native token via the OAuth password grant
-     * for {@code ownerSubject} whose handle is {@code localpart}. On success the token
-     * (+ refresh + expiry when present) is encrypted + upserted into the custody row AND
-     * its hash is written to the gateway registry. Returns the in-process token.
+     * Mastodon/Akkoma localparts allow ONLY {@code [a-z0-9_]} (Mastodon rejects the
+     * {@code .-=/} the Matrix charset permits with "must contain only letters, numbers
+     * and underscores") and are capped at 30 CHARACTERS ("Username is too long
+     * (maximum is 30 characters)" — live-verified; a folded 36-char casdoor-UUID handle
+     * trips it). Disallowed characters FOLD to {@code '_'} (position-preserving, so
+     * {@code a-b} and {@code a.b} stay distinct from {@code ab}); over-long names
+     * TRUNCATE to 30 (a UUID keeps 28 significant hex chars ≈ 112 bits — collision-safe).
+     */
+    public static String mastodonLocalpart(String handle) {
+        String base = (handle == null ? "user" : handle).split("@")[0].toLowerCase();
+        String cleaned = base.replaceAll("[^a-z0-9_]", "_");
+        if (cleaned.length() > 30) {
+            cleaned = cleaned.substring(0, 30);
+        }
+        return cleaned.replaceAll("_", "").isEmpty() ? "user" : cleaned;
+    }
+
+    /**
+     * Mint (or re-mint) a Mastodon/Akkoma homeserver-native token for
+     * {@code ownerSubject} whose handle is {@code localpart} — the REAL OAuth contract
+     * (live-verified against mainline Mastodon v4.3; Pleroma/Akkoma implements the same
+     * three endpoints):
+     *
+     * <ol>
+     *   <li><b>ensure an OAuth app</b> — {@code POST /api/v1/apps} (unauthenticated),
+     *       cached in-process. Doorkeeper refuses BOTH grants below without
+     *       {@code client_id}/{@code client_secret}, which is why the previous bare
+     *       {@code {grant_type,username,password}} body never worked against any real
+     *       server ({@code 401 invalid_client}) — it was ported from the mock-bff;</li>
+     *   <li><b>recover</b> — password grant WITH the app creds, {@code username} = the
+     *       account EMAIL ({@code <localpart>@<app.hs-token.mastodon-email-domain>};
+     *       Mastodon authenticates by email, Pleroma accepts either); succeeds for an
+     *       account this broker previously registered (password = svc-password);</li>
+     *   <li><b>register</b> — on an empty/invalid grant, {@code client_credentials} →
+     *       app token → {@code POST /api/v1/accounts} (username/email/svc-password/
+     *       agreement), which returns a USER token directly. Needs the instance's
+     *       registrations OPEN ({@code tootctl settings registrations open} on the
+     *       compose stack). Mainline Mastodon additionally holds fresh accounts at
+     *       403 until email-confirm ({@code tootctl accounts modify --confirm} —
+     *       no SMTP on the local stack); Akkoma (the cluster target) requires no
+     *       activation. A localpart someone ELSE owns (e.g. a tootctl-seeded account
+     *       with a random password) fails BOTH legs → fail-closed, never a takeover.</li>
+     * </ol>
+     *
+     * <p>Fail-closed gates: svc-password unset → 503 (shared guard);
+     * {@code app.hs-token.mastodon-email-domain} unset → 503 (the email is load-bearing
+     * for both legs, so there is no meaningful degraded mode). On success the token is
+     * encrypted + upserted into the custody row AND its hash is written to the gateway
+     * registry. Returns the in-process token.
      */
     public Mono<MintedToken> mintMastodon(String ownerSubject, String localpart) {
         Mono<MintedToken> guard = requireServicePassword();
         if (guard != null) {
             return guard;
         }
-        String user = localpart(localpart);
+        if (mastodonEmailDomain == null || mastodonEmailDomain.isBlank()) {
+            log.warn("[hs-token-broker] mastodon mint refused: app.hs-token.mastodon-email-domain is unset (fail-closed 503)");
+            return Mono.error(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "mastodon token brokering unavailable: email domain not configured"));
+        }
+        String user = mastodonLocalpart(localpart);
+        String email = user + "@" + mastodonEmailDomain;
+        return ensureMastodonApp()
+                .flatMap(app -> mastodonPasswordGrant(app, email)
+                        .switchIfEmpty(Mono.defer(() -> mastodonRegister(app, user, email))))
+                .flatMap(node -> buildMastodonToken(node, ownerSubject, user));
+    }
+
+    /**
+     * The OAuth app this broker mints through, created lazily via the unauthenticated
+     * {@code POST /api/v1/apps} and cached in-process (a lost race just creates one
+     * extra doorkeeper app row — harmless). Never persisted; a restart re-registers.
+     */
+    private Mono<JsonNode> ensureMastodonApp() {
+        JsonNode cached = mastodonApp.get();
+        if (cached != null) {
+            return Mono.just(cached);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("client_name", "snapdragon-user-bff-broker");
+        body.put("redirect_uris", "urn:ietf:wg:oauth:2.0:oob");
+        body.put("scopes", MASTODON_SCOPES);
+        return postJson(mastodon, "/api/v1/apps", body)
+                .flatMap(node -> {
+                    if (!node.hasNonNull("client_id") || !node.hasNonNull("client_secret")) {
+                        return Mono.error(new IllegalStateException(
+                                "mastodon mint: app registration returned no client credentials"));
+                    }
+                    mastodonApp.compareAndSet(null, node);
+                    return Mono.just(mastodonApp.get());
+                });
+    }
+
+    /** Password-grant recover leg: yields the token node, or EMPTY when the grant is
+     *  refused (unknown account / wrong password — the cue to try registration). */
+    private Mono<JsonNode> mastodonPasswordGrant(JsonNode app, String email) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("grant_type", "password");
-        body.put("username", user);
+        body.put("username", email);
         body.put("password", svcPassword);
-        // Post the password grant and persist the returned token into the custody store.
+        body.put("client_id", app.path("client_id").asText());
+        body.put("client_secret", app.path("client_secret").asText());
+        body.put("scope", MASTODON_SCOPES);
         return postJson(mastodon, "/oauth/token", body)
-                .flatMap(node -> buildMastodonToken(node, ownerSubject, user));
+                .filter(node -> node.hasNonNull("access_token"));
+    }
+
+    /** Register leg: client_credentials app token → {@code POST /api/v1/accounts},
+     *  which returns a USER token directly on success. */
+    private Mono<JsonNode> mastodonRegister(JsonNode app, String user, String email) {
+        Map<String, Object> tokenBody = new LinkedHashMap<>();
+        tokenBody.put("grant_type", "client_credentials");
+        tokenBody.put("client_id", app.path("client_id").asText());
+        tokenBody.put("client_secret", app.path("client_secret").asText());
+        tokenBody.put("scope", MASTODON_SCOPES);
+        return postJson(mastodon, "/oauth/token", tokenBody)
+                .flatMap(tok -> {
+                    if (!tok.hasNonNull("access_token")) {
+                        return Mono.error(new IllegalStateException(
+                                "mastodon mint: client_credentials grant returned no app token"));
+                    }
+                    Map<String, Object> reg = new LinkedHashMap<>();
+                    reg.put("username", user);
+                    reg.put("email", email);
+                    reg.put("password", svcPassword);
+                    reg.put("agreement", true);
+                    reg.put("locale", "en");
+                    return mastodon.post().uri("/api/v1/accounts")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("Authorization", "Bearer " + tok.path("access_token").asText())
+                            .bodyValue(reg)
+                            .exchangeToMono(resp -> resp.statusCode().is5xxServerError()
+                                    ? resp.createException().flatMap(e -> Mono.<String>error(e))
+                                    : resp.bodyToMono(String.class))
+                            .flatMap(ServiceTokenBroker::parseJson)
+                            .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
+                });
     }
 
     /** Extract access/refresh/expiry from the Mastodon OAuth response and persist the token. */

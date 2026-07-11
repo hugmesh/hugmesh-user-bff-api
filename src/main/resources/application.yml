@@ -272,6 +272,13 @@ app:
     # NEVER a real literal in git: the "test"/"prod-deny-slice" profiles supply a
     # throwaway value; prod sources it from ESO/Vault.
     svc-password: "${APP_HS_TOKEN_SVC_PASSWORD:}"
+    # Email domain for broker-owned Mastodon/Akkoma accounts. Load-bearing for BOTH
+    # mint legs (Mastodon authenticates the password grant by EMAIL, and the register
+    # leg must supply one — <localpart>@<this-domain>), so EMPTY DEFAULT + FAIL-CLOSED:
+    # unset → mastodon mints 503 with a naming message, exactly like svc-password
+    # above. The compose stack sets e2e.local (mastodon-web's EMAIL_DOMAIN_ALLOWLIST);
+    # a cluster deploy picks the domain its Akkoma instance accepts.
+    mastodon-email-domain: "${APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN:}"
     registry:
       enabled: "${APP_HS_TOKEN_REGISTRY_ENABLED:false}"
       base-url: "${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}"

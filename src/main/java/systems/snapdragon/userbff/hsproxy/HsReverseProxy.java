@@ -50,7 +50,13 @@ import java.util.function.BiFunction;
 public class HsReverseProxy {
 
     /** Hop-by-hop + identity headers we never forward inbound→upstream. The inbound
-     *  Authorization (the Casdoor bearer) is dropped here — the native token replaces it. */
+     *  Authorization (the Casdoor bearer) is dropped here — the native token replaces it.
+     *  Forwarding metadata ({@code X-Forwarded-*}/{@code Forwarded}) is stripped too:
+     *  this BFF is the client on the upstream leg, and relaying the caller's edge
+     *  metadata both leaks it and breaks upstreams that trust it (mainline Mastodon's
+     *  force_ssl 308s any request whose {@code X-Forwarded-Proto} isn't https — the
+     *  WebClient bean asserts the correct value itself on a plain-HTTP leg, which a
+     *  relayed inbound value would override). */
     private static final Set<String> STRIP_REQUEST_HEADERS = Set.of(
             HttpHeaders.AUTHORIZATION.toLowerCase(Locale.ROOT),
             HttpHeaders.HOST.toLowerCase(Locale.ROOT),
@@ -60,7 +66,12 @@ public class HsReverseProxy {
             "keep-alive",
             "proxy-authorization",
             "te",
-            "trailer");
+            "trailer",
+            "forwarded",
+            "x-forwarded-proto",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-port");
 
     /** Hop-by-hop headers we never copy back upstream→caller (let the container set them). */
     private static final Set<String> STRIP_RESPONSE_HEADERS = Set.of(
