@@ -128,10 +128,11 @@ public class HsReverseProxy {
 
             // Load the native token (first-use lazy mint on empty), forward the request,
             // and refresh-on-401 if needed.
+            boolean bodyMethod = BODY_METHODS.contains(req.getMethod());
             return loadToken
                     .switchIfEmpty(Mono.defer(() -> firstUseMint(remint)))
                     .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
-                            .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint)));
+                            .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint, bodyMethod)));
         });
     }
 
@@ -197,14 +198,34 @@ public class HsReverseProxy {
         return ApiException.badRequest("invalid upstream path (must be a single-'/'-leading same-host relative path)");
     }
 
-    /** If the upstream returned 401, re-mint once and retry; any second 401 is fail-closed. */
+    /**
+     * If the upstream returned 401, re-mint once and (for a re-issuable bodyless request)
+     * retry; any second 401 is fail-closed.
+     *
+     * <p>BODY METHODS cannot transparently retry: the inbound request body is a once-only
+     * stream ({@code ServerHttpRequest.getBody()} over Reactor Netty allows a single
+     * subscriber) already consumed by the FIRST upstream write, so a second
+     * {@link #exchangeAndRelay} would re-subscribe it and throw ("Only one connection
+     * receive subscriber allowed"), surfacing as a 500 — the refresh-on-401 mechanism was
+     * silently broken for every POST/PUT/PATCH/DELETE. Instead we re-mint (which REFRESHES
+     * the custody row as a side effect) and fail closed 401, so the caller's own retry loads
+     * the freshly-minted token and succeeds. This avoids BOTH the 500 AND the infinite-401
+     * loop that skipping the re-mint would cause (custody would stay stale). Bodyless
+     * requests are freely re-issuable, so they keep the transparent re-mint+retry.
+     */
     private Mono<Void> handleRelayResult(Boolean relayed, ServerWebExchange exchange,
-                                         String fullPath, Mono<String> remint) {
+                                         String fullPath, Mono<String> remint, boolean bodyMethod) {
         if (Boolean.TRUE.equals(relayed)) {
             // First attempt succeeded — nothing more to do.
             return Mono.empty();
         }
-        // Refresh-on-401: re-mint once, retry once, then fail closed.
+        if (bodyMethod) {
+            // Refresh custody for the next request, then fail closed (body not replayable).
+            return remint
+                    .switchIfEmpty(Mono.error(unauthorized("re-mint failed (fail-closed)")))
+                    .then(Mono.error(unauthorized("homeserver token refreshed — retry the request")));
+        }
+        // Bodyless: re-mint once, retry once transparently, then fail closed.
         return remint
                 .switchIfEmpty(Mono.error(unauthorized("re-mint failed (fail-closed)")))
                 .flatMap(fresh -> exchangeAndRelay(exchange, fullPath, fresh))

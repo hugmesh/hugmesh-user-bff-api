@@ -200,4 +200,37 @@ class HsReverseProxyStreamingTest {
         assertThat(status).isEqualTo(401); // fail-closed to the caller
         assertThat(calls.get()).isEqualTo(2); // one initial + one retry, then fail closed
     }
+
+    @Test
+    void bodyMethod_401_refreshesCustodyThenFailsClosed401_neverReSubscribesBody() {
+        // A PUT/POST whose token 401s must NOT re-subscribe the once-only request body on a
+        // retry (that threw "Only one connection receive subscriber allowed" -> 500). Instead:
+        // exactly ONE upstream write (no retry write), the custody row re-minted once (so the
+        // caller's own retry loads a fresh token), and a clean 401 back to the caller.
+        AtomicInteger mints = new AtomicInteger();
+        upstream = HttpServer.create().host("127.0.0.1").port(0)
+                .route(routes -> routes.put("/_matrix/client/v3/rooms/r/send/m.room.message/t",
+                        (req, res) -> {
+                            calls.incrementAndGet();
+                            // Drain the body so a real single-subscription write completes.
+                            return req.receive().aggregate().then(
+                                    res.status(HttpStatus.UNAUTHORIZED.value()).send());
+                        }))
+                .bindNow();
+        servers.add(upstream);
+
+        HsReverseProxy proxy = new HsReverseProxy(clientFor(upstream));
+        Mono<String> remint = Mono.fromSupplier(() -> { mints.incrementAndGet(); return "FRESH"; });
+        WebClient client = proxyClient(proxy, Mono.just("STALE"), remint);
+
+        Integer status = client.put().uri("/proxy/_matrix/client/v3/rooms/r/send/m.room.message/t")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer CASDOOR-JWT")
+                .bodyValue("{\"msgtype\":\"m.text\",\"body\":\"hi\"}")
+                .exchangeToMono(r -> Mono.just(r.statusCode().value()))
+                .block(Duration.ofSeconds(10));
+
+        assertThat(status).isEqualTo(401);   // clean fail-closed, NOT a 500 from a re-subscribe
+        assertThat(calls.get()).isEqualTo(1); // exactly ONE upstream write (no body-replay retry)
+        assertThat(mints.get()).isEqualTo(1); // custody refreshed once for the caller's retry
+    }
 }
