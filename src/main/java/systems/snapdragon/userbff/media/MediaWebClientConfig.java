@@ -8,6 +8,7 @@ import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 import systems.snapdragon.userbff.federation.FederationHttpClientSsl;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.federation.FederationWebClientConfig;
 
 import java.time.Duration;
@@ -70,24 +71,26 @@ public class MediaWebClientConfig {
     public HomeserverMediaClient homeserverMediaClient(
             MediaPoisoningProperties props,
             FederationHttpClientSsl mtls,
+            AdminBffInternalClient adminBff,
             @Value("${app.media.proxy.mastodon.enabled:false}") boolean mastodonEnabled,
             @Value("${app.media.proxy.mastodon.base-url:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}") String mastodonUrl,
             @Value("${app.media.proxy.matrix.enabled:false}") boolean matrixEnabled,
             @Value("${app.media.proxy.matrix.base-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl) {
-        WebClient mastodon = mastodonEnabled ? proxyClient(mastodonUrl, mtls, props) : null;
-        WebClient matrix = matrixEnabled ? proxyClient(matrixUrl, mtls, props) : null;
+        WebClient mastodon = mastodonEnabled ? proxyClient(mastodonUrl, mtls, props, adminBff) : null;
+        WebClient matrix = matrixEnabled ? proxyClient(matrixUrl, mtls, props, adminBff) : null;
         return new HomeserverMediaClient(mastodon, matrix);
     }
 
     /** A WebClient to one homeserver proxy: mTLS client-presentation + caller-bearer
-     *  forward + a buffer sized for the (poisoned) image bytes. */
+     *  forward (with native-login session→custody-JWT exchange) + a buffer sized for the
+     *  (poisoned) image bytes. */
     private static WebClient proxyClient(String baseUrl, FederationHttpClientSsl mtls,
-                                         MediaPoisoningProperties props) {
+                                         MediaPoisoningProperties props, AdminBffInternalClient adminBff) {
         HttpClient httpClient = mtls.customize(HttpClient.create());
         return WebClient.builder()
                 .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .filter(FederationWebClientConfig.bearerTokenForwardingFilter())
+                .filter(FederationWebClientConfig.bearerTokenForwardingFilter(adminBff))
                 .codecs(c -> c.defaultCodecs().maxInMemorySize((int) props.getMaxUploadBytes() + 4096))
                 .build();
     }

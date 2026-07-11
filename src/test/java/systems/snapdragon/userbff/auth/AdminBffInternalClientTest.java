@@ -56,6 +56,12 @@ class AdminBffInternalClientTest {
                                 + "\"registrationComplete\":false,\"status\":\"active\","
                                 + "\"mfaSatisfied\":false}").build());
             }
+            if (path.endsWith("/session/exchange")) {
+                // admin-bff exchange response shape: {"bearer": <custody JWT>}.
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body("{\"bearer\":\"custody-jwt-xyz\"}").build());
+            }
             // accounts/ensure (and getAccount/complete) -> an account view
             return Mono.just(ClientResponse.create(HttpStatus.OK)
                     .header("Content-Type", "application/json")
@@ -91,6 +97,42 @@ class AdminBffInternalClientTest {
         ClientRequest req = recorder.requests.get(0);
         assertThat(req.url().getPath()).isEqualTo("/bff/internal/accounts/ensure");
         assertThat(req.headers().getFirst("X-Internal-Token")).isEqualTo("s3cr3t-internal");
+    }
+
+    @Test
+    void liveClient_exchangeSession_swapsBffTokenForCustodyBearer() {
+        Recorder recorder = new Recorder();
+        AdminBffInternalClient client = liveClient(recorder, "s3cr3t-internal");
+
+        StepVerifier.create(client.exchangeSession("bff_opaque"))
+                .assertNext(bearer -> assertThat(bearer).isEqualTo("custody-jwt-xyz"))
+                .verifyComplete();
+
+        ClientRequest req = recorder.requests.get(0);
+        assertThat(req.url().getPath()).isEqualTo("/bff/internal/session/exchange");
+        assertThat(req.method().name()).isEqualTo("POST");
+        assertThat(req.headers().getFirst("X-Internal-Token")).isEqualTo("s3cr3t-internal");
+    }
+
+    @Test
+    void disabledClient_exchangeSession_failsClosed() {
+        AdminBffInternalClient stub = new AdminBffInternalClient(null);
+        assertThat(stub.enabled()).isFalse();
+        StepVerifier.create(stub.exchangeSession("bff_x"))
+                .expectError(IllegalStateException.class)
+                .verify();
+    }
+
+    @Test
+    void liveClient_exchangeSession_blankBearer_errors() {
+        // A 2xx body with no usable bearer must NOT resolve to a forwardable value.
+        ExchangeFunction blankBearer = request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json").body("{\"bearer\":\"\"}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(blankBearer).build());
+        StepVerifier.create(client.exchangeSession("bff_x"))
+                .expectError(IllegalStateException.class)
+                .verify();
     }
 
     @Test

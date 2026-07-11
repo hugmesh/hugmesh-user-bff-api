@@ -163,6 +163,47 @@ public class AdminBffInternalClient {
                         e -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session"));
     }
 
+    /**
+     * Swap an opaque {@code bff_} SESSION token for the INTERNAL custody Casdoor JWT
+     * (admin-bff {@code POST /bff/internal/session/exchange}, body {@code {"token": …}},
+     * response {@code {"bearer": <jwt>}}). This is the SAME back-channel the gateway's own
+     * {@code BffJwtExchangeWebFilter} uses; user-bff calls it to obtain a REAL, forwardable
+     * bearer for a native-login caller, whose SecurityContext principal is the SYNTHETIC
+     * (non-forwardable) Jwt {@code BffSessionAuthenticationWebFilter} builds — so the
+     * downstream federation-api / homeserver-proxy legs authenticate as the actual user
+     * instead of going out credential-less (which federation-api rejects 401).
+     *
+     * <p>admin-bff's exchange endpoint carries a fail-closed suspension gate (a
+     * suspended/banned session's swap is refused 403), so this never mints a usable bearer
+     * for a curtailed account. The returned JWT is a live bearer credential and must only
+     * be forwarded to a trusted in-mesh service over the same mTLS transport, never handed
+     * to the browser.
+     *
+     * <p>Fail-closed stub when the OIDC surface is disabled. Any non-2xx (unknown/expired
+     * session 404, suspended 403, custody disabled 503) propagates as the raw error so the
+     * caller can decide NOT to forward (the forwarding filter treats any failure as "send
+     * no bearer" — fail-closed downstream).
+     */
+    public Mono<String> exchangeSession(String bffToken) {
+        if (http == null) {
+            return stub("exchangeSession");
+        }
+        return http.post().uri("/bff/internal/session/exchange")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", bffToken))
+                .retrieve()
+                .bodyToMono(EXCHANGE_RESPONSE_TYPE)
+                .flatMap(body -> {
+                    String bearer = body == null ? null : body.get("bearer");
+                    return (bearer == null || bearer.isBlank())
+                            ? Mono.error(new IllegalStateException("exchange returned no bearer"))
+                            : Mono.just(bearer);
+                });
+    }
+
+    private static final org.springframework.core.ParameterizedTypeReference<Map<String, String>>
+            EXCHANGE_RESPONSE_TYPE = new org.springframework.core.ParameterizedTypeReference<>() {};
+
     /** Mark the account's registration as complete (the post-profile step). */
     public Mono<AccountView> completeAccount(String accountId) {
         if (http == null) {

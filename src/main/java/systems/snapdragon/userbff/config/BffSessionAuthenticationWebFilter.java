@@ -184,6 +184,14 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *  mod-bff-api's {@code BffCookieAuthenticationWebFilter.MFA_SATISFIED} constant. */
     static final String MFA_SATISFIED = "MFA_SATISFIED";
 
+    /** Reactor context key holding the RAW {@code bff_} session token of an authenticated
+     *  native-login request. Populated by this filter (AUTHENTICATE branch) so the outbound
+     *  bearer-forwarding filters can swap it for a real custody JWT — the SecurityContext's
+     *  synthetic Jwt principal carries only a non-forwardable marker, never a credential.
+     *  Public so {@code FederationWebClientConfig}/{@code MediaWebClientConfig} read the same
+     *  key without a second, driftable literal. */
+    public static final String BFF_SESSION_TOKEN_CONTEXT_KEY = "snapdragon.userbff.bff-session-token";
+
     /** Response header naming why a request was explicitly denied by this filter
      *  (suspended/banned branch only) — mirrors the gateway's {@code X-BFF-Denied}. */
     private static final String DENIED_HEADER = "X-Bff-Denied";
@@ -249,13 +257,21 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
         }
 
         return resolve(client, token)
-                .flatMap(decision -> apply(decision, exchange, chain))
+                .flatMap(decision -> apply(decision, token, exchange, chain))
                 .onErrorResume(IntrospectionFailure.class, ex -> failClosed(exchange, ex));
     }
 
-    private Mono<Void> apply(Decision d, ServerWebExchange exchange, WebFilterChain chain) {
+    private Mono<Void> apply(Decision d, String token, ServerWebExchange exchange, WebFilterChain chain) {
         return switch (d.kind()) {
+            // Stash the RAW bff_ token in the Reactor context alongside the Authentication.
+            // The SecurityContext principal is a SYNTHETIC, non-forwardable Jwt (its token
+            // value is a marker, not a credential), so the outbound bearer-forwarding filters
+            // ({@code FederationWebClientConfig}/{@code MediaWebClientConfig}) read this key to
+            // swap the session for a real custody JWT at forward time (see that filter). The
+            // raw token lives ONLY in the request-scoped Reactor context, never in the
+            // principal / a header / a log line.
             case AUTHENTICATE -> chain.filter(exchange)
+                    .contextWrite(ctx -> ctx.put(BFF_SESSION_TOKEN_CONTEXT_KEY, token))
                     .contextWrite(ReactiveSecurityContextHolder.withAuthentication(d.authentication()));
             case PASS_THROUGH -> chain.filter(exchange);
             case FORBIDDEN -> reject(exchange, HttpStatus.FORBIDDEN, "account-" + d.reason());
