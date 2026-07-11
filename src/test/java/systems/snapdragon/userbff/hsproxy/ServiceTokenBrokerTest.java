@@ -85,6 +85,99 @@ class ServiceTokenBrokerTest {
                 .verifyComplete();
     }
 
+    // --- 4xx bodies are PROTOCOL, not errors (Synapse UIA / register→login fallback) ----
+    // retrieve() threw on any 4xx, so the UIA leg (Synapse returns the stage-2 `session`
+    // in a 401) could never complete and the register→login fallback never ran — the
+    // Matrix mint was dead against any real UIA-flow Synapse. These pin the exchange-
+    // based decode: 401/403 bodies flow through the protocol handling; 5xx stays an error.
+
+    /** An exchange that answers request N with statuses[N]/bodies[N] (last repeats). */
+    private static ExchangeFunction sequenceStub(java.util.concurrent.atomic.AtomicInteger calls,
+                                                 HttpStatus[] statuses, String[] bodies) {
+        return request -> {
+            int n = Math.min(calls.getAndIncrement(), bodies.length - 1);
+            return Mono.just(ClientResponse.create(statuses[n])
+                    .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                    .body(bodies[n])
+                    .build());
+        };
+    }
+
+    private static ServiceTokenBroker brokerForSequence(java.util.concurrent.atomic.AtomicInteger calls,
+                                                        HttpStatus[] statuses, String[] bodies) {
+        WebClient hs = WebClient.builder()
+                .exchangeFunction(sequenceStub(calls, statuses, bodies))
+                .build();
+        HsTokenCustody custody = mock(HsTokenCustody.class);
+        when(custody.upsert(any(), any(), any(), any(), any(), any()))
+                .thenReturn(Mono.empty());
+        HsTokenRevocationHashWriter hashWriter = mock(HsTokenRevocationHashWriter.class);
+        when(hashWriter.recordBrokered(any(), any(), any()))
+                .thenReturn(Mono.empty());
+        return new ServiceTokenBroker(hs, hs, "svc-pw", custody, hashWriter);
+    }
+
+    @Test
+    void mintMatrix_completesUiaRegister_throughThe401SessionBody() {
+        // Real Synapse UIA shape: stage-1 register → 401 {"session","flows"}; the broker
+        // must PARSE that 401 (not throw) and drive stage-2 m.login.dummy → token.
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        ServiceTokenBroker broker = brokerForSequence(calls,
+                new HttpStatus[]{HttpStatus.UNAUTHORIZED, HttpStatus.OK},
+                new String[]{
+                        "{\"session\":\"sess-1\",\"flows\":[{\"stages\":[\"m.login.dummy\"]}],\"params\":{}}",
+                        "{\"access_token\":\"syt_uia\",\"user_id\":\"@bob:hs\"}"});
+
+        StepVerifier.create(broker.mintMatrix("sub-1", "bob"))
+                .assertNext(token -> assertThat(token.accessToken()).isEqualTo("syt_uia"))
+                .verifyComplete();
+        assertThat(calls.get()).isEqualTo(2); // stage-1 + stage-2, no login needed
+    }
+
+    @Test
+    void mintMatrix_fallsBackToLogin_whenRegistrationRefused() {
+        // Registration disabled (or localpart taken): the 4xx register body has no
+        // session/access_token → the broker falls through to password login.
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        ServiceTokenBroker broker = brokerForSequence(calls,
+                new HttpStatus[]{HttpStatus.FORBIDDEN, HttpStatus.OK},
+                new String[]{
+                        "{\"errcode\":\"M_FORBIDDEN\",\"error\":\"Registration has been disabled\"}",
+                        "{\"access_token\":\"syt_login\",\"user_id\":\"@bob:hs\"}"});
+
+        StepVerifier.create(broker.mintMatrix("sub-1", "bob"))
+                .assertNext(token -> assertThat(token.accessToken()).isEqualTo("syt_login"))
+                .verifyComplete();
+        assertThat(calls.get()).isEqualTo(2); // refused register + successful login
+    }
+
+    @Test
+    void mintMatrix_homeserver5xx_staysAnError() {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        ServiceTokenBroker broker = brokerForSequence(calls,
+                new HttpStatus[]{HttpStatus.INTERNAL_SERVER_ERROR},
+                new String[]{"{\"error\":\"boom\"}"});
+
+        StepVerifier.create(broker.mintMatrix("sub-1", "bob"))
+                .expectError()
+                .verify();
+    }
+
+    @Test
+    void mintMastodon_oauth4xx_failsClosed_noTokenMinted() {
+        // A 4xx OAuth body is parsed (not thrown) but carries no access_token → the
+        // explicit "no access_token" fail-closed error, never a custody row.
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        ServiceTokenBroker broker = brokerForSequence(calls,
+                new HttpStatus[]{HttpStatus.BAD_REQUEST},
+                new String[]{"{\"error\":\"invalid_grant\"}"});
+
+        StepVerifier.create(broker.mintMastodon("sub-1", "bob"))
+                .expectErrorSatisfies(e ->
+                        assertThat(e).hasMessageContaining("no access_token"))
+                .verify();
+    }
+
     // --- Fail-closed when the service password is unprovisioned (empty default) ---------
     // app.hs-token.svc-password now carries an EMPTY default so an unset secret boots the
     // context cleanly instead of crashing on an unresolved placeholder; a mint must then

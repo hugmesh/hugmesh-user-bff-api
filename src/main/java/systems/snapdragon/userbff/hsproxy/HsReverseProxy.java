@@ -27,7 +27,10 @@ import java.util.function.BiFunction;
  *
  * <ol>
  *   <li>resolves the homeserver-native token for the owner (the controller passes a
- *       loader keyed on the VALIDATED JWT subject — never a body field);</li>
+ *       loader keyed on the VALIDATED JWT subject — never a body field); when NO custody
+ *       row exists yet (first use — nothing seeds custody at login time, for native login
+ *       OR legacy OAuth), lazily mints one via the controller's broker mono instead of
+ *       failing closed;</li>
  *   <li>STRIPS the inbound Casdoor bearer and any hop-by-hop headers, INJECTS the
  *       decrypted homeserver-native token as {@code Authorization: Bearer <native>};</li>
  *   <li>forwards the method + remaining path + query + body over the supplied mTLS
@@ -78,8 +81,10 @@ public class HsReverseProxy {
     /**
      * Forward one exchange. {@code upstreamPath} is the homeserver-native path (the
      * {@code /bff/user/{platform}} prefix already stripped). {@code loadToken} yields the
-     * decrypted native token (fail-closed empty → 401). {@code remint} re-mints on a 401
-     * and yields the fresh native token (empty → fail-closed 401).
+     * decrypted native token; an EMPTY load (no custody row yet) triggers a FIRST-USE
+     * lazy mint via {@code remint} — see {@link #firstUseMint}. {@code remint} also
+     * re-mints on an upstream 401 and yields the fresh native token (empty → fail-closed
+     * 401).
      *
      * <p>SSRF GUARD: {@code upstreamPath} MUST be a single-{@code '/'}-leading, same-host
      * RELATIVE path. A scheme-relative authority ({@code //evil.com/x}), a backslash
@@ -110,12 +115,43 @@ public class HsReverseProxy {
                     .toUri();
             String fullPath = relativeUpstream.toString();
 
-            // Load the native token, forward the request, and refresh-on-401 if needed.
+            // Load the native token (first-use lazy mint on empty), forward the request,
+            // and refresh-on-401 if needed.
             return loadToken
-                    .switchIfEmpty(Mono.error(unauthorized("no custody token for this user/platform")))
+                    .switchIfEmpty(Mono.defer(() -> firstUseMint(remint)))
                     .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
                             .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint)));
         });
+    }
+
+    /**
+     * FIRST-USE lazy mint: no custody row exists for this owner/platform yet, so mint one
+     * now instead of failing closed. Nothing seeds {@code hs_service_token} at login time
+     * — the legacy OAuth flow relied on the same broker at provision/first-401 time, and
+     * native login (the synthetic bff_-session principal) mints nothing at completion —
+     * so before this fallback a native-login caller's FIRST hsproxy request died here with
+     * "no custody token" even though the controller had a working mint wired up one
+     * argument away (it was only ever fired on an upstream 401). Reusing the controller's
+     * {@code remint} mono keeps the semantics identical to the 401 leg: mint + encrypt +
+     * upsert keyed on the CURRENT validated JWT subject + gateway revocation-hash write —
+     * so the row self-seeds under whichever subject shape the caller authenticated with
+     * (native casdoor id or legacy provider id) and the next request takes the plain
+     * custody-load path. Same pattern as {@code StickerPackRegistrationService}'s
+     * mint-on-empty.
+     *
+     * <p>Failure posture: a mint that completes EMPTY is the same fail-closed 401 as the
+     * old empty-custody error; a mint that ERRORS with its own status (e.g. the broker's
+     * unconfigured-password 503) surfaces verbatim; any other failure (homeserver sidecar
+     * unreachable/refusing) maps to 502 — the homeserver leg is down, which is neither the
+     * caller's fault (4xx) nor this service's (500).
+     */
+    private static Mono<String> firstUseMint(Mono<String> remint) {
+        return remint
+                .switchIfEmpty(Mono.error(unauthorized("no custody token and first-use mint yielded none (fail-closed)")))
+                .onErrorMap(
+                        err -> !(err instanceof ResponseStatusException) && !(err instanceof ApiException),
+                        err -> new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                                "first-use homeserver token mint failed", err));
     }
 
     /**

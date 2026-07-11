@@ -239,11 +239,23 @@ public class ServiceTokenBroker {
         return client.post().uri(path)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
-                .retrieve()
+                // The homeserver speaks PROTOCOL through 4xx bodies: Synapse's UIA
+                // register flow returns the stage-2 `session` in a 401 (which
+                // resolveMatrixToken consumes), a taken localpart is a 400
+                // M_USER_IN_USE the register→login fallback must fall through on,
+                // and a registration-disabled 403 likewise falls through to the
+                // password login. retrieve() throws on ANY 4xx and killed the mint
+                // at stage 1 — the UIA leg could never complete. Parse 2xx/4xx
+                // bodies; only 5xx (homeserver-side failure, no protocol meaning)
+                // stays an error. Downstream stays fail-closed either way: a 4xx
+                // body without access_token/session ends in the explicit
+                // "no access_token" error, never a minted row.
                 // Boot 4's reactive JSON codec is Jackson 3 (tools.jackson) and
                 // cannot decode into this Jackson-2 JsonNode; read the body as a
                 // String (always codec-safe) and parse it with the Jackson-2 mapper.
-                .bodyToMono(String.class)
+                .exchangeToMono(resp -> resp.statusCode().is5xxServerError()
+                        ? resp.createException().flatMap(e -> Mono.<String>error(e))
+                        : resp.bodyToMono(String.class))
                 .flatMap(ServiceTokenBroker::parseJson)
                 .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
     }
