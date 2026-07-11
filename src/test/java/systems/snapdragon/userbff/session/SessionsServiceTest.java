@@ -38,6 +38,18 @@ class SessionsServiceTest {
         return b.build();
     }
 
+    /** A synthetic native-login principal exactly as BffSessionAuthenticationWebFilter builds
+     *  it: token value prefixed with the marker, {@code sub} = the account id. */
+    private static Jwt syntheticSessionJwt(String accountId, java.util.Map<String, Object> extraClaims) {
+        Jwt.Builder b = Jwt.withTokenValue(
+                        systems.snapdragon.userbff.config.BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER + accountId)
+                .header("typ", "bff-synthetic-principal")
+                .subject(accountId);
+        extraClaims.forEach(b::claim);
+        b.issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(3600));
+        return b.build();
+    }
+
     // ── account derivation = the production AuthController.accountFromJwt mapping ──────────
 
     @Test
@@ -61,6 +73,48 @@ class SessionsServiceTest {
     @Test
     void accountIdFromJwt_neitherClaim_isUnauthorized() {
         Jwt jwt = jwt(java.util.Map.of("name", "nobody"));
+        assertThatThrownBy(() -> SessionsService.accountIdFromJwt(jwt))
+                .isInstanceOf(ApiException.class);
+    }
+
+    // ── native-login synthetic principal: sub IS the account id (the casdoor gap fix) ─────
+
+    @Test
+    void accountIdFromJwt_syntheticSessionPrincipal_usesSubjectVerbatim() {
+        // The exact id admin-bff stores in bff_session.account_id for a native-login casdoor
+        // account — must be used as-is, NOT re-derived to a wrong discord:/google: id.
+        Jwt jwt = syntheticSessionJwt("casdoor:14d1072e-f2e0-438e-a3cc-6a8579f36c5a", java.util.Map.of());
+        assertThat(SessionsService.accountIdFromJwt(jwt))
+                .isEqualTo("casdoor:14d1072e-f2e0-438e-a3cc-6a8579f36c5a");
+    }
+
+    @Test
+    void accountIdFromJwt_syntheticPrincipal_subjectWins_overPreferredUsername() {
+        // #108's synthetic Jwt ALSO sets preferred_username=handle; the marker path must take
+        // precedence so a native-login account is never mis-mapped to discord:<handle> (the
+        // exact bug that made /bff/user/sessions return an empty list live).
+        Jwt jwt = syntheticSessionJwt("casdoor:abc", java.util.Map.of("preferred_username", "somehandle"));
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("casdoor:abc");
+    }
+
+    @Test
+    void accountIdFromJwt_syntheticPrincipal_googleProvider_usesSubjectNotEmailDerivation() {
+        // Even for a google-provider synthetic principal (email claim present), the stored
+        // account id is sub verbatim — the marker path must not fall through to google: derivation
+        // (which would only coincidentally match, and only when handle==email-localpart).
+        Jwt jwt = syntheticSessionJwt("google:alice@example.com",
+                java.util.Map.of("email", "alice@example.com"));
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("google:alice@example.com");
+    }
+
+    @Test
+    void accountIdFromJwt_syntheticPrincipal_blankSubject_isUnauthorized_notFallthrough() {
+        Jwt jwt = Jwt.withTokenValue(
+                        systems.snapdragon.userbff.config.BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER)
+                .header("typ", "bff-synthetic-principal")
+                .claim("preferred_username", "wouldbe-discord")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(3600))
+                .build();
         assertThatThrownBy(() -> SessionsService.accountIdFromJwt(jwt))
                 .isInstanceOf(ApiException.class);
     }

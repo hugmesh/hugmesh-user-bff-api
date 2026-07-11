@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.web.ApiException;
+import systems.snapdragon.userbff.config.BffSessionAuthenticationWebFilter;
 import systems.snapdragon.userbff.session.SessionsInternalClient.BffSessionWire;
 
 import java.nio.charset.StandardCharsets;
@@ -78,15 +79,40 @@ public class SessionsService {
     }
 
     /**
-     * Derive the caller's {@code bff_session.account_id} from the validated JWT, EXACTLY as
-     * admin-bff's production {@code AuthController.accountFromJwt} does: an {@code email}
+     * Derive the caller's {@code bff_session.account_id} from the validated JWT.
+     *
+     * <p><b>Native-login (the live path):</b> the principal is the SYNTHETIC {@link Jwt}
+     * built by {@link BffSessionAuthenticationWebFilter} for a {@code bff_} session, whose
+     * {@code sub} IS the admin-bff account id ({@code provider:handle}, e.g.
+     * {@code casdoor:<uuid>}) — the EXACT value {@code AccountStore.newSession} writes into
+     * {@code bff_session.account_id}. Use it directly, recognised by the synthetic token's
+     * marker ({@link BffSessionAuthenticationWebFilter#SYNTHETIC_TOKEN_MARKER}). Before this,
+     * a casdoor-provider account fell through to the {@code preferred_username} branch below
+     * and was mis-derived as a nonexistent {@code discord:<handle>} id, so
+     * {@code /bff/user/sessions} listed NONE of the caller's real sessions (live: {@code
+     * 200 []} despite admin-bff holding rows for {@code casdoor:<uuid>}) and revoke 404'd —
+     * the whole active-session-management surface was silently dead for native login.
+     *
+     * <p><b>Real Casdoor JWT (unchanged, kept for a genuine resource-server token):</b>
+     * mirrors admin-bff's production {@code AuthController.accountFromJwt} — an {@code email}
      * claim maps to {@code google:<email-lowercased>}, else a {@code preferred_username}
      * claim maps to {@code discord:<username-lowercased>} (mirroring
-     * {@code AccountStore.idFor(provider, handle) = provider + ":" + handle.toLowerCase()},
-     * which is the id {@code AccountStore.newSession} writes into {@code account_id}).
+     * {@code AccountStore.idFor(provider, handle) = provider + ":" + handle.toLowerCase()}).
      * Neither claim present ⇒ 401 (no derivable account; the principal can't own a session).
      */
     static String accountIdFromJwt(Jwt jwt) {
+        // Native-login synthetic principal: sub is already the full account id — use verbatim.
+        String tokenValue = jwt.getTokenValue();
+        if (tokenValue != null && tokenValue.startsWith(BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER)) {
+            String subject = jwt.getSubject();
+            if (subject != null && !subject.isBlank()) {
+                return subject;
+            }
+            // A synthetic principal with no subject is a filter-internal bug, not a caller
+            // condition — fail closed rather than fall through to the JWT-claim derivation
+            // (which would mis-map it to a wrong or nonexistent account).
+            throw ApiException.unauthorized("no account identity in session principal");
+        }
         String email = jwt.getClaimAsString("email");
         if (email != null && !email.isBlank()) {
             return "google:" + email.toLowerCase();
