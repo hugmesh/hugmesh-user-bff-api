@@ -14,6 +14,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.client.WebClient;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.util.ArrayList;
@@ -62,6 +63,10 @@ class HsProxyControllerSecurityTest {
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean HsTokenCustody custody;
     @MockitoBean ServiceTokenBroker broker;
+    // Gap-1 close: the controllers now take AdminBffInternalClient as a constructor dep
+    // (the localpart(Jwt) fallback's real internal admin-bff lookup). Never touched in
+    // these dark-path tests (the 503 short-circuits before localpart(jwt) is ever called).
+    @MockitoBean AdminBffInternalClient adminBff;
 
     /** The two qualified proxy WebClients the controllers inject (never called in the
      *  dark path — the 503 short-circuits before any upstream use). */

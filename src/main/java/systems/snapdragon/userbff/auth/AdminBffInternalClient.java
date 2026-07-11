@@ -43,13 +43,36 @@ public class AdminBffInternalClient {
 
     private static final Logger log = LoggerFactory.getLogger(AdminBffInternalClient.class);
 
-    /** A provisioned account view (admin-bff is the source of truth). */
+    /**
+     * A provisioned account view (admin-bff is the source of truth).
+     *
+     * <p>{@code localpart} is the CANONICAL, collision-checked homeserver (Matrix/Mastodon)
+     * username admin-bff persisted at registration/{@code ensureAccount} time (Liquibase
+     * changeset 290, {@code account.localpart} — the account-takeover-by-collision fix).
+     * Matrix/Mastodon-proxy callers MUST use this instead of deriving a candidate from a
+     * Casdoor JWT claim ({@code preferred_username}/{@code sub}): two DIFFERENT accounts can
+     * share the same JWT-claim-derived candidate (that is the exact bug this closes), but
+     * admin-bff guarantees {@code localpart} is unique across every account it holds. May be
+     * blank for a row that predates the column — {@code @JsonIgnoreProperties(ignoreUnknown)}
+     * on this class isn't needed (this repo controls both ends of the JSON contract), but a
+     * blank value here is expected to be RARE/transient, not "absent forever": admin-bff
+     * self-heals it (still through the same collision-checked resolver) the next time this
+     * account is read via a path that needs it (e.g. {@code AuthController#provision}).
+     */
     public record AccountView(String id, String provider, String handle,
-                              boolean registrationComplete, List<String> roles) {
+                              boolean registrationComplete, List<String> roles, String localpart) {
         // Return a defensive copy so callers cannot mutate the internal list.
         @Override
         public List<String> roles() {
             return roles == null ? List.of() : List.copyOf(roles);
+        }
+
+        /** Never null — admin-bff's JSON always carries the field, but default defensively
+         *  (blank, not the identity's raw handle) so a caller that forgets to check for
+         *  blank never silently falls back to a JWT-claim-derived, un-collision-checked value. */
+        @Override
+        public String localpart() {
+            return localpart == null ? "" : localpart;
         }
     }
 

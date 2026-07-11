@@ -167,7 +167,7 @@ class ProfileControllerTest {
 
     @Test
     void bffSessionHeader_realJwtTypedController_noNpe_returns200() {
-        AccountView view = new AccountView("acct-bff-1", "native", "bffuser", true, List.of("user"));
+        AccountView view = new AccountView("acct-bff-1", "native", "bffuser", true, List.of("user"), "lp");
         when(adminBffClient.enabled()).thenReturn(true);
         when(adminBffClient.resolveSession("bff_profiletoken")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
         when(principalDomain.forScope(any())).thenReturn("default");
@@ -189,7 +189,7 @@ class ProfileControllerTest {
         // Same proof, cookie carrier — SsoAuthController's own documented native-login
         // convention, and the ONLY carrier BffSessionAuthenticationSliceTest's probe-
         // controller-based coverage exercised before this PR.
-        AccountView view = new AccountView("acct-bff-2", "native", "bffuser2", true, List.of("user"));
+        AccountView view = new AccountView("acct-bff-2", "native", "bffuser2", true, List.of("user"), "lp");
         when(adminBffClient.enabled()).thenReturn(true);
         when(adminBffClient.resolveSession("bff_profilecookie")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
         when(principalDomain.forScope(any())).thenReturn("default");

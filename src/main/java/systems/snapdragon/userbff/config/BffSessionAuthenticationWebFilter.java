@@ -473,6 +473,21 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *       this fix does not regress that further, but does not fix it either — flagged
      *       here rather than silently worked around, since a real fix belongs in {@code
      *       SessionsService}, out of this change's scope.</li>
+     *   <li>{@code localpart} = {@link AccountView#localpart()}, when non-blank — the
+     *       CANONICAL, admin-bff-persisted, collision-checked homeserver username
+     *       (account-takeover-by-collision fix, Liquibase changeset 290 on admin-bff).
+     *       {@code MatrixProxyController.localpart}/{@code MastodonProxyController.localpart}
+     *       (the two homeserver-MINT call sites — {@code broker.mintMatrix}/{@code
+     *       mintMastodon}) now read THIS claim first, falling back to the
+     *       {@code preferred_username}/{@code sub} derivation only when it is absent (a
+     *       real, non-bff_-session Casdoor JWT, which never runs through this filter at
+     *       all). Threading it through the ALREADY-fetched {@link AccountView} here costs
+     *       no additional admin-bff round trip — this filter resolves it via {@link
+     *       AdminBffInternalClient#resolveSession} for every bff_-session request
+     *       regardless. The OTHER {@code preferred_username}/{@code sub}-based localpart
+     *       readers listed above ({@code ConnectedClientsController}, {@code
+     *       SelfSilenceController}) are unchanged by this fix — they are not homeserver
+     *       MINT call sites.</li>
      *   <li>{@code iss} = {@link #singleTrustedIssuerOrNull} — see its own doc for the
      *       single- vs multi-issuer distinction this claim exists to serve.</li>
      * </ul>
@@ -498,6 +513,13 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
             } else {
                 builder.claim("preferred_username", handle);
             }
+        }
+
+        // Account-takeover-by-collision fix: thread the CANONICAL, collision-checked
+        // localpart through — see the class doc above.
+        String localpart = view.localpart();
+        if (localpart != null && !localpart.isBlank()) {
+            builder.claim("localpart", localpart);
         }
 
         String issuer = singleTrustedIssuerOrNull(domainRegistry);

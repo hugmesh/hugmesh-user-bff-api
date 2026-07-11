@@ -11,9 +11,13 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+
+import java.util.Locale;
 
 /**
  * D6 Mastodon BFF-proxy: forwards {@code /bff/user/mastodon/**} to the {@code akkoma-proxy
@@ -42,16 +46,19 @@ public class MastodonProxyController {
     private final HsTokenCustody custody;
     private final ServiceTokenBroker broker;
     private final HsReverseProxy proxy;
+    private final AdminBffInternalClient adminBff;
 
     public MastodonProxyController(
             @Value("${app.hs-token.enabled:false}") boolean enabled,
             HsTokenCustody custody,
             ServiceTokenBroker broker,
-            @Qualifier("mastodonProxyWebClient") WebClient mastodonProxyWebClient) {
+            @Qualifier("mastodonProxyWebClient") WebClient mastodonProxyWebClient,
+            AdminBffInternalClient adminBff) {
         this.enabled = enabled;
         this.custody = custody;
         this.broker = broker;
         this.proxy = new HsReverseProxy(mastodonProxyWebClient);
+        this.adminBff = adminBff;
     }
 
     @Operation(summary = "Reverse-proxy any Mastodon API call with the server-held native token (owner = JWT subject). 503 when the feature is dark.")
@@ -64,11 +71,16 @@ public class MastodonProxyController {
                     "Mastodon BFF-proxy is not enabled (app.hs-token.enabled=false)"));
         }
         String owner = jwt.getSubject();
-        String localpart = localpart(jwt);
         String upstreamPath = upstreamPath(exchange);
 
         Mono<String> load = custody.loadAccessToken(owner, HsServiceTokenRow.PLATFORM_MASTODON);
-        Mono<String> remint = broker.mintMastodon(owner, localpart).map(MintedToken::accessToken);
+        // localpart(jwt) is a Mono (may hop to admin-bff over the internal surface) —
+        // composed INTO the lazy remint chain rather than resolved eagerly, so the
+        // account-takeover-by-collision lookup only ever fires when a mint is actually
+        // needed (first-use / 401-retry — see HsReverseProxy#forward), exactly matching
+        // this Mono's existing on-demand-only subscription semantics.
+        Mono<String> remint = localpart(jwt).flatMap(lp -> broker.mintMastodon(owner, lp))
+                .map(MintedToken::accessToken);
         return proxy.forward(exchange, upstreamPath, load, remint);
     }
 
@@ -78,8 +90,63 @@ public class MastodonProxyController {
         return rest.isEmpty() ? "/" : rest;
     }
 
-    private static String localpart(Jwt jwt) {
+    /**
+     * The caller's homeserver localpart — used only for the re-mint leg, never from a
+     * request field. See {@code MatrixProxyController.localpart}'s doc (identical logic,
+     * byte-for-byte) for the account-takeover-by-collision fix rationale, including the
+     * gap-1 close: the FALLBACK branch (no synthetic {@code localpart} claim — a real,
+     * externally-issued Casdoor JWT presented directly to this
+     * {@code @PreAuthorize hasRole('MASTODON')} route, which {@code SecurityConfig} still
+     * fully validates via {@code o.jwt(...)} against the live issuer-uri) now resolves the
+     * SAME persisted, collision-checked value via a real internal admin-bff lookup instead
+     * of re-deriving an unchecked candidate, FAIL CLOSED on any lookup failure.
+     */
+    private Mono<String> localpart(Jwt jwt) {
+        String canonical = jwt.getClaimAsString("localpart");
+        if (canonical != null && !canonical.isBlank()) {
+            return Mono.just(canonical);
+        }
+        return resolveCanonicalLocalpart(jwt);
+    }
+
+    /**
+     * Resolve the canonical, persisted, collision-checked localpart for a REAL Casdoor JWT
+     * that carries no synthetic-session {@code localpart} claim. Byte-for-byte identical to
+     * {@code MatrixProxyController}'s copy (this org's established duplication pattern for
+     * the two D6 proxy controllers, e.g. {@code upstreamPath}/{@code PREFIX} above) — see
+     * its doc for the full rationale.
+     */
+    private Mono<String> resolveCanonicalLocalpart(Jwt jwt) {
+        String email = jwt.getClaimAsString("email");
         String pu = jwt.getClaimAsString("preferred_username");
-        return (pu == null || pu.isBlank()) ? jwt.getSubject() : pu;
+        Mono<AdminBffInternalClient.AccountView> byEmail = (email != null && !email.isBlank())
+                ? adminBff.getAccount(idFor("google", email))
+                        .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
+                : Mono.empty();
+        Mono<AdminBffInternalClient.AccountView> byUsername = (pu != null && !pu.isBlank())
+                ? adminBff.getAccount(idFor("discord", pu))
+                        .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
+                : Mono.empty();
+        return byEmail.switchIfEmpty(byUsername)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                        "no registered account for this token's identity claims "
+                                + "(fail-closed homeserver-localpart resolution)")))
+                .flatMap(a -> {
+                    String lp = a.localpart();
+                    return (lp == null || lp.isBlank())
+                            ? Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
+                                    "account has no persisted homeserver localpart yet "
+                                            + "(fail-closed — will not re-derive an unchecked candidate)"))
+                            : Mono.just(lp);
+                });
+    }
+
+    /** Mirrors {@code AccountStore.idFor(provider, handle) = provider + ":" +
+     *  handle.toLowerCase()} — the SAME textual convention {@code SessionsService
+     *  .accountIdFromJwt} already documents+replicates in this repo rather than taking a
+     *  compile dependency on the exact auth-core method for what is a stable, one-line
+     *  identity-string format. */
+    private static String idFor(String provider, String handle) {
+        return provider + ":" + handle.toLowerCase(Locale.ROOT);
     }
 }

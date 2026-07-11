@@ -81,7 +81,7 @@ class BffSessionSyntheticJwtDomainTest {
     @Test
     void emptyRegistry_domainStillResolvesDefault_regardlessOfIssClaim() {
         DomainRegistry registry = new DomainRegistry("", "");
-        AccountView view = new AccountView("acct-1", "native", "h", true, List.of("user"));
+        AccountView view = new AccountView("acct-1", "native", "h", true, List.of("user"), "lp");
 
         Jwt jwt = resolveJwt(registry, view);
 
@@ -98,7 +98,7 @@ class BffSessionSyntheticJwtDomainTest {
     void singleIssuerRegistry_synthenticJwtCarriesRealIssuer_domainResolvesDefault() {
         String realIssuer = "https://casdoor.example.tld";
         DomainRegistry registry = new DomainRegistry(realIssuer, "");
-        AccountView view = new AccountView("acct-2", "native", "h", true, List.of("user"));
+        AccountView view = new AccountView("acct-2", "native", "h", true, List.of("user"), "lp");
 
         Jwt jwt = resolveJwt(registry, view);
 
@@ -119,7 +119,7 @@ class BffSessionSyntheticJwtDomainTest {
         String issuerB = "https://casdoor-brandy.example.tld";
         DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
         assertThat(registry.isMultiIssuer()).isTrue();
-        AccountView view = new AccountView("acct-3", "native", "h", true, List.of("user"));
+        AccountView view = new AccountView("acct-3", "native", "h", true, List.of("user"), "lp");
 
         Jwt jwt = resolveJwt(registry, view);
 
@@ -143,7 +143,7 @@ class BffSessionSyntheticJwtDomainTest {
         String issuerA = "https://casdoor-brandx.example.tld";
         String issuerB = "https://casdoor-brandy.example.tld";
         DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
-        AccountView view = new AccountView("acct-4", "native", "h", true, List.of("superadmin"));
+        AccountView view = new AccountView("acct-4", "native", "h", true, List.of("superadmin"), "lp");
 
         Jwt jwt = resolveJwt(registry, view);
 

@@ -105,7 +105,12 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void bearerHeader_validToken_populatesSecurityContext() {
-        AccountView view = new AccountView("acct-1", "native", "user1", true, List.of("user", "admin"));
+        // localpart DELIBERATELY differs from handle ("user1-canonical" vs "user1") to prove
+        // the synthetic Jwt carries the PERSISTED admin-bff value, not a re-derivation of the
+        // handle (account-takeover-by-collision fix — see BffSessionAuthenticationWebFilter's
+        // syntheticJwt doc).
+        AccountView view = new AccountView("acct-1", "native", "user1", true,
+                List.of("user", "admin"), "user1-canonical");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_abc123")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
 
@@ -138,13 +143,38 @@ class BffSessionAuthenticationWebFilterTest {
         // provider "native" (not "google") -> best-effort preferred_username, not email.
         assertThat(jwt.getClaimAsString("preferred_username")).isEqualTo("user1");
         assertThat(jwt.getClaimAsString("email")).isNull();
+        // Account-takeover-by-collision fix: the PERSISTED localpart claim, not the handle.
+        assertThat(jwt.getClaimAsString("localpart")).isEqualTo("user1-canonical");
+    }
+
+    @Test
+    void bearerHeader_blankLocalpart_claimOmitted() {
+        // A row that predates the account.localpart column (AccountView#localpart() defaults
+        // to "" rather than null) must NOT stamp a blank claim — MatrixProxyController/
+        // MastodonProxyController's localpart(jwt) treats an absent claim as "fall back to
+        // preferred_username/sub", which a blank-string claim would short-circuit incorrectly.
+        AccountView view = new AccountView("acct-blank", "native", "someone", true, List.of("user"), "");
+        AdminBffInternalClient client = enabledClient();
+        when(client.resolveSession("bff_blanklp")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
+
+        BffSessionAuthenticationWebFilter f = filter(client);
+        MockServerHttpRequest req = MockServerHttpRequest.get("/bff/user/profile")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer bff_blanklp")
+                .build();
+        MockServerWebExchange exchange = MockServerWebExchange.from(req);
+        CapturingChain chain = new CapturingChain();
+
+        StepVerifier.create(f.filter(exchange, chain)).verifyComplete();
+
+        Jwt jwt = (Jwt) chain.auth.get().getPrincipal();
+        assertThat(jwt.getClaimAsString("localpart")).isNull();
     }
 
     // ── happy path: bff_session cookie ────────────────────────────────────────
 
     @Test
     void cookie_validToken_populatesSecurityContext() {
-        AccountView view = new AccountView("acct-2", "native", "user2", true, List.of("user"));
+        AccountView view = new AccountView("acct-2", "native", "user2", true, List.of("user"), "lp");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_cookieval")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
 
@@ -365,7 +395,7 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void incompleteRegistration_onlyRoleUser_noAdminAuthority() {
-        AccountView view = new AccountView("acct-3", "native", "newuser", false, List.of("user", "admin"));
+        AccountView view = new AccountView("acct-3", "native", "newuser", false, List.of("user", "admin"), "lp");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_newusertoken")).thenReturn(Mono.just(new AdminBffInternalClient.SessionResolution(view, "active", false)));
 
@@ -402,7 +432,7 @@ class BffSessionAuthenticationWebFilterTest {
         // exactly what buildAuthorities() says (traced below), so the security posture
         // of /bff/user/internal/** rests entirely on Spring's hasRole("SERVICE") gate
         // correctly matching ROLE_SERVICE, not on this filter silently downgrading it.
-        AccountView view = new AccountView("acct-4", "native", "weird", true, List.of("user", "service"));
+        AccountView view = new AccountView("acct-4", "native", "weird", true, List.of("user", "service"), "lp");
         var authorities = BffSessionAuthenticationWebFilter.buildAuthorities(view).stream()
                 .map(a -> a.getAuthority()).toList();
         // The mapping is honest (ROLE_<UPPER> verbatim) — the actual guarantee that a
@@ -416,7 +446,7 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void buildAuthorities_rolesMappedToUppercase_withFloor() {
-        AccountView view = new AccountView("acct-5", "native", "admin", true, List.of("user", "admin", "mod"));
+        AccountView view = new AccountView("acct-5", "native", "admin", true, List.of("user", "admin", "mod"), "lp");
         var authorities = BffSessionAuthenticationWebFilter.buildAuthorities(view).stream()
                 .map(a -> a.getAuthority()).toList();
 
@@ -425,7 +455,7 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void buildAuthorities_roleUserInRoles_notDuplicated() {
-        AccountView view = new AccountView("acct-6", "native", "u", true, List.of("user"));
+        AccountView view = new AccountView("acct-6", "native", "u", true, List.of("user"), "lp");
         var authorities = BffSessionAuthenticationWebFilter.buildAuthorities(view).stream()
                 .map(a -> a.getAuthority()).toList();
 
@@ -434,7 +464,7 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void buildAuthorities_superadmin_isMapped() {
-        AccountView view = new AccountView("acct-7", "native", "sa", true, List.of("superadmin"));
+        AccountView view = new AccountView("acct-7", "native", "sa", true, List.of("superadmin"), "lp");
         var authorities = BffSessionAuthenticationWebFilter.buildAuthorities(view).stream()
                 .map(a -> a.getAuthority()).toList();
 
@@ -445,7 +475,7 @@ class BffSessionAuthenticationWebFilterTest {
     void buildAuthorities_nullRoles_onlyFloor() {
         // AccountView's own accessor override turns a null roles list into List.of(), so
         // this exercises that defensive path end-to-end.
-        AccountView view = new AccountView("acct-8", "native", "norow", true, null);
+        AccountView view = new AccountView("acct-8", "native", "norow", true, null, "lp");
         var authorities = BffSessionAuthenticationWebFilter.buildAuthorities(view).stream()
                 .map(a -> a.getAuthority()).toList();
 
@@ -466,7 +496,7 @@ class BffSessionAuthenticationWebFilterTest {
                 List.of("admin", "mod", "user")
         );
         for (List<String> roles : plausibleHumanRoleLists) {
-            AccountView view = new AccountView("acct-x", "native", "h", true, roles);
+            AccountView view = new AccountView("acct-x", "native", "h", true, roles, "lp");
             var authorities = BffSessionAuthenticationWebFilter.buildAuthorities(view).stream()
                     .map(a -> a.getAuthority()).toList();
             assertThat(authorities).as("roles=%s", roles).doesNotContain("ROLE_SERVICE");
@@ -477,7 +507,7 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void suspendedSession_rejected403_chainNeverInvoked() {
-        AccountView view = new AccountView("acct-s", "casdoor", "susp", true, List.of("user", "admin"));
+        AccountView view = new AccountView("acct-s", "casdoor", "susp", true, List.of("user", "admin"), "lp");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_suspended")).thenReturn(Mono.just(
                 new AdminBffInternalClient.SessionResolution(view, "suspended", false)));
@@ -498,7 +528,7 @@ class BffSessionAuthenticationWebFilterTest {
     @Test
     void bannedSession_rejected403_evenWithElevatedRolesAndMfa() {
         // A ban wins over everything: elevated roles + a satisfied MFA challenge do not matter.
-        AccountView view = new AccountView("acct-b", "casdoor", "ban", true, List.of("user", "superadmin"));
+        AccountView view = new AccountView("acct-b", "casdoor", "ban", true, List.of("user", "superadmin"), "lp");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_banned")).thenReturn(Mono.just(
                 new AdminBffInternalClient.SessionResolution(view, "BANNED", true)));
@@ -521,7 +551,7 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void mfaSatisfiedSession_grantsMfaSatisfiedAuthority() {
-        AccountView view = new AccountView("acct-m", "casdoor", "m", true, List.of("user", "admin"));
+        AccountView view = new AccountView("acct-m", "casdoor", "m", true, List.of("user", "admin"), "lp");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_mfa")).thenReturn(Mono.just(
                 new AdminBffInternalClient.SessionResolution(view, "active", true)));
@@ -541,7 +571,7 @@ class BffSessionAuthenticationWebFilterTest {
     @Test
     void mfaSatisfied_butRegistrationIncomplete_onlyFloor_noMfaSatisfied() {
         // registration-incomplete floor rule wins: no elevated roles AND no MFA_SATISFIED.
-        AccountView view = new AccountView("acct-i", "casdoor", "i", false, List.of("user", "admin"));
+        AccountView view = new AccountView("acct-i", "casdoor", "i", false, List.of("user", "admin"), "lp");
         AdminBffInternalClient client = enabledClient();
         when(client.resolveSession("bff_inc")).thenReturn(Mono.just(
                 new AdminBffInternalClient.SessionResolution(view, "active", true)));
@@ -563,7 +593,7 @@ class BffSessionAuthenticationWebFilterTest {
     @Test
     void decide_suspended_isForbidden_caseInsensitive() {
         BffSessionAuthenticationWebFilter f = filter(enabledClient());
-        AccountView view = new AccountView("acct-d", "casdoor", "d", true, List.of("user"));
+        AccountView view = new AccountView("acct-d", "casdoor", "d", true, List.of("user"), "lp");
         var d = f.decide(new AdminBffInternalClient.SessionResolution(view, "Suspended", false));
         assertThat(d.kind()).isEqualTo(BffSessionAuthenticationWebFilter.Kind.FORBIDDEN);
         assertThat(d.reason()).isEqualTo("suspended");
@@ -571,11 +601,11 @@ class BffSessionAuthenticationWebFilterTest {
 
     @Test
     void buildAuthorities_mfaSatisfied_appendsAuthority_onlyWhenComplete() {
-        AccountView complete = new AccountView("a", "casdoor", "h", true, List.of("user"));
+        AccountView complete = new AccountView("a", "casdoor", "h", true, List.of("user"), "lp");
         assertThat(BffSessionAuthenticationWebFilter.buildAuthorities(complete, true)
                 .stream().map(a -> a.getAuthority()).toList())
                 .containsExactlyInAnyOrder("ROLE_USER", "MFA_SATISFIED");
-        AccountView incomplete = new AccountView("a", "casdoor", "h", false, List.of("user"));
+        AccountView incomplete = new AccountView("a", "casdoor", "h", false, List.of("user"), "lp");
         assertThat(BffSessionAuthenticationWebFilter.buildAuthorities(incomplete, true)
                 .stream().map(a -> a.getAuthority()).toList())
                 .containsExactly("ROLE_USER");

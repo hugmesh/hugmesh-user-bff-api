@@ -85,7 +85,7 @@ class NativeLoginControllerTest {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         when(adminBff.ensureAccount(eq("casdoor"), anyString()))
                 .thenReturn(Mono.just(new AdminBffInternalClient.AccountView(
-                        "acc-1", "casdoor", "alice", true, List.of("user"))));
+                        "acc-1", "casdoor", "alice", true, List.of("user"), "alice")));
         when(adminBff.createSession("acc-1"))
                 .thenReturn(Mono.just(new AdminBffInternalClient.SessionView("bff_opaque_session", "acc-1")));
         when(adminBff.stampCustody(eq("bff_opaque_session"), anyString(), anyString(), anyLong()))
@@ -185,7 +185,7 @@ class NativeLoginControllerTest {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         when(adminBff.ensureAccount(eq("casdoor"), anyString()))
                 .thenReturn(Mono.just(new AdminBffInternalClient.AccountView(
-                        "acc-1", "casdoor", "alice", true, List.of("user"))));
+                        "acc-1", "casdoor", "alice", true, List.of("user"), "alice")));
         when(adminBff.createSession("acc-1"))
                 .thenReturn(Mono.just(new AdminBffInternalClient.SessionView("bff_opaque", "acc-1")));
         when(adminBff.stampCustody(anyString(), anyString(), anyString(), anyLong()))

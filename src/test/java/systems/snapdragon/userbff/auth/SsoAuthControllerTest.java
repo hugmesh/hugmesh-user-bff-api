@@ -27,7 +27,8 @@ import static org.mockito.Mockito.when;
 class SsoAuthControllerTest {
 
     private static final AdminBffInternalClient.AccountView ACCOUNT =
-            new AdminBffInternalClient.AccountView("acc-1", "email", "alice@example.test", false, List.of("user"));
+            new AdminBffInternalClient.AccountView(
+                    "acc-1", "email", "alice@example.test", false, List.of("user"), "alice");
     private static final AdminBffInternalClient.SessionView SESSION =
             new AdminBffInternalClient.SessionView("bff_opaque", "acc-1");
 

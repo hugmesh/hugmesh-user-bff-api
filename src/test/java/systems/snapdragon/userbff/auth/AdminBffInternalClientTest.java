@@ -62,11 +62,16 @@ class AdminBffInternalClientTest {
                         .header("Content-Type", "application/json")
                         .body("{\"bearer\":\"custody-jwt-xyz\"}").build());
             }
-            // accounts/ensure (and getAccount/complete) -> an account view
+            // accounts/ensure (and getAccount/complete) -> an account view. localpart is the
+            // account-takeover-by-collision fix's persisted, collision-checked homeserver
+            // username (Liquibase changeset 290 on admin-bff) — DELIBERATELY distinct from
+            // "alice" (the handle) to prove the client surfaces the field admin-bff actually
+            // sent, not a re-derivation of the handle.
             return Mono.just(ClientResponse.create(HttpStatus.OK)
                     .header("Content-Type", "application/json")
                     .body("{\"id\":\"acc-1\",\"provider\":\"casdoor\",\"handle\":\"alice\","
-                            + "\"registrationComplete\":false,\"roles\":[\"user\"]}").build());
+                            + "\"registrationComplete\":false,\"roles\":[\"user\"],"
+                            + "\"localpart\":\"alice-canonical\"}").build());
         }
     }
 
@@ -89,6 +94,9 @@ class AdminBffInternalClientTest {
                 .assertNext(a -> {
                     assertThat(a.id()).isEqualTo("acc-1");
                     assertThat(a.provider()).isEqualTo("casdoor");
+                    // Account-takeover-by-collision fix: the CANONICAL localpart admin-bff
+                    // persisted, not a re-derivation of the handle.
+                    assertThat(a.localpart()).isEqualTo("alice-canonical");
                 })
                 .verifyComplete();
 
@@ -245,6 +253,24 @@ class AdminBffInternalClientTest {
                 .verifyError(IllegalStateException.class);
         StepVerifier.create(client.allowlistCheck("casdoor", "alice"))
                 .verifyError(IllegalStateException.class);
+    }
+
+    @Test
+    void accountView_missingLocalpartField_defaultsToBlank_notNull() {
+        // A row that predates the account.localpart column (or an admin-bff version skew)
+        // omits the field entirely; the accessor must default to "" (never null and never
+        // silently fall back to some OTHER field), so a blank check is always safe for a
+        // caller that must treat "unset" as "resolve it", not NPE or misread a stale handle.
+        ExchangeFunction noLocalpartField = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"id\":\"acc-1\",\"provider\":\"casdoor\",\"handle\":\"alice\","
+                        + "\"registrationComplete\":false,\"roles\":[\"user\"]}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(noLocalpartField).build());
+
+        StepVerifier.create(client.ensureAccount("casdoor", "alice"))
+                .assertNext(a -> assertThat(a.localpart()).isEqualTo(""))
+                .verifyComplete();
     }
 
     @Test

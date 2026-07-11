@@ -78,7 +78,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
 
     @Test
     void bffSessionCookie_noJwt_reachesUserSurface() {
-        AccountView view = new AccountView("acct-1", "native", "someone", true, List.of("user"));
+        AccountView view = new AccountView("acct-1", "native", "someone", true, List.of("user"), "lp");
         AdminBffInternalClient client = enabledClientReturning("bff_validtoken", view);
 
         clientWith(client).get().uri("/bff/user/_probe")
@@ -103,7 +103,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
         // above only ever exercised the cookie carrier, which the stock bearer-token
         // converter never even looks at (no Authorization header present), so it
         // could never have caught this.
-        AccountView view = new AccountView("acct-header-1", "native", "someone-h", true, List.of("user"));
+        AccountView view = new AccountView("acct-header-1", "native", "someone-h", true, List.of("user"), "lp");
         AdminBffInternalClient client = enabledClientReturning("bff_headertoken", view);
 
         clientWith(client).get().uri("/bff/user/_probe")
@@ -120,7 +120,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
         // reproduction #2" — the header carrier is SsoAuthController's OWN documented
         // native-login calling convention too (not just the cookie), so it must also
         // reach /bff/me through the real chain.
-        AccountView view = new AccountView("acct-header-2", "native", "someone-h2", true, List.of("user"));
+        AccountView view = new AccountView("acct-header-2", "native", "someone-h2", true, List.of("user"), "lp");
         AdminBffInternalClient client = enabledClientReturning("bff_headertoken2", view);
 
         clientWith(client).get().uri("/bff/me")
@@ -158,7 +158,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
         // cookie (no Authorization header) — SsoAuthController.me()'s own documented
         // native-login calling convention — was 401'd BEFORE the controller was ever
         // reached. This proves the bridge filter now lets it through to the handler.
-        AccountView view = new AccountView("acct-2", "native", "someone2", true, List.of("user"));
+        AccountView view = new AccountView("acct-2", "native", "someone2", true, List.of("user"), "lp");
         AdminBffInternalClient client = enabledClientReturning("bff_validtoken2", view);
 
         clientWith(client).get().uri("/bff/me")
@@ -206,7 +206,7 @@ class BffSessionAuthenticationSliceTest extends SecuritySliceSupport {
         // JUST as unable to reach /bff/user/internal/** as a human JWT caller already
         // is (SecurityConfigPathGateSliceTest.internalSurface_plainUser_isForbidden) —
         // the bridge filter must never grant ROLE_SERVICE to an ordinary account.
-        AccountView view = new AccountView("acct-3", "native", "someone3", true, List.of("user", "admin"));
+        AccountView view = new AccountView("acct-3", "native", "someone3", true, List.of("user", "admin"), "lp");
         AdminBffInternalClient client = enabledClientReturning("bff_humantoken", view);
 
         clientWith(client).get().uri("/bff/user/internal/notifications/deliver")
