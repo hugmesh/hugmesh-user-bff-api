@@ -98,14 +98,14 @@ class MediaPoisonControllerTest {
                 .bodyValue(multipart("mastodon", "glaze").build())
                 .exchange()
                 .expectStatus().isUnauthorized();
-        verify(service, never()).upload(any(), any(), any(), any(), any(), any(), any());
+        verify(service, never()).upload(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void upload_authenticatedUser_returnsHomeserverBodyPlusCloakBlock() {
         MediaPoisonDecision dec = new MediaPoisonDecision("dec-1", "alice", "mastodon",
                 "media-77", "glaze", "protected", "cuda", Instant.now());
-        when(service.upload(eq("alice"), eq("mastodon"), eq("glaze"), any(), anyString(), any(), any()))
+        when(service.upload(eq("alice"), eq("alice"), eq("mastodon"), eq("glaze"), any(), anyString(), any(), any()))
                 .thenReturn(Mono.just(new UploadOutcome(
                         Map.of("id", "media-77", "url", "/media/orig.png"), dec)));
 
@@ -123,7 +123,7 @@ class MediaPoisonControllerTest {
                 .jsonPath("$.cloak.mode").isEqualTo("glaze")
                 .jsonPath("$.cloak.backend").isEqualTo("cuda");
 
-        verify(service).upload(eq("alice"), eq("mastodon"), eq("glaze"), any(), eq("a.png"), any(), any());
+        verify(service).upload(eq("alice"), eq("alice"), eq("mastodon"), eq("glaze"), any(), eq("a.png"), any(), any());
     }
 
     // ── capability ──────────────────────────────────────────

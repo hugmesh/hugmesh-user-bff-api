@@ -59,7 +59,7 @@ import java.util.Map;
  *                             homeserver.upload(platform, poisonedOriginal, ...)
  *                                  │  Mono&lt;Map&gt;  (homeserver response: id/url/mxc)
  *                                  ▼
- *                             survivalGate(platform, mode, poisoned, result, hs)
+ *                             survivalGate(owner, localpart, platform, mode, poisoned, result, hs)
  *                                  │  Mono&lt;Boolean&gt;  (all served sizes still carry cloak)
  *                                  ▼
  *                             record(owner, ..., survived ? "protected" : "degraded")
@@ -133,9 +133,9 @@ public class MediaPoisonService {
      *                            the real type is sniffed from magic bytes)
      * @return a {@code Mono} emitting the {@link UploadOutcome}
      */
-    public Mono<UploadOutcome> upload(String owner, String platform, String requestedMode,
+    public Mono<UploadOutcome> upload(String owner, String localpart, String platform, String requestedMode,
                                       byte[] bytes, String filename, String declaredContentType) {
-        return upload(owner, platform, requestedMode, bytes, filename, declaredContentType,
+        return upload(owner, localpart, platform, requestedMode, bytes, filename, declaredContentType,
                 DomainRegistry.DEFAULT_DOMAIN);
     }
 
@@ -163,7 +163,7 @@ public class MediaPoisonService {
      * @throws ApiException 400 on invalid {@code platform}, invalid {@code mode},
      *                      empty bytes, or bytes exceeding the max size
      */
-    public Mono<UploadOutcome> upload(String owner, String platform, String requestedMode,
+    public Mono<UploadOutcome> upload(String owner, String localpart, String platform, String requestedMode,
                                       byte[] bytes, String filename, String declaredContentType,
                                       String domain) {
         requireOwner(owner);
@@ -192,16 +192,16 @@ public class MediaPoisonService {
         if ("none".equals(mode) || !props.isEnabled() || !isImage) {
             String why = !isImage ? "non-image" : "none".equals(mode) ? "opt-out" : "feature-off";
             log.info("[media] forward-through ({}) platform={} owner={}", why, platform, owner);
-            return forwardThrough(owner, platform, mode, "none", null, bytes, filename, contentType, domain);
+            return forwardThrough(owner, localpart, platform, mode, "none", null, bytes, filename, contentType, domain);
         }
 
         // Probe the worker once: ABSENT ⇒ lean fallback; PRESENT ⇒ cloak.
         return worker.capability().flatMap(health -> {
             Backend backend = Backend.parse(health.backend());
             if (!backend.present()) {
-                return leanFallback(owner, platform, mode, bytes, filename, contentType, domain);
+                return leanFallback(owner, localpart, platform, mode, bytes, filename, contentType, domain);
             }
-            return cloakThenForward(owner, platform, mode, backend, bytes, filename, contentType, domain);
+            return cloakThenForward(owner, localpart, platform, mode, backend, bytes, filename, contentType, domain);
         });
     }
 
@@ -226,13 +226,13 @@ public class MediaPoisonService {
      * @return a {@code Mono} emitting the {@link UploadOutcome} with
      *         {@code status=skipped}
      */
-    private Mono<UploadOutcome> leanFallback(String owner, String platform, String mode,
+    private Mono<UploadOutcome> leanFallback(String owner, String localpart, String platform, String mode,
                                              byte[] bytes, String filename, String contentType,
                                              String domain) {
         FallbackMode fb = props.fallback();
         log.warn("[media] heavy tier ABSENT — fallback={} ⇒ forward UNCLOAKED platform={} owner={}",
                 fb, platform, owner);
-        return forwardThrough(owner, platform, mode, "skipped", Backend.NONE.wire(),
+        return forwardThrough(owner, localpart, platform, mode, "skipped", Backend.NONE.wire(),
                 bytes, filename, contentType, domain);
     }
 
@@ -253,18 +253,18 @@ public class MediaPoisonService {
      * @return a {@code Mono} emitting the {@link UploadOutcome} with
      *         {@code status=protected|degraded|failed|skipped}
      */
-    private Mono<UploadOutcome> cloakThenForward(String owner, String platform, String mode,
+    private Mono<UploadOutcome> cloakThenForward(String owner, String localpart, String platform, String mode,
                                                  Backend probed, byte[] bytes, String filename,
                                                  String contentType, String domain) {
         return worker.poison(bytes, mode, filename, contentType, props.getThumbnailSizes())
                 // route the worker result: a failed/empty cloak forwards the ORIGINAL,
                 // a good cloak runs the upload+gate+record ladder (extracted helper).
-                .flatMap(result -> onPoisonResult(result, owner, platform, mode, probed,
+                .flatMap(result -> onPoisonResult(result, owner, localpart, platform, mode, probed,
                         bytes, filename, contentType, domain))
                 // poison() emitted empty (no worker wired despite a present probe) ⇒ skip
                 // honestly. DEFERRED so the forward-through upload only runs on the empty
                 // path (not eagerly at assembly time).
-                .switchIfEmpty(Mono.defer(() -> forwardThrough(owner, platform, mode, "skipped",
+                .switchIfEmpty(Mono.defer(() -> forwardThrough(owner, localpart, platform, mode, "skipped",
                         probed.wire(), bytes, filename, contentType, domain)));
     }
 
@@ -275,18 +275,18 @@ public class MediaPoisonService {
      * bytes. Extracted from {@link #cloakThenForward} so the 3-deep upload→gate→record
      * ladder is a named step, not an inline nested lambda.
      */
-    private Mono<UploadOutcome> onPoisonResult(PoisonResult result, String owner, String platform,
+    private Mono<UploadOutcome> onPoisonResult(PoisonResult result, String owner, String localpart, String platform,
                                                String mode, Backend probed, byte[] bytes,
                                                String filename, String contentType, String domain) {
         if (result == null || !result.ok() || result.poisonedOriginal() == null) {
             log.warn("[media] worker poison failed/empty ⇒ forward original, status=failed");
-            return forwardThrough(owner, platform, mode, "failed",
+            return forwardThrough(owner, localpart, platform, mode, "failed",
                     backendOf(result, probed), bytes, filename, contentType, domain);
         }
         // the backend the worker actually ran (fall back to the probed tier if it didn't say).
         Backend ran = Backend.parse(result.backend());
         Backend backend = ran.present() ? ran : probed;
-        return uploadAndGate(owner, platform, mode, backend, result, filename, contentType, domain);
+        return uploadAndGate(owner, localpart, platform, mode, backend, result, filename, contentType, domain);
     }
 
     /**
@@ -295,14 +295,14 @@ public class MediaPoisonService {
      * #cloakThenForward}. {@code status=protected} ONLY when the gate passes, else
      * {@code degraded}. Behaviour is identical to the prior inline chain.
      */
-    private Mono<UploadOutcome> uploadAndGate(String owner, String platform, String mode,
+    private Mono<UploadOutcome> uploadAndGate(String owner, String localpart, String platform, String mode,
                                               Backend backend, PoisonResult result,
                                               String filename, String contentType, String domain) {
         byte[] poisoned = result.poisonedOriginal();
         // 1) real homeserver upload of the poisoned bytes.
-        return homeserver.upload(platform, poisoned, filename, contentType)
+        return homeserver.upload(owner, localpart, platform, poisoned, filename, contentType)
                 // 2) re-fetch the served artifacts and run the perturbation-survival gate.
-                .flatMap(hs -> survivalGate(platform, mode, poisoned, result, hs)
+                .flatMap(hs -> survivalGate(owner, localpart, platform, mode, poisoned, result, hs)
                         // 3) record the honest decision and pair it with the homeserver response.
                         .flatMap(survived -> recordOutcome(owner, platform, mode, backend, domain,
                                 survived, hs)));
@@ -339,7 +339,7 @@ public class MediaPoisonService {
      * @return a {@code Mono<true>} when every served artifact still carries the
      *         perturbation, {@code Mono<false>} when any artifact failed the check
      */
-    Mono<Boolean> survivalGate(String platform, String mode, byte[] poisonedOriginal,
+    Mono<Boolean> survivalGate(String owner, String localpart, String platform, String mode, byte[] poisonedOriginal,
                                PoisonResult result, Map<String, Object> hs) {
         List<String> servedUrls = servedUrls(platform, hs);
         Flux<Boolean> checks;
@@ -349,7 +349,7 @@ public class MediaPoisonService {
             checks = worker.checkSurvival(poisonedOriginal, mode, "original").map(v -> v.present()).flux();
         } else {
             checks = Flux.fromIterable(servedUrls)
-                    .concatMap(url -> homeserver.fetchServed(platform, url)
+                    .concatMap(url -> homeserver.fetchServed(owner, localpart, platform, url)
                             .flatMap(served -> worker.checkSurvival(served, mode, sizeLabel(url)))
                             // a served artifact we could not re-fetch = NOT a survival.
                             .defaultIfEmpty(new PoisonModels.SurvivalVerdict(false, null, "refetch empty"))
@@ -359,10 +359,10 @@ public class MediaPoisonService {
     }
 
     /** Record-only forward-through: upload the bytes unchanged, record the decision. */
-    private Mono<UploadOutcome> forwardThrough(String owner, String platform, String mode,
+    private Mono<UploadOutcome> forwardThrough(String owner, String localpart, String platform, String mode,
                                                String status, String backend, byte[] bytes,
                                                String filename, String contentType, String domain) {
-        return homeserver.upload(platform, bytes, filename, contentType)
+        return homeserver.upload(owner, localpart, platform, bytes, filename, contentType)
                 .flatMap(hs -> record(owner, platform, mediaRef(platform, hs), mode, status, backend, domain)
                         .map(dec -> new UploadOutcome(hs, dec)));
     }

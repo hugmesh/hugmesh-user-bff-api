@@ -81,9 +81,9 @@ class MediaPoisonServiceTest {
 
     @Test
     void optOut_forwardsThrough_statusNone_workerNeverCalled() {
-        when(homeserver.upload(eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
+        when(homeserver.upload(any(), any(), eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
 
-        UploadOutcome out = service.upload("alice", "mastodon", "none",
+        UploadOutcome out = service.upload("alice", "alice", "mastodon", "none",
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("none");
@@ -95,9 +95,9 @@ class MediaPoisonServiceTest {
 
     @Test
     void nonImage_forwardsThrough_statusNone_evenWhenModeGlaze() {
-        when(homeserver.upload(eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
+        when(homeserver.upload(any(), any(), eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
 
-        UploadOutcome out = service.upload("alice", "mastodon", "glaze",
+        UploadOutcome out = service.upload("alice", "alice", "mastodon", "glaze",
                 "<html>not an image</html>".getBytes(), "x.html", "image/png").block();
 
         // sniffed as non-image -> forward-through regardless of the requested mode.
@@ -108,9 +108,9 @@ class MediaPoisonServiceTest {
     @Test
     void workerAbsent_forwardsOriginal_statusSkipped() {
         when(worker.capability()).thenReturn(Mono.just(absent()));
-        when(homeserver.upload(eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
+        when(homeserver.upload(any(), any(), eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
 
-        UploadOutcome out = service.upload("alice", "mastodon", "glaze",
+        UploadOutcome out = service.upload("alice", "alice", "mastodon", "glaze",
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("skipped");
@@ -124,20 +124,20 @@ class MediaPoisonServiceTest {
         when(worker.capability()).thenReturn(Mono.just(present("cuda")));
         when(worker.poison(any(), eq("glaze"), any(), any(), any()))
                 .thenReturn(Mono.just(new PoisonResult(true, "cuda", "CLOAKED".getBytes(), List.of(), null)));
-        when(homeserver.upload(eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
+        when(homeserver.upload(any(), any(), eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
         // served re-fetch returns bytes; survival check says the cloak survived.
-        when(homeserver.fetchServed(eq("mastodon"), anyString())).thenReturn(Mono.just("SERVED".getBytes()));
+        when(homeserver.fetchServed(any(), any(), eq("mastodon"), anyString())).thenReturn(Mono.just("SERVED".getBytes()));
         when(worker.checkSurvival(any(), eq("glaze"), any()))
                 .thenReturn(Mono.just(new SurvivalVerdict(true, 0.9, null)));
 
         ArgumentCaptor<byte[]> uploaded = ArgumentCaptor.forClass(byte[].class);
-        UploadOutcome out = service.upload("alice", "mastodon", "glaze",
+        UploadOutcome out = service.upload("alice", "alice", "mastodon", "glaze",
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("protected");
         assertThat(out.decision().backend()).isEqualTo("cuda");
         // the REAL homeserver upload used the POISONED bytes, not the original.
-        verify(homeserver).upload(eq("mastodon"), uploaded.capture(), any(), any());
+        verify(homeserver).upload(any(), any(), eq("mastodon"), uploaded.capture(), any(), any());
         assertThat(new String(uploaded.getValue())).isEqualTo("CLOAKED");
         verify(repo).record(eq("alice"), eq("mastodon"), eq("media-77"), eq("glaze"), eq("protected"), eq("cuda"), eq("default"));
     }
@@ -147,13 +147,13 @@ class MediaPoisonServiceTest {
         when(worker.capability()).thenReturn(Mono.just(present("rocm")));
         when(worker.poison(any(), any(), any(), any(), any()))
                 .thenReturn(Mono.just(new PoisonResult(true, "rocm", "CLOAKED".getBytes(), List.of(), null)));
-        when(homeserver.upload(eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
-        when(homeserver.fetchServed(eq("mastodon"), anyString())).thenReturn(Mono.just("SERVED".getBytes()));
+        when(homeserver.upload(any(), any(), eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
+        when(homeserver.fetchServed(any(), any(), eq("mastodon"), anyString())).thenReturn(Mono.just("SERVED".getBytes()));
         // the perturbation washed out in the homeserver re-encode -> not present.
         when(worker.checkSurvival(any(), any(), any()))
                 .thenReturn(Mono.just(new SurvivalVerdict(false, 0.1, "washed out")));
 
-        UploadOutcome out = service.upload("alice", "mastodon", "glaze",
+        UploadOutcome out = service.upload("alice", "alice", "mastodon", "glaze",
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("degraded");
@@ -166,15 +166,15 @@ class MediaPoisonServiceTest {
         // worker returned ok=false (or could not cloak) -> the service must NOT claim protection.
         when(worker.poison(any(), any(), any(), any(), any()))
                 .thenReturn(Mono.just(new PoisonResult(false, "cuda", null, List.of(), "oom")));
-        when(homeserver.upload(eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
+        when(homeserver.upload(any(), any(), eq("mastodon"), any(), any(), any())).thenReturn(Mono.just(mastodonResp()));
 
         ArgumentCaptor<byte[]> uploaded = ArgumentCaptor.forClass(byte[].class);
-        UploadOutcome out = service.upload("alice", "mastodon", "glaze",
+        UploadOutcome out = service.upload("alice", "alice", "mastodon", "glaze",
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("failed");
         // forwarded the ORIGINAL (png header), not poisoned bytes.
-        verify(homeserver).upload(eq("mastodon"), uploaded.capture(), any(), any());
+        verify(homeserver).upload(any(), any(), eq("mastodon"), uploaded.capture(), any(), any());
         assertThat(uploaded.getValue()[1]).isEqualTo((byte) 'P'); // PNG magic survived = original.
         verify(worker, never()).checkSurvival(any(), any(), any());
     }
@@ -182,10 +182,10 @@ class MediaPoisonServiceTest {
     @Test
     void featureDisabled_forwardsThrough_statusNone() {
         props.setEnabled(false);
-        when(homeserver.upload(eq("matrix"), any(), any(), any()))
+        when(homeserver.upload(any(), any(), eq("matrix"), any(), any(), any()))
                 .thenReturn(Mono.just(Map.of("content_uri", "mxc://home/abc")));
 
-        UploadOutcome out = service.upload("alice", "matrix", "glaze",
+        UploadOutcome out = service.upload("alice", "alice", "matrix", "glaze",
                 pngBytes(), "a.png", "image/png").block();
 
         assertThat(out.decision().status()).isEqualTo("none");
@@ -195,7 +195,7 @@ class MediaPoisonServiceTest {
 
     @Test
     void badPlatform_isBadRequest() {
-        assertThatThrownBy(() -> service.upload("alice", "bluesky", "glaze",
+        assertThatThrownBy(() -> service.upload("alice", "alice", "bluesky", "glaze",
                 pngBytes(), "a.png", "image/png").block())
                 .isInstanceOf(ApiException.class);
     }

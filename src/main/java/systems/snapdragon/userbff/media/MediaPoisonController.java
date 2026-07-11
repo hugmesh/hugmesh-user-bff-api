@@ -72,6 +72,11 @@ public class MediaPoisonController {
             @RequestPart(value = "description", required = false) String description) {
 
         String owner = jwt.getSubject();
+        // The homeserver localpart the broker mints/loads under — MUST match what the
+        // reverse-proxy controllers use (preferred_username else subject) so the media
+        // leg uploads to the SAME homeserver account as the user's messages, never a
+        // second one. Never a request-body field.
+        String localpart = localpart(jwt);
         String domain = principalDomain.forScope(jwt);
         String filename = file.filename();
         MediaType partType = file.headers().getContentType();
@@ -79,7 +84,7 @@ public class MediaPoisonController {
 
         // Read the file into memory (bounded), upload through the cloak service, then shape the response.
         return readBounded(file, props.getMaxUploadBytes())
-                .flatMap(bytes -> service.upload(owner, platform, mode, bytes, filename, declaredType, domain))
+                .flatMap(bytes -> service.upload(owner, localpart, platform, mode, bytes, filename, declaredType, domain))
                 .map(MediaPoisonController::buildUploadResponse);
     }
 
@@ -153,5 +158,13 @@ public class MediaPoisonController {
         static boolean isLimit(Throwable t) {
             return t instanceof org.springframework.core.io.buffer.DataBufferLimitException;
         }
+    }
+
+    /** The caller's homeserver localpart (Casdoor {@code preferred_username}; subject
+     *  fallback) — mirrors {@code MatrixProxyController.localpart} so the media leg mints/
+     *  loads the SAME homeserver identity the proxy does. Never from a request field. */
+    private static String localpart(Jwt jwt) {
+        String pu = jwt.getClaimAsString("preferred_username");
+        return (pu == null || pu.isBlank()) ? jwt.getSubject() : pu;
     }
 }
