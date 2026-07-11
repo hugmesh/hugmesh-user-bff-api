@@ -79,7 +79,7 @@ public class MastodonProxyController {
         // account-takeover-by-collision lookup only ever fires when a mint is actually
         // needed (first-use / 401-retry — see HsReverseProxy#forward), exactly matching
         // this Mono's existing on-demand-only subscription semantics.
-        Mono<String> remint = localpart(jwt).flatMap(lp -> broker.mintMastodon(owner, lp))
+        Mono<String> remint = mastodonLocalpart(jwt).flatMap(lp -> broker.mintMastodon(owner, lp))
                 .map(MintedToken::accessToken);
         return proxy.forward(exchange, upstreamPath, load, remint);
     }
@@ -91,32 +91,54 @@ public class MastodonProxyController {
     }
 
     /**
-     * The caller's homeserver localpart — used only for the re-mint leg, never from a
-     * request field. See {@code MatrixProxyController.localpart}'s doc (identical logic,
-     * byte-for-byte) for the account-takeover-by-collision fix rationale, including the
-     * gap-1 close: the FALLBACK branch (no synthetic {@code localpart} claim — a real,
-     * externally-issued Casdoor JWT presented directly to this
-     * {@code @PreAuthorize hasRole('MASTODON')} route, which {@code SecurityConfig} still
-     * fully validates via {@code o.jwt(...)} against the live issuer-uri) now resolves the
-     * SAME persisted, collision-checked value via a real internal admin-bff lookup instead
-     * of re-deriving an unchecked candidate, FAIL CLOSED on any lookup failure.
+     * The caller's PERSISTED Mastodon localpart (admin-bff Liquibase changeset 291) — the value
+     * the Mastodon homeserver account is keyed on, used only for the re-mint leg (never a request
+     * field). Claim-first ({@code mastodon_localpart} on the synthetic {@code bff_} session JWT,
+     * threaded from the AccountView by {@code BffSessionAuthenticationWebFilter}), else a real
+     * internal account read ({@link AdminBffInternalClient.AccountView#mastodonLocalpart()}).
+     *
+     * <p>Reading the persisted Mastodon fold — NOT re-folding {@code localpart} here — is the
+     * residual half of the account-takeover-by-collision fix: {@code john.doe} and {@code
+     * john-doe} are DISTINCT under the Matrix fold (so 290 lets both exist) but collapse to one
+     * Mastodon localpart, and the shared-service-password recover leg would let the second take
+     * over the first. The persisted value carries admin-bff's Mastodon-fold uniqueness.
+     *
+     * <p>TRANSITIONAL fallback: when neither the claim nor the account view carries the Mastodon
+     * fold (an admin-bff that predates changeset 291), fold the canonical MATRIX localpart with
+     * {@link ServiceTokenBroker#mastodonLocalpart} — exactly the pre-fix behaviour, so a rollout
+     * where user-bff leads admin-bff never breaks Mastodon minting. Once admin-bff emits the field
+     * the persisted value wins and the re-fold never runs. FAIL CLOSED (like the Matrix path) only
+     * when even the Matrix localpart is unresolved.
      */
-    private Mono<String> localpart(Jwt jwt) {
-        String canonical = jwt.getClaimAsString("localpart");
-        if (canonical != null && !canonical.isBlank()) {
-            return Mono.just(canonical);
+    private Mono<String> mastodonLocalpart(Jwt jwt) {
+        String claim = jwt.getClaimAsString("mastodon_localpart");
+        if (claim != null && !claim.isBlank()) {
+            return Mono.just(claim);
         }
-        return resolveCanonicalLocalpart(jwt);
+        return resolveAccountView(jwt).flatMap(a -> {
+            String mastodon = a.mastodonLocalpart();
+            if (mastodon != null && !mastodon.isBlank()) {
+                return Mono.just(mastodon);
+            }
+            String matrix = a.localpart();
+            return (matrix == null || matrix.isBlank())
+                    ? Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
+                            "account has no persisted homeserver localpart yet "
+                                    + "(fail-closed — will not re-derive an unchecked candidate)"))
+                    : Mono.just(ServiceTokenBroker.mastodonLocalpart(matrix));
+        });
     }
 
     /**
-     * Resolve the canonical, persisted, collision-checked localpart for a REAL Casdoor JWT
-     * that carries no synthetic-session {@code localpart} claim. Byte-for-byte identical to
-     * {@code MatrixProxyController}'s copy (this org's established duplication pattern for
-     * the two D6 proxy controllers, e.g. {@code upstreamPath}/{@code PREFIX} above) — see
-     * its doc for the full rationale.
+     * Resolve the canonical {@link AdminBffInternalClient.AccountView} for a JWT that carries no
+     * synthetic-session localpart claim — a REAL, externally-issued Casdoor JWT presented directly
+     * to this {@code @PreAuthorize hasRole('MASTODON')} route (still fully validated by {@code
+     * SecurityConfig}'s {@code o.jwt(...)} against the live issuer-uri). Mirrors {@code
+     * MatrixProxyController}'s resolution (this org's established duplication pattern for the two
+     * D6 proxy controllers, e.g. {@code upstreamPath}/{@code PREFIX} above), FAIL CLOSED on any
+     * lookup failure.
      */
-    private Mono<String> resolveCanonicalLocalpart(Jwt jwt) {
+    private Mono<AdminBffInternalClient.AccountView> resolveAccountView(Jwt jwt) {
         String email = jwt.getClaimAsString("email");
         String pu = jwt.getClaimAsString("preferred_username");
         Mono<AdminBffInternalClient.AccountView> byEmail = (email != null && !email.isBlank())
@@ -130,15 +152,7 @@ public class MastodonProxyController {
         return byEmail.switchIfEmpty(byUsername)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                         "no registered account for this token's identity claims "
-                                + "(fail-closed homeserver-localpart resolution)")))
-                .flatMap(a -> {
-                    String lp = a.localpart();
-                    return (lp == null || lp.isBlank())
-                            ? Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
-                                    "account has no persisted homeserver localpart yet "
-                                            + "(fail-closed — will not re-derive an unchecked candidate)"))
-                            : Mono.just(lp);
-                });
+                                + "(fail-closed homeserver-localpart resolution)")));
     }
 
     /** Mirrors {@code AccountStore.idFor(provider, handle) = provider + ":" +

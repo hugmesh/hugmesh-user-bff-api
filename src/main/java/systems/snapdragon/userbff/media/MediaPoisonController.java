@@ -8,13 +8,19 @@ import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.hsproxy.ServiceTokenBroker;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.commons.web.ApiException;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -50,12 +56,14 @@ public class MediaPoisonController {
     private final MediaPoisonService service;
     private final MediaPoisoningProperties props;
     private final PrincipalDomain principalDomain;
+    private final AdminBffInternalClient adminBff;
 
     public MediaPoisonController(MediaPoisonService service, MediaPoisoningProperties props,
-                                 PrincipalDomain principalDomain) {
+                                 PrincipalDomain principalDomain, AdminBffInternalClient adminBff) {
         this.service = service;
         this.props = props;
         this.principalDomain = principalDomain;
+        this.adminBff = adminBff;
     }
 
     @Operation(summary = "Upload media through the cloak proxy (poison-then-forward).",
@@ -72,19 +80,21 @@ public class MediaPoisonController {
             @RequestPart(value = "description", required = false) String description) {
 
         String owner = jwt.getSubject();
-        // The homeserver localpart the broker mints/loads under — MUST match what the
-        // reverse-proxy controllers use (preferred_username else subject) so the media
-        // leg uploads to the SAME homeserver account as the user's messages, never a
-        // second one. Never a request-body field.
-        String localpart = localpart(jwt);
         String domain = principalDomain.forScope(jwt);
         String filename = file.filename();
         MediaType partType = file.headers().getContentType();
         String declaredType = partType == null ? null : partType.toString();
 
-        // Read the file into memory (bounded), upload through the cloak service, then shape the response.
-        return readBounded(file, props.getMaxUploadBytes())
-                .flatMap(bytes -> service.upload(owner, localpart, platform, mode, bytes, filename, declaredType, domain))
+        // Resolve the PERSISTED, collision-checked homeserver localpart for THIS platform (the
+        // Matrix fold for matrix, the coarser Mastodon fold for mastodon) — MUST match what the
+        // reverse-proxy controllers mint/load under so the media leg uploads to the SAME
+        // homeserver account, never a second one, and can never collide onto a DIFFERENT
+        // account's identity (the account-takeover-by-collision fix; see #localpart). Then read
+        // the file (bounded), upload through the cloak service, and shape the response.
+        return localpart(jwt, platform).flatMap(localpart ->
+                readBounded(file, props.getMaxUploadBytes())
+                        .flatMap(bytes -> service.upload(owner, localpart, platform, mode, bytes,
+                                filename, declaredType, domain)))
                 .map(MediaPoisonController::buildUploadResponse);
     }
 
@@ -160,11 +170,74 @@ public class MediaPoisonController {
         }
     }
 
-    /** The caller's homeserver localpart (Casdoor {@code preferred_username}; subject
-     *  fallback) — mirrors {@code MatrixProxyController.localpart} so the media leg mints/
-     *  loads the SAME homeserver identity the proxy does. Never from a request field. */
-    private static String localpart(Jwt jwt) {
+    /**
+     * The caller's PERSISTED, collision-checked homeserver localpart FOR {@code platform} (admin-bff
+     * Liquibase changesets 290/291) — the Matrix fold for {@code matrix}, the coarser Mastodon fold
+     * for {@code mastodon}. Never a request field. Mirrors {@code MatrixProxyController.localpart} /
+     * {@code MastodonProxyController.mastodonLocalpart}: claim-first (the {@code localpart} /
+     * {@code mastodon_localpart} claim on the synthetic {@code bff_} session JWT), else a real
+     * internal account read.
+     *
+     * <p>Using the persisted value — NOT the old {@code preferred_username}/{@code subject}
+     * derivation — is REQUIRED, not cosmetic: that derivation folds differently from the canonical
+     * one admin-bff uniqueness-checks (e.g. a {@code '+'} the Matrix fold STRIPS but the Mastodon
+     * fold KEEPS as {@code '_'}), so two distinct accounts could produce the same media-leg
+     * Mastodon localpart and the shared-service-password recover leg would let one take over the
+     * other's homeserver identity through the media path — the exact takeover 290/291 close on the
+     * proxy path, previously still open here.
+     *
+     * <p>TRANSITIONAL Mastodon fallback (admin-bff predating changeset 291): fold the persisted
+     * Matrix localpart with {@link ServiceTokenBroker#mastodonLocalpart} — the pre-fix behaviour, so
+     * a rollout where user-bff leads admin-bff never breaks the media leg. FAIL CLOSED when even the
+     * Matrix localpart is unresolved.
+     */
+    private Mono<String> localpart(Jwt jwt, String platform) {
+        boolean mastodon = "mastodon".equalsIgnoreCase(platform);
+        String claim = jwt.getClaimAsString(mastodon ? "mastodon_localpart" : "localpart");
+        if (claim != null && !claim.isBlank()) {
+            return Mono.just(claim);
+        }
+        return resolveAccountView(jwt).flatMap(a -> {
+            String canonical = mastodon ? a.mastodonLocalpart() : a.localpart();
+            if (canonical != null && !canonical.isBlank()) {
+                return Mono.just(canonical);
+            }
+            String matrix = a.localpart();
+            if (matrix == null || matrix.isBlank()) {
+                return Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
+                        "account has no persisted homeserver localpart yet "
+                                + "(fail-closed — will not re-derive an unchecked candidate)"));
+            }
+            return Mono.just(mastodon ? ServiceTokenBroker.mastodonLocalpart(matrix) : matrix);
+        });
+    }
+
+    /**
+     * Resolve the canonical {@link AdminBffInternalClient.AccountView} for a JWT with no
+     * synthetic-session localpart claim — a REAL Casdoor JWT presented directly to this route
+     * (still fully validated by {@code SecurityConfig}). Mirrors the two D6 proxy controllers'
+     * resolution (this org's established duplication pattern), FAIL CLOSED on any lookup failure.
+     */
+    private Mono<AdminBffInternalClient.AccountView> resolveAccountView(Jwt jwt) {
+        String email = jwt.getClaimAsString("email");
         String pu = jwt.getClaimAsString("preferred_username");
-        return (pu == null || pu.isBlank()) ? jwt.getSubject() : pu;
+        Mono<AdminBffInternalClient.AccountView> byEmail = (email != null && !email.isBlank())
+                ? adminBff.getAccount(idFor("google", email))
+                        .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
+                : Mono.empty();
+        Mono<AdminBffInternalClient.AccountView> byUsername = (pu != null && !pu.isBlank())
+                ? adminBff.getAccount(idFor("discord", pu))
+                        .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
+                : Mono.empty();
+        return byEmail.switchIfEmpty(byUsername)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                        "no registered account for this token's identity claims "
+                                + "(fail-closed homeserver-localpart resolution)")));
+    }
+
+    /** Mirrors {@code AccountStore.idFor(provider, handle)} — the same textual identity-string
+     *  convention the two proxy controllers replicate rather than compile-depending on auth-core. */
+    private static String idFor(String provider, String handle) {
+        return provider + ":" + handle.toLowerCase(Locale.ROOT);
     }
 }

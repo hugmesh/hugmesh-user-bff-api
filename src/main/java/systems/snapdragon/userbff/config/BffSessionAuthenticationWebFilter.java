@@ -488,6 +488,12 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *       readers listed above ({@code ConnectedClientsController}, {@code
      *       SelfSilenceController}) are unchanged by this fix — they are not homeserver
      *       MINT call sites.</li>
+     *   <li>{@code mastodon_localpart} = {@link AccountView#mastodonLocalpart()}, when
+     *       non-blank — the coarser Mastodon fold (admin-bff changeset 291) with its OWN
+     *       uniqueness. {@code MastodonProxyController.mastodonLocalpart} reads THIS claim
+     *       (falling back to an internal account read only when absent), so a Mastodon mint is
+     *       never a client-side re-fold of {@code localpart} — the residual half of the
+     *       account-takeover-by-collision fix (the Matrix {@code localpart} above is 290's half).</li>
      *   <li>{@code iss} = {@link #singleTrustedIssuerOrNull} — see its own doc for the
      *       single- vs multi-issuer distinction this claim exists to serve.</li>
      * </ul>
@@ -520,6 +526,16 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
         String localpart = view.localpart();
         if (localpart != null && !localpart.isBlank()) {
             builder.claim("localpart", localpart);
+        }
+
+        // The coarser Mastodon fold (admin-bff changeset 291): MastodonProxyController mints
+        // under THIS claim, not a re-fold of `localpart` — two accounts distinct under the
+        // Matrix fold still collapse to one Mastodon localpart, so the shared-password recover
+        // leg would otherwise let the second take over the first (the residual half of the
+        // takeover fix). No extra round trip — the AccountView already carries it.
+        String mastodonLocalpart = view.mastodonLocalpart();
+        if (mastodonLocalpart != null && !mastodonLocalpart.isBlank()) {
+            builder.claim("mastodon_localpart", mastodonLocalpart);
         }
 
         String issuer = singleTrustedIssuerOrNull(domainRegistry);

@@ -53,14 +53,37 @@ public class AdminBffInternalClient {
      * Casdoor JWT claim ({@code preferred_username}/{@code sub}): two DIFFERENT accounts can
      * share the same JWT-claim-derived candidate (that is the exact bug this closes), but
      * admin-bff guarantees {@code localpart} is unique across every account it holds. May be
-     * blank for a row that predates the column — {@code @JsonIgnoreProperties(ignoreUnknown)}
-     * on this class isn't needed (this repo controls both ends of the JSON contract), but a
-     * blank value here is expected to be RARE/transient, not "absent forever": admin-bff
-     * self-heals it (still through the same collision-checked resolver) the next time this
-     * account is read via a path that needs it (e.g. {@code AuthController#provision}).
+     * blank for a row that predates the column. A blank value here is expected to be
+     * RARE/transient, not "absent forever": admin-bff self-heals it (still through the same
+     * collision-checked resolver) the next time this account is read via a path that needs it
+     * (e.g. {@code AuthController#provision}).
+     *
+     * <p>{@code mastodonLocalpart} (admin-bff Liquibase changeset 291) is the coarser
+     * Mastodon/Akkoma fold ({@code [a-z0-9_]}, 30-cap) of {@code localpart}, with its OWN
+     * UNIQUE constraint. The Mastodon-mint call sites ({@code MastodonProxyController}, the
+     * media leg) read THIS field, not a client-side re-fold of {@code localpart}: two accounts
+     * DISTINCT under the Matrix fold ({@code john.doe} vs {@code john-doe}) still collapse to
+     * one Mastodon localpart, and the shared-service-password recover leg would let the second
+     * take over the first — exactly the residual takeover 291 closes. {@code
+     * @JsonIgnoreProperties(ignoreUnknown = true)} is added so a NEWER admin-bff that emits a
+     * further account field can never break this consumer's parse (cross-repo deploy skew).
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record AccountView(String id, String provider, String handle,
-                              boolean registrationComplete, List<String> roles, String localpart) {
+                              boolean registrationComplete, List<String> roles,
+                              String localpart, String mastodonLocalpart) {
+
+        /**
+         * Back-compat constructor for callers/tests that predate the Mastodon fold (changeset
+         * 291): {@code mastodonLocalpart} defaults blank ("resolve it, never re-fold"). Jackson
+         * deserialises admin-bff's JSON via the CANONICAL (7-arg) record constructor + component
+         * names — this extra constructor is invisible to it, so the wire contract is unchanged.
+         */
+        public AccountView(String id, String provider, String handle, boolean registrationComplete,
+                           List<String> roles, String localpart) {
+            this(id, provider, handle, registrationComplete, roles, localpart, "");
+        }
+
         // Return a defensive copy so callers cannot mutate the internal list.
         @Override
         public List<String> roles() {
@@ -73,6 +96,13 @@ public class AdminBffInternalClient {
         @Override
         public String localpart() {
             return localpart == null ? "" : localpart;
+        }
+
+        /** Never null — the persisted Mastodon fold (changeset 291); blank means "not resolved
+         *  yet" (an older admin-bff that does not emit it, or a pre-291 row), the same
+         *  "resolve it, never re-fold" contract as {@link #localpart()}. */
+        public String mastodonLocalpart() {
+            return mastodonLocalpart == null ? "" : mastodonLocalpart;
         }
     }
 

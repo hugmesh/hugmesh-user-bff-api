@@ -16,6 +16,7 @@ import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.config.SecurityConfig;
 import systems.snapdragon.userbff.media.MediaPoisonService.UploadOutcome;
 import systems.snapdragon.userbff.media.PoisonModels.Backend;
@@ -73,6 +74,10 @@ class MediaPoisonControllerTest {
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean MediaPoisonService service;
+    // 291: the controller now resolves the PERSISTED per-platform localpart — claim-first, else an
+    // internal admin-bff read — so the slice must provide this bean (mocked; the claim-path tests
+    // never touch it, the resolution-fallback test stubs getAccount).
+    @MockitoBean AdminBffInternalClient adminBff;
 
     private static Collection<GrantedAuthority> authorities(String... names) {
         List<GrantedAuthority> out = new ArrayList<>();
@@ -105,11 +110,15 @@ class MediaPoisonControllerTest {
     void upload_authenticatedUser_returnsHomeserverBodyPlusCloakBlock() {
         MediaPoisonDecision dec = new MediaPoisonDecision("dec-1", "alice", "mastodon",
                 "media-77", "glaze", "protected", "cuda", Instant.now());
-        when(service.upload(eq("alice"), eq("alice"), eq("mastodon"), eq("glaze"), any(), anyString(), any(), any()))
+        when(service.upload(eq("alice"), eq("alice_ml"), eq("mastodon"), eq("glaze"), any(), anyString(), any(), any()))
                 .thenReturn(Mono.just(new UploadOutcome(
                         Map.of("id", "media-77", "url", "/media/orig.png"), dec)));
 
-        client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
+        // Synthetic bff_ session JWT: the mastodon_localpart claim (291) is the persisted Mastodon
+        // fold — the media leg mints under THIS, not the subject. Claim-path: adminBff untouched.
+        client.mutateWith(mockJwt()
+                        .jwt(j -> j.subject("alice").claim("mastodon_localpart", "alice_ml"))
+                        .authorities(authorities("ROLE_USER")))
                 .post().uri("/bff/user/media/upload")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .bodyValue(multipart("mastodon", "glaze").build())
@@ -123,7 +132,36 @@ class MediaPoisonControllerTest {
                 .jsonPath("$.cloak.mode").isEqualTo("glaze")
                 .jsonPath("$.cloak.backend").isEqualTo("cuda");
 
-        verify(service).upload(eq("alice"), eq("alice"), eq("mastodon"), eq("glaze"), any(), eq("a.png"), any(), any());
+        // owner = subject; localpart = the PERSISTED Mastodon fold from the claim (not the subject).
+        verify(service).upload(eq("alice"), eq("alice_ml"), eq("mastodon"), eq("glaze"), any(), eq("a.png"), any(), any());
+        verify(adminBff, never()).getAccount(anyString());
+    }
+
+    @Test
+    void upload_noClaim_resolvesPersistedMastodonLocalpartOverInternalApi() {
+        // 291: a JWT WITHOUT the synthetic mastodon_localpart claim (a real Casdoor JWT) must NOT
+        // fall back to the old preferred_username/subject derivation — it resolves the account and
+        // mints under the PERSISTED, collision-checked Mastodon fold. Here the account's Matrix
+        // localpart is "al.ice" but the persisted Mastodon fold is "al_ice"; the media leg must use
+        // "al_ice", never a re-fold of the subject/preferred_username.
+        when(adminBff.getAccount("google:alice@x.com")).thenReturn(Mono.just(new AdminBffInternalClient.AccountView(
+                "google:alice@x.com", "google", "alice@x.com", true, List.of("ROLE_USER"), "al.ice", "al_ice")));
+        MediaPoisonDecision dec = new MediaPoisonDecision("dec-2", "alice", "mastodon",
+                "media-88", "glaze", "protected", "cuda", Instant.now());
+        when(service.upload(eq("alice"), eq("al_ice"), eq("mastodon"), any(), any(), anyString(), any(), any()))
+                .thenReturn(Mono.just(new UploadOutcome(Map.of("id", "media-88"), dec)));
+
+        client.mutateWith(mockJwt()
+                        .jwt(j -> j.subject("alice").claim("email", "alice@x.com"))
+                        .authorities(authorities("ROLE_USER")))
+                .post().uri("/bff/user/media/upload")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .bodyValue(multipart("mastodon", "glaze").build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.id").isEqualTo("media-88");
+
+        verify(service).upload(eq("alice"), eq("al_ice"), eq("mastodon"), any(), any(), eq("a.png"), any(), any());
     }
 
     // ── capability ──────────────────────────────────────────

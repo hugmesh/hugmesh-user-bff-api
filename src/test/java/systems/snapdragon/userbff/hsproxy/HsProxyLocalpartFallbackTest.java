@@ -177,6 +177,62 @@ class HsProxyLocalpartFallbackTest {
     }
 
     @Test
+    void mastodon_syntheticMastodonClaim_usedDirectly_adminBffNeverCalled() {
+        // 291: the synthetic bff_ session Jwt carries the persisted mastodon_localpart claim —
+        // used as-is for the mint (no admin-bff hop, no re-fold). The localpart claim (Matrix)
+        // is present too and MUST be ignored for the Mastodon mint.
+        HsTokenCustody custody = mock(HsTokenCustody.class);
+        ServiceTokenBroker broker = mock(ServiceTokenBroker.class);
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(custody.cipherAvailable()).thenReturn(true);
+        when(custody.loadAccessToken(anyString(), anyString())).thenReturn(Mono.empty());
+        when(broker.mintMastodon(anyString(), eq("bob_ml")))
+                .thenReturn(Mono.just(new MintedToken("native-tok", null, null, "bob_ml")));
+
+        MastodonProxyController controller = new MastodonProxyController(true, custody, broker,
+                WebClient.builder().baseUrl("http://127.0.0.1:1").build(), adminBff);
+        Jwt jwt = jwtWithClaims("casdoor:uuid", java.util.Map.of(
+                "mastodon_localpart", "bob_ml", "localpart", "bob.ml", "preferred_username", "ignored"));
+
+        controller.proxy(jwt, exchangeFor("/bff/user/mastodon/api/v1/timelines/home"))
+                .onErrorResume(e -> Mono.empty())
+                .block(Duration.ofSeconds(10));
+
+        verify(broker).mintMastodon(anyString(), eq("bob_ml"));
+        verify(broker, never()).mintMastodon(anyString(), eq("bob.ml"));
+        verify(adminBff, never()).getAccount(anyString());
+    }
+
+    @Test
+    void mastodon_realJwt_readsPersistedMastodonFold_notARefoldOfMatrixLocalpart() {
+        // 291 airtightness: the mint reads the PERSISTED Mastodon fold, never a re-fold of the
+        // Matrix localpart. Matrix localpart "bob.hs" would re-fold to "bob_hs", but the persisted
+        // (e.g. backfill-disambiguated) Mastodon value is "bob_disambig" — the mint MUST use the
+        // persisted value, or a backfilled colliding row would still be takeover-reachable.
+        HsTokenCustody custody = mock(HsTokenCustody.class);
+        ServiceTokenBroker broker = mock(ServiceTokenBroker.class);
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(custody.cipherAvailable()).thenReturn(true);
+        when(custody.loadAccessToken(anyString(), anyString())).thenReturn(Mono.empty());
+        when(adminBff.getAccount("discord:bobby")).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView("discord:bobby", "discord", "bobby",
+                        true, List.of("user"), "bob.hs", "bob_disambig")));
+        when(broker.mintMastodon(anyString(), eq("bob_disambig")))
+                .thenReturn(Mono.just(new MintedToken("native-tok", null, null, "bob_disambig")));
+
+        MastodonProxyController controller = new MastodonProxyController(true, custody, broker,
+                WebClient.builder().baseUrl("http://127.0.0.1:1").build(), adminBff);
+        Jwt jwt = jwtWithClaims("casdoor-subject", java.util.Map.of("preferred_username", "bobby"));
+
+        controller.proxy(jwt, exchangeFor("/bff/user/mastodon/api/v1/timelines/home"))
+                .onErrorResume(e -> Mono.empty())
+                .block(Duration.ofSeconds(10));
+
+        verify(broker).mintMastodon(anyString(), eq("bob_disambig"));
+        verify(broker, never()).mintMastodon(anyString(), eq("bob_hs"));
+    }
+
+    @Test
     void mastodon_realJwt_noClaimsAtAll_failsClosed_neverMints() {
         HsTokenCustody custody = mock(HsTokenCustody.class);
         ServiceTokenBroker broker = mock(ServiceTokenBroker.class);
