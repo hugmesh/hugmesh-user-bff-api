@@ -10,6 +10,7 @@ import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.federation.FederationApiClient;
 import systems.snapdragon.userbff.support.TestDatabaseConfig;
 import systems.snapdragon.commons.web.ApiException;
@@ -55,8 +56,14 @@ class SelfSilenceServiceTest {
             // federationHideEnabled=false: the federation hide leg stays a stub-seam.
             return new SelfSilenceService(repo, fed, hides, false);
         }
-        @Bean SelfSilenceExpiryAction expiryAction(SelfSilenceRepository repo, SelfSilenceService svc) {
-            return new SelfSilenceExpiryAction(repo, svc);
+        // Null WebClient == the documented fail-closed stub (AdminBffInternalClient class
+        // doc): every getAccount(...) call errors, so SelfSilenceExpiryAction's canonical-
+        // resolution always falls back to its last-resort userId-for-both behaviour, exactly
+        // matching this slice's activate(owner, owner, ...) calls below.
+        @Bean AdminBffInternalClient adminBff() { return new AdminBffInternalClient(null); }
+        @Bean SelfSilenceExpiryAction expiryAction(SelfSilenceRepository repo, SelfSilenceService svc,
+                                                   AdminBffInternalClient adminBff) {
+            return new SelfSilenceExpiryAction(repo, svc, adminBff);
         }
     }
 

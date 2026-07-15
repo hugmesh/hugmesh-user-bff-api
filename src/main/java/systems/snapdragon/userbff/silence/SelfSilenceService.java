@@ -60,25 +60,37 @@ public class SelfSilenceService {
         for (HomeserverHideClient c : hideClients) this.hidesByPlatform.put(c.platform(), c);
     }
 
-    /** Back-compat overload — stamps/operates on the platform {@code default} domain. */
+    /** Back-compat overload — ONE localpart applied to BOTH platform hides, on the
+     *  platform {@code default} domain. See the two-localpart overload below. */
     public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason) {
-        return activate(owner, localpart, expiresAt, reason, DomainRegistry.DEFAULT_DOMAIN);
+        return activate(owner, localpart, localpart, expiresAt, reason, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** Back-compat overload — ONE localpart applied to BOTH platform hides. See the
+     *  two-localpart overload below. */
+    public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason,
+                                      String domain) {
+        return activate(owner, localpart, localpart, expiresAt, reason, domain);
     }
 
     /**
      * Activate (or re-activate) the owner's self-silence until {@code expiresAt}. The
      * durable row is written FIRST (source of truth), THEN the three hides fire
-     * best-effort (never fail the call). {@code localpart} is the caller's homeserver
-     * handle (JWT preferred_username) used for the homeserver hide seams.
+     * best-effort (never fail the call). {@code matrixLocalpart}/{@code
+     * mastodonLocalpart} are the caller's PER-PLATFORM canonical homeserver handles
+     * (resolved claim-first / admin-bff-resolved by {@code SelfSilenceController}) —
+     * since #118 split the Matrix and Mastodon folds these can legitimately differ
+     * for the SAME account, so passing one value for both (the back-compat overloads
+     * above) hides the WRONG handle on whichever platform's fold diverges.
      */
-    public Mono<SelfSilence> activate(String owner, String localpart, Instant expiresAt, String reason,
-                                      String domain) {
+    public Mono<SelfSilence> activate(String owner, String matrixLocalpart, String mastodonLocalpart,
+                                      Instant expiresAt, String reason, String domain) {
         requireOwner(owner);
         if (expiresAt == null || !expiresAt.isAfter(Instant.now())) {
             return Mono.error(ApiException.badRequest("expiresAt must be in the future"));
         }
         return repo.activate(owner, expiresAt, reason, domain)
-                .flatMap(saved -> applyHides(localpart).thenReturn(saved))
+                .flatMap(saved -> applyHides(matrixLocalpart, mastodonLocalpart).thenReturn(saved))
                 .doOnSuccess(s -> log.info("[self-silence] activated for {} until {}", owner, expiresAt));
     }
 
@@ -95,9 +107,16 @@ public class SelfSilenceService {
         return status(owner, DomainRegistry.DEFAULT_DOMAIN);
     }
 
-    /** Back-compat overload — scopes to the platform {@code default} domain. */
+    /** Back-compat overload — ONE localpart applied to BOTH platform un-hides, on the
+     *  platform {@code default} domain. See the two-localpart overload below. */
     public Mono<Void> cancel(String owner, String localpart) {
-        return cancel(owner, localpart, DomainRegistry.DEFAULT_DOMAIN);
+        return cancel(owner, localpart, localpart, DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    /** Back-compat overload — ONE localpart applied to BOTH platform un-hides. See
+     *  the two-localpart overload below. */
+    public Mono<Void> cancel(String owner, String localpart, String domain) {
+        return cancel(owner, localpart, localpart, domain);
     }
 
     /**
@@ -105,14 +124,17 @@ public class SelfSilenceService {
      * stamp {@code cleared_at} (fail-safe ordering — un-hides first, clear last; a
      * failed un-hide leaves the row active so the scheduled wake retries, never a
      * silent permanent hide). Idempotent: a no-op clear returns a notFound so the UI
-     * can distinguish "nothing active".
+     * can distinguish "nothing active". {@code matrixLocalpart}/{@code
+     * mastodonLocalpart} are the caller's PER-PLATFORM canonical handles — see
+     * {@link #activate(String, String, String, Instant, String, String)}'s doc for
+     * why a single shared value is wrong whenever the two folds diverge.
      */
-    public Mono<Void> cancel(String owner, String localpart, String domain) {
+    public Mono<Void> cancel(String owner, String matrixLocalpart, String mastodonLocalpart, String domain) {
         requireOwner(owner);
         Mono<SelfSilence> activeRow = repo.find(owner, domain)
                 .filter(s -> s.clearedAt() == null)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no active self-silence to cancel")));
-        return activeRow.flatMap(s -> clearHides(localpart)
+        return activeRow.flatMap(s -> clearHides(matrixLocalpart, mastodonLocalpart)
                 .then(repo.clear(owner, domain))
                 .flatMap(cleared -> cleared > 0
                         ? Mono.<Void>empty()
@@ -144,27 +166,30 @@ public class SelfSilenceService {
 
     // ── hide / un-hide legs (all fail-CLOSED: never hard-fail the flow) ──────
 
-    /** Fire all three hides best-effort; the row already stands so failures are logged, not thrown. */
-    Mono<Void> applyHides(String localpart) {
+    /** Fire all three hides best-effort; the row already stands so failures are logged, not
+     *  thrown. Each platform hides under ITS OWN canonical localpart — the two folds can
+     *  legitimately differ for the same account (see the two-localpart {@code activate} doc). */
+    Mono<Void> applyHides(String matrixLocalpart, String mastodonLocalpart) {
         Mono<Void> fed = federationHideEnabled
                 ? federation.applyHideProfile()
                     .onErrorResume(e -> { log.warn("[self-silence] federation hide-profile failed (row kept): {}", e.toString()); return Mono.empty(); })
                 : Mono.fromRunnable(() -> log.info("[self-silence] (stub) federation hide-profile disabled (self-silence.federation.enabled=false)"));
         return fed
-                .then(hidePlatform("mastodon", localpart, true))
-                .then(hidePlatform("matrix", localpart, true))
+                .then(hidePlatform("mastodon", mastodonLocalpart, true))
+                .then(hidePlatform("matrix", matrixLocalpart, true))
                 .then();
     }
 
-    /** Reverse all three hides best-effort (used by cancel + the scheduled wake). */
-    Mono<Void> clearHides(String localpart) {
+    /** Reverse all three hides best-effort (used by cancel + the scheduled wake), each
+     *  platform under ITS OWN canonical localpart — see {@link #applyHides}. */
+    Mono<Void> clearHides(String matrixLocalpart, String mastodonLocalpart) {
         Mono<Void> fed = federationHideEnabled
                 ? federation.clearHideProfile()
                     .onErrorResume(e -> { log.warn("[self-silence] federation un-hide failed: {}", e.toString()); return Mono.empty(); })
                 : Mono.fromRunnable(() -> log.info("[self-silence] (stub) federation un-hide disabled (self-silence.federation.enabled=false)"));
         return fed
-                .then(hidePlatform("mastodon", localpart, false))
-                .then(hidePlatform("matrix", localpart, false))
+                .then(hidePlatform("mastodon", mastodonLocalpart, false))
+                .then(hidePlatform("matrix", matrixLocalpart, false))
                 .then();
     }
 

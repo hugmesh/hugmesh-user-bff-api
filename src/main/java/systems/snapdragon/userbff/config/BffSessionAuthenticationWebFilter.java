@@ -455,6 +455,7 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *       ProfileController.usernameOf}/{@code ConnectedClientsController.localpart}/
      *       {@code MatrixProxyController.localpart}/{@code
      *       MastodonProxyController.localpart}/{@code SelfSilenceController.localpart}
+     *       (the latter's admin-bff-fallback branch only)
      *       resolves a real handle instead of falling back to the "{@code
      *       provider:handle}" composite {@code sub} string (which is not a valid
      *       homeserver localpart). For {@code "google"}/{@code "discord"} accounts this
@@ -484,10 +485,12 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *       all). Threading it through the ALREADY-fetched {@link AccountView} here costs
      *       no additional admin-bff round trip — this filter resolves it via {@link
      *       AdminBffInternalClient#resolveSession} for every bff_-session request
-     *       regardless. The OTHER {@code preferred_username}/{@code sub}-based localpart
-     *       readers listed above ({@code ConnectedClientsController}, {@code
-     *       SelfSilenceController}) are unchanged by this fix — they are not homeserver
-     *       MINT call sites.</li>
+     *       regardless. {@code ConnectedClientsController} is unchanged by this fix — it
+     *       is not a homeserver MINT call site. {@code SelfSilenceController} ALSO now
+     *       reads this claim first (a later, separate fix — its two homeserver hide seams,
+     *       not a mint site), but unlike the two proxy controllers it degrades to a blank
+     *       localpart rather than failing closed when neither this claim nor an admin-bff
+     *       lookup resolves one, since a self-silence hide is best-effort + gated.</li>
      *   <li>{@code mastodon_localpart} = {@link AccountView#mastodonLocalpart()}, when
      *       non-blank — the coarser Mastodon fold (admin-bff changeset 291) with its OWN
      *       uniqueness. {@code MastodonProxyController.mastodonLocalpart} reads THIS claim

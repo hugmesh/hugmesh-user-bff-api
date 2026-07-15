@@ -13,9 +13,11 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -36,9 +38,15 @@ import java.util.Map;
  *
  * <p>INVARIANT: this surface never writes a Casdoor role, an {@code access_suspension}
  * row, or a revocation key (the {@link SelfSilenceService} is structurally incapable
- * of it) — login/home stays normal for the silenced user. The homeserver
- * localpart used for the visibility-hide seams comes from the JWT
- * {@code preferred_username} claim.
+ * of it) — login/home stays normal for the silenced user. The homeserver localparts
+ * used for the two visibility-hide seams are resolved CLAIM-FIRST (the {@code
+ * localpart}/{@code mastodon_localpart} claims {@code
+ * BffSessionAuthenticationWebFilter.syntheticJwt} stamps from admin-bff's PERSISTED,
+ * collision-checked {@code account.localpart}/{@code account.mastodon_localpart}),
+ * else via a real internal account read — mirrors {@code MatrixProxyController
+ * .resolveCanonicalLocalpart}/{@code MediaPoisonController.resolveAccountView} (this
+ * org's established duplication pattern) — see {@link #localpart}. Never the raw JWT
+ * {@code preferred_username}/{@code sub}, which two different accounts can share.
  */
 @Tag(name = "Self-silence", description = "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation.")
 @RestController
@@ -49,10 +57,13 @@ public class SelfSilenceController {
 
     private final SelfSilenceService silence;
     private final PrincipalDomain principalDomain;
+    private final AdminBffInternalClient adminBff;
 
-    public SelfSilenceController(SelfSilenceService silence, PrincipalDomain principalDomain) {
+    public SelfSilenceController(SelfSilenceService silence, PrincipalDomain principalDomain,
+                                 AdminBffInternalClient adminBff) {
         this.silence = silence;
         this.principalDomain = principalDomain;
+        this.adminBff = adminBff;
     }
 
     /**
@@ -73,8 +84,11 @@ public class SelfSilenceController {
     @PostMapping("/self-silence/activate")
     public Mono<SelfSilence> activate(@AuthenticationPrincipal Jwt jwt,
                                       @Valid @RequestBody ActivateRequest body) {
-        return silence.activate(jwt.getSubject(), localpart(jwt), body.expiresAt(), body.reason(),
-                principalDomain.forScope(jwt));
+        String owner = jwt.getSubject();
+        String domain = principalDomain.forScope(jwt);
+        return Mono.zip(matrixLocalpart(jwt), mastodonLocalpart(jwt))
+                .flatMap(lp -> silence.activate(owner, lp.getT1(), lp.getT2(),
+                        body.expiresAt(), body.reason(), domain));
     }
 
     @Operation(summary = "My self-silence status (active or cleared).")
@@ -88,7 +102,10 @@ public class SelfSilenceController {
     @Operation(summary = "Cancel my self-silence now (un-hide + clear).")
     @PostMapping("/self-silence/cancel")
     public Mono<ResponseEntity<Void>> cancel(@AuthenticationPrincipal Jwt jwt) {
-        return silence.cancel(jwt.getSubject(), localpart(jwt), principalDomain.forScope(jwt))
+        String owner = jwt.getSubject();
+        String domain = principalDomain.forScope(jwt);
+        return Mono.zip(matrixLocalpart(jwt), mastodonLocalpart(jwt))
+                .flatMap(lp -> silence.cancel(owner, lp.getT1(), lp.getT2(), domain))
                 .thenReturn(ResponseEntity.noContent().<Void>build());
     }
 
@@ -100,13 +117,66 @@ public class SelfSilenceController {
                 principalDomain.forScope(jwt));
     }
 
+    /** The caller's PERSISTED, collision-checked Matrix localpart — see {@link #localpart}. */
+    private Mono<String> matrixLocalpart(Jwt jwt) {
+        return localpart(jwt, "matrix");
+    }
+
+    /** The caller's PERSISTED, collision-checked Mastodon fold — see {@link #localpart}. */
+    private Mono<String> mastodonLocalpart(Jwt jwt) {
+        return localpart(jwt, "mastodon");
+    }
+
     /**
-     * The caller's homeserver localpart (handle) for the visibility-hide seams —
-     * Casdoor's {@code preferred_username} claim. Falls back to the subject if the
-     * claim is absent; the homeserver seams are best-effort + gated anyway.
+     * The caller's homeserver localpart FOR {@code platform}, used only for the two
+     * visibility-hide seams. CLAIM-FIRST (the {@code localpart}/{@code
+     * mastodon_localpart} claim on the synthetic {@code bff_}-session Jwt — see the
+     * class doc), else a real internal account read via {@link #resolveAccountView}
+     * — mirrors {@code MediaPoisonController.localpart}'s claim-first + adminBff-
+     * fallback shape (this org's established duplication pattern).
+     *
+     * <p>UNLIKE the homeserver-MINT call sites ({@code MatrixProxyController} et al.),
+     * this NEVER fails closed: a self-silence hide is documented best-effort + gated
+     * ({@link SelfSilenceService} class javadoc), so an unresolved identity degrades
+     * to {@code ""} and {@code SelfSilenceService#hidePlatform}'s existing blank-check
+     * just skips that leg rather than 401/409-ing the caller's own activate/cancel.
      */
-    private static String localpart(Jwt jwt) {
+    private Mono<String> localpart(Jwt jwt, String platform) {
+        boolean mastodon = "mastodon".equalsIgnoreCase(platform);
+        String claim = jwt.getClaimAsString(mastodon ? "mastodon_localpart" : "localpart");
+        if (claim != null && !claim.isBlank()) {
+            return Mono.just(claim);
+        }
+        return resolveAccountView(jwt)
+                .map(a -> mastodon ? a.mastodonLocalpart() : a.localpart())
+                .defaultIfEmpty("")
+                .onErrorResume(e -> Mono.just(""));
+    }
+
+    /**
+     * Resolve the account view for a real, externally-issued Casdoor JWT that carries
+     * no synthetic-session localpart claim — the SAME {@code (provider, handle)} →
+     * account-id derivation {@code MatrixProxyController.resolveCanonicalLocalpart}/
+     * {@code MediaPoisonController.resolveAccountView} use. Best-effort: any lookup
+     * failure (including "no registered account") completes EMPTY rather than
+     * erroring, so {@link #localpart} degrades to {@code ""} instead of failing the
+     * caller's own activate/cancel call.
+     */
+    private Mono<AdminBffInternalClient.AccountView> resolveAccountView(Jwt jwt) {
+        String email = jwt.getClaimAsString("email");
         String pu = jwt.getClaimAsString("preferred_username");
-        return (pu == null || pu.isBlank()) ? jwt.getSubject() : pu;
+        Mono<AdminBffInternalClient.AccountView> byEmail = (email != null && !email.isBlank())
+                ? adminBff.getAccount(idFor("google", email)).onErrorResume(e -> Mono.empty())
+                : Mono.empty();
+        Mono<AdminBffInternalClient.AccountView> byUsername = (pu != null && !pu.isBlank())
+                ? adminBff.getAccount(idFor("discord", pu)).onErrorResume(e -> Mono.empty())
+                : Mono.empty();
+        return byEmail.switchIfEmpty(byUsername);
+    }
+
+    /** Mirrors {@code AccountStore.idFor(provider, handle)} — the same textual identity-string
+     *  convention {@code MatrixProxyController}/{@code MastodonProxyController} replicate. */
+    private static String idFor(String provider, String handle) {
+        return provider + ":" + handle.toLowerCase(Locale.ROOT);
     }
 }

@@ -5,6 +5,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
+import reactor.util.function.Tuples;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,11 +43,14 @@ public class SelfSilenceExpiryAction {
 
     private final SelfSilenceRepository repo;
     private final SelfSilenceService silence;
+    private final AdminBffInternalClient adminBff;
     private final AtomicReference<Instant> lastSuccessAt = new AtomicReference<>();
 
-    public SelfSilenceExpiryAction(SelfSilenceRepository repo, SelfSilenceService silence) {
+    public SelfSilenceExpiryAction(SelfSilenceRepository repo, SelfSilenceService silence,
+                                   AdminBffInternalClient adminBff) {
         this.repo = repo;
         this.silence = silence;
+        this.adminBff = adminBff;
     }
 
     /**
@@ -86,14 +92,44 @@ public class SelfSilenceExpiryAction {
             log.info("[self-silence] skipping wake for {} — active ban dominates (not un-hiding)", userId);
             return Mono.just(0L);
         }
-        // localpart == user_id fallback on the scheduled path (no request JWT /
-        // stored localpart); the homeserver un-hide seams are best-effort + gated.
-        return silence.clearHides(userId)
+        return resolveWakeLocalparts(userId)
+                .flatMap(lp -> silence.clearHides(lp.getT1(), lp.getT2()))
                 // SYSTEM clear (unscoped): the expiry sweep auto-clears overdue
                 // silences across ALL brands — it is a platform task, not a
                 // per-principal mutation. See SelfSilenceRepository.clearSystem.
                 .then(repo.clearSystem(userId))
                 .doOnSuccess(c -> { if (c > 0) log.info("[self-silence] auto-cleared expired silence for {}", userId); });
+    }
+
+    /**
+     * Resolve the (matrixLocalpart, mastodonLocalpart) pair to un-hide this row under, via
+     * a real admin-bff account read keyed by the row's stored {@code user_id}. This agrees
+     * with the SAME canonical value {@code SelfSilenceController} resolved at activate-time
+     * for a native-login / {@code bff_}-session row, because {@code
+     * BffSessionAuthenticationWebFilter.syntheticJwt} stamps {@code .subject(view.id())} —
+     * i.e. the stored {@code user_id} IS the admin-bff account id for that path.
+     *
+     * <p>FALLBACK (last resort, not the primary path): on ANY resolution failure — the
+     * account 404s, admin-bff is unreachable, or a resolved field is blank — that
+     * platform's leg falls back to the raw {@code user_id}, the pre-fix behaviour. This is
+     * the ONLY reachable case for a self-silence row created via a real, externally-issued
+     * Casdoor JWT presented directly to {@code /bff/user/self-silence/**} ({@code
+     * SecurityConfig} still wires that route's {@code o.jwt(...)} resource server, so such
+     * a token reaches it without ever passing through {@code
+     * BffSessionAuthenticationWebFilter}): there {@code user_id} is Casdoor's raw subject,
+     * not an admin-bff account id, so the lookup here 404s and this degrades to exactly
+     * today's un-hide target. Never breaks the sweep's completion — mirrors this file's
+     * existing "never hard-fail" style.
+     */
+    private Mono<Tuple2<String, String>> resolveWakeLocalparts(String userId) {
+        return adminBff.getAccount(userId)
+                .map(a -> Tuples.of(orFallback(a.localpart(), userId), orFallback(a.mastodonLocalpart(), userId)))
+                .onErrorResume(e -> Mono.just(Tuples.of(userId, userId)));
+    }
+
+    /** {@code canonical} when resolved (non-blank); else the last-resort {@code userId}. */
+    private static String orFallback(String canonical, String userId) {
+        return (canonical == null || canonical.isBlank()) ? userId : canonical;
     }
 
     /**

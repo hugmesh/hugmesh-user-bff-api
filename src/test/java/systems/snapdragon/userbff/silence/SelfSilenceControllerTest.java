@@ -12,6 +12,7 @@ import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.time.Instant;
@@ -59,6 +60,7 @@ class SelfSilenceControllerTest {
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean SelfSilenceService silence;
+    @MockitoBean AdminBffInternalClient adminBff;
 
     private static Collection<GrantedAuthority> authorities(String... names) {
         List<GrantedAuthority> out = new ArrayList<>();
@@ -79,9 +81,10 @@ class SelfSilenceControllerTest {
 
     @Test
     void activate_ownerIsJwtSubject() {
-        when(silence.activate(anyString(), anyString(), any(), any(), any()))
+        when(silence.activate(anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Mono.just(new SelfSilence("alice", Instant.now(), soon(), null, "x", Instant.now())));
-        client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice")
+                                .claim("localpart", "alice").claim("mastodon_localpart", "alice"))
                         .authorities(authorities("ROLE_USER")))
                 .post().uri("/bff/user/self-silence/activate")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -89,7 +92,8 @@ class SelfSilenceControllerTest {
                 .exchange()
                 .expectStatus().isOk();
         verify(silence).activate(org.mockito.ArgumentMatchers.eq("alice"),
-                org.mockito.ArgumentMatchers.eq("alice"), any(), any(), any());
+                org.mockito.ArgumentMatchers.eq("alice"), org.mockito.ArgumentMatchers.eq("alice"),
+                any(), any(), any());
     }
 
     @Test
@@ -100,7 +104,7 @@ class SelfSilenceControllerTest {
                 .bodyValue(Map.of("expiresAt", Instant.now().minusSeconds(60).toString()))
                 .exchange()
                 .expectStatus().isBadRequest();
-        verify(silence, never()).activate(anyString(), anyString(), any(), any(), any());
+        verify(silence, never()).activate(anyString(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -118,8 +122,9 @@ class SelfSilenceControllerTest {
 
     @Test
     void cancel_returnsNoContent() {
-        when(silence.cancel(eq("alice"), eq("alice"), any())).thenReturn(Mono.empty());
-        client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
+        when(silence.cancel(eq("alice"), eq("alice"), eq("alice"), any())).thenReturn(Mono.empty());
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice")
+                                .claim("localpart", "alice").claim("mastodon_localpart", "alice"))
                         .authorities(authorities("ROLE_USER")))
                 .post().uri("/bff/user/self-silence/cancel")
                 .exchange()

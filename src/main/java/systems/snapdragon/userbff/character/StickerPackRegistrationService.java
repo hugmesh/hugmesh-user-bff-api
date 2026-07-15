@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.hsproxy.HsServiceTokenRow;
 import systems.snapdragon.userbff.hsproxy.HsTokenCustody;
 import systems.snapdragon.userbff.hsproxy.ServiceTokenBroker;
@@ -67,6 +68,7 @@ public class StickerPackRegistrationService {
     private final HsTokenCustody custody;
     private final ServiceTokenBroker broker;
     private final MatrixClientApiClient matrix;
+    private final AdminBffInternalClient adminBff;
     /** The homeserver name = the {@code :server} part of {@code @localpart:server}. */
     private final String serverName;
     /**
@@ -83,6 +85,7 @@ public class StickerPackRegistrationService {
             HsTokenCustody custody,
             ServiceTokenBroker broker,
             MatrixClientApiClient matrix,
+            AdminBffInternalClient adminBff,
             @Value("${sticker.matrix.register.enabled:false}") boolean enabled,
             @Value("${sticker.matrix.server-name:${MATRIX_SERVER_NAME:snapdragon-backend.svc.cluster.local}}")
             String serverName) {
@@ -90,6 +93,7 @@ public class StickerPackRegistrationService {
         this.custody = custody;
         this.broker = broker;
         this.matrix = matrix;
+        this.adminBff = adminBff;
         this.enabled = enabled;
         this.serverName = serverName;
     }
@@ -138,10 +142,39 @@ public class StickerPackRegistrationService {
                         .map(minted -> minted.accessToken())));
     }
 
-    /** No custody row yet: mint (creates the row + localpart), then register with that token. */
+    /**
+     * No custody row yet: resolve the mint candidate, mint (creates the row + localpart),
+     * then register with that token.
+     *
+     * <p>Prefers the PERSISTED, collision-checked {@code account.localpart} (admin-bff
+     * Liquibase changeset 290) via a real internal account read keyed by {@code
+     * ownerSubject} (the Casdoor JWT subject the controller stamped onto {@link VnSticker
+     * #ownerSubject} — see its javadoc) — the SAME account-takeover-by-collision fix
+     * {@code MatrixProxyController}/{@code MastodonProxyController} apply to their mint
+     * sites. The OLD behaviour ({@link ServiceTokenBroker#localpart}-sanitizing the raw
+     * subject itself) is exactly the unchecked-candidate bug that fix closes: two
+     * different accounts can derive the SAME sanitized candidate from unrelated subjects.
+     *
+     * <p>FALLBACK on empty/error (no persisted localpart yet, or admin-bff unreachable):
+     * today's {@link ServiceTokenBroker#localpart} derivation — this class's flow is
+     * explicitly fail-soft throughout (a homeserver outage NEVER fails the moderator's
+     * activation, see the class doc), so the fix strictly improves the primary path with
+     * zero regression risk on the fallback.
+     */
     private Mono<Void> mintThenRegister(String ownerSubject) {
-        return Mono.defer(() -> broker.mintMatrix(ownerSubject, ServiceTokenBroker.localpart(ownerSubject))
+        return Mono.defer(() -> mintCandidateLocalpart(ownerSubject)
+                .flatMap(candidate -> broker.mintMatrix(ownerSubject, candidate))
                 .flatMap(minted -> registerWith(ownerSubject, minted.localpart(), minted.accessToken())));
+    }
+
+    /** See {@link #mintThenRegister}'s doc: canonical persisted localpart, else the
+     *  raw-subject derivation fallback. */
+    private Mono<String> mintCandidateLocalpart(String ownerSubject) {
+        return adminBff.getAccount(ownerSubject)
+                .map(AdminBffInternalClient.AccountView::localpart)
+                .filter(lp -> !lp.isBlank())
+                .onErrorResume(e -> Mono.empty())
+                .defaultIfEmpty(ServiceTokenBroker.localpart(ownerSubject));
     }
 
     /** With a localpart + token in hand: build the user id, read-modify-write the pack. */

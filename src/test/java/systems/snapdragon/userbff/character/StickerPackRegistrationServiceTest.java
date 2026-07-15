@@ -5,6 +5,7 @@ import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.hsproxy.HsServiceTokenRow;
 import systems.snapdragon.userbff.hsproxy.HsTokenCustody;
 import systems.snapdragon.userbff.hsproxy.MintedToken;
@@ -50,10 +51,11 @@ class StickerPackRegistrationServiceTest {
     private final HsTokenCustody custody = mock(HsTokenCustody.class);
     private final ServiceTokenBroker broker = mock(ServiceTokenBroker.class);
     private final MatrixClientApiClient matrix = mock(MatrixClientApiClient.class);
+    private final AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
 
     /** Build the service with the dark flag set as requested. */
     private StickerPackRegistrationService service(boolean enabled) {
-        return new StickerPackRegistrationService(stickerRepo, custody, broker, matrix, enabled, SERVER);
+        return new StickerPackRegistrationService(stickerRepo, custody, broker, matrix, adminBff, enabled, SERVER);
     }
 
     private static VnSticker sticker(String id, String expr, String mxc, Instant created) {
@@ -164,8 +166,10 @@ class StickerPackRegistrationServiceTest {
     @Test
     void noCustodyRow_mintsCreatesRow_thenRegisters() {
         when(custody.cipherAvailable()).thenReturn(true);
-        // No custody row at all → mintThenRegister.
+        // No custody row at all → mintThenRegister. No admin-bff account resolvable either →
+        // falls back to today's ServiceTokenBroker.localpart(ownerSubject) derivation.
         when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
+        when(adminBff.getAccount(OWNER)).thenReturn(Mono.empty());
         when(broker.mintMatrix(eq(OWNER), anyString()))
                 .thenReturn(Mono.just(new MintedToken("syt_fresh", null, null, LOCALPART)));
         when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
@@ -175,6 +179,52 @@ class StickerPackRegistrationServiceTest {
         StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
 
         verify(matrix).setAccountData(any(), any(), any(), eq("syt_fresh"));
+    }
+
+    // ── canonical-localpart mint (account-takeover-by-collision fix, sticker leg) ──
+
+    @Test
+    void mintThenRegister_prefersCanonicalPersistedLocalpart_overRawSubjectDerivation() {
+        // The custody-row path (tokenFor/registerWith) already mints under the PERSISTED
+        // row.localpart() for a returning owner. mintThenRegister (first-ever mint for this
+        // owner) must now mint under the SAME kind of canonical value — not a sanitized
+        // derivation of the raw ownerSubject — proving parity between the two mint paths.
+        when(custody.cipherAvailable()).thenReturn(true);
+        when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
+        when(adminBff.getAccount(OWNER)).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView(OWNER, "google", OWNER, true,
+                        java.util.List.of("user"), "alice-canonical")));
+        when(broker.mintMatrix(eq(OWNER), eq("alice-canonical")))
+                .thenReturn(Mono.just(new MintedToken("syt_canonical", null, null, "alice-canonical")));
+        when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
+        when(matrix.getAccountData(any(), any(), eq("syt_canonical"))).thenReturn(Mono.empty());
+        when(matrix.setAccountData(any(), any(), any(), eq("syt_canonical"))).thenReturn(Mono.empty());
+
+        StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
+
+        verify(broker).mintMatrix(eq(OWNER), eq("alice-canonical"));
+        // The OLD (pre-fix) behaviour would have minted under the raw-subject derivation —
+        // must never happen once admin-bff resolves a canonical value.
+        verify(broker, never()).mintMatrix(eq(OWNER), eq(ServiceTokenBroker.localpart(OWNER)));
+    }
+
+    @Test
+    void mintThenRegister_adminBffUnresolvable_fallsBackToRawSubjectDerivation_neverFails() {
+        // admin-bff errors (unreachable / disabled) → fail-SOFT fallback to today's
+        // derivation, exactly like every other seam in this class (never fails activation).
+        when(custody.cipherAvailable()).thenReturn(true);
+        when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
+        when(adminBff.getAccount(OWNER)).thenReturn(Mono.error(new IllegalStateException("admin-bff disabled")));
+        String fallback = ServiceTokenBroker.localpart(OWNER);
+        when(broker.mintMatrix(eq(OWNER), eq(fallback)))
+                .thenReturn(Mono.just(new MintedToken("syt_fallback", null, null, fallback)));
+        when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
+        when(matrix.getAccountData(any(), any(), eq("syt_fallback"))).thenReturn(Mono.empty());
+        when(matrix.setAccountData(any(), any(), any(), eq("syt_fallback"))).thenReturn(Mono.empty());
+
+        StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
+
+        verify(broker).mintMatrix(eq(OWNER), eq(fallback));
     }
 
     // ── FAIL-SOFT ─────────────────────────────────────────────────────────────────
