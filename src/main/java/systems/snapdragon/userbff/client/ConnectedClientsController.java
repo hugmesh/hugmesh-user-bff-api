@@ -5,6 +5,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.GrantedAuthority;
@@ -13,13 +16,19 @@ import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.hsproxy.ServiceTokenBroker;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 import systems.snapdragon.userbff.web.ValidationPatterns;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -66,18 +75,26 @@ import java.util.stream.Collectors;
 @Validated
 public class ConnectedClientsController {
 
+    private static final Logger log = LoggerFactory.getLogger(ConnectedClientsController.class);
+
     private final ConnectedClientsService clients;
     private final PrincipalDomain principalDomain;
+    private final AdminBffInternalClient adminBff;
 
     /**
      * Constructs a {@code ConnectedClientsController} with its required collaborators.
      *
      * @param clients         the service that owns all connected-client persistence + revocation logic
      * @param principalDomain the helper that derives the brand-domain scope from the JWT issuer
+     * @param adminBff        internal client used to resolve the caller's canonical, persisted
+     *                        homeserver localpart for a real Casdoor JWT carrying no synthetic
+     *                        {@code localpart} claim — see {@link #canonicalLocalpart}
      */
-    public ConnectedClientsController(ConnectedClientsService clients, PrincipalDomain principalDomain) {
+    public ConnectedClientsController(ConnectedClientsService clients, PrincipalDomain principalDomain,
+                                      AdminBffInternalClient adminBff) {
         this.clients = clients;
         this.principalDomain = principalDomain;
+        this.adminBff = adminBff;
     }
 
     // -------------------------------------------------------------------------
@@ -100,13 +117,15 @@ public class ConnectedClientsController {
     })
     @GetMapping
     public Flux<ConnectedClient> mine(@AuthenticationPrincipal Jwt jwt) {
-        String localpart = localpart(jwt);
         String bearer = homeserverBearer(jwt);
         String domain = principalDomain.forScope(jwt);
-        // Gather authority names and forward to the service for the per-client
-        // platform-specific external-client role re-check (defence-in-depth).
+        // localpartFor is resolved PER PLATFORM (see localpartFor's javadoc for why matrix and
+        // mastodon localparts must never share one resolution) and only actually invoked by the
+        // service for a platform the caller holds the external-client role for AND that is
+        // enabled — a resolution failure there is treated as "skip that platform's live merge"
+        // (best-effort; the durable audit rows, keyed on jwt.getSubject() alone, are unaffected).
         return callerRoles().flatMapMany(roles ->
-                clients.list(jwt.getSubject(), localpart, bearer, domain, roles));
+                clients.list(jwt.getSubject(), platform -> localpartFor(platform, jwt), bearer, domain, roles));
     }
 
     // -------------------------------------------------------------------------
@@ -144,19 +163,25 @@ public class ConnectedClientsController {
         @ApiResponse(responseCode = "401", description = "Missing or invalid Casdoor JWT."),
         @ApiResponse(responseCode = "403", description = "Caller lacks the external-client role for the client's platform (service leg re-check)."),
         @ApiResponse(responseCode = "404", description = "No such active connected client for this user."),
+        @ApiResponse(responseCode = "409", description = "Caller's account has no persisted homeserver localpart yet (fail-closed localpart resolution)."),
         @ApiResponse(responseCode = "500", description = "Database error.")
     })
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Map<String, Object>>> revoke(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable @Pattern(regexp = ValidationPatterns.BLOCK_ID, message = "id must be a UUID") String id) {
-        String localpart = localpart(jwt);
         String bearer = homeserverBearer(jwt);
         String domain = principalDomain.forScope(jwt);
-        // Gather authority names and forward to the service for the per-platform
-        // external-client role re-check (defence-in-depth, service leg).
+        // UNLIKE mine() above: the localpart here keys the DURABLE per-credential gateway
+        // revocation key (revocations.revokeConnectedClient), the actual enforcement
+        // mechanism — writing it under an unresolved/wrong candidate would silently produce
+        // a "revoked": true response that does NOT actually deny the credential. The service
+        // resolves localpartFor for the SPECIFIC platform of the client being revoked (known
+        // only after the audit-row lookup) and this leg fails CLOSED: a resolution error
+        // propagates as a real error (401/409), never a fallback to an unchecked derivation.
         return callerRoles().flatMap(roles ->
-                        clients.revoke(jwt.getSubject(), id, localpart, bearer, domain, roles))
+                        clients.revoke(jwt.getSubject(), id, platform -> localpartFor(platform, jwt),
+                                bearer, domain, roles))
                 .map(ResponseEntity::ok);
     }
 
@@ -165,16 +190,120 @@ public class ConnectedClientsController {
     // -------------------------------------------------------------------------
 
     /**
-     * The caller's homeserver localpart (handle) for the seam calls — Casdoor's
-     * {@code preferred_username} claim; falls back to the subject. (Same derivation as
-     * the self-silence surface.)
+     * Dispatches to the platform-specific canonical-localpart resolver. MUST NOT share one
+     * resolution across platforms: {@link ServiceTokenBroker#mastodonLocalpart} folds
+     * {@code [^a-z0-9_]} to {@code _}, so two DISTINCT valid Matrix localparts (e.g.
+     * {@code john.doe} / {@code john-doe}) can collapse to the SAME raw Mastodon candidate —
+     * exactly why admin-bff persists Mastodon's own, independently collision-checked
+     * {@code mastodon_localpart} column (changeset 291). Using the Matrix-fold value for a
+     * Mastodon gateway-revocation-key write (or vice versa) would target the wrong homeserver
+     * identity — this dispatcher is what keeps {@link #mine} and {@link #revoke} correct for
+     * BOTH platforms, unlike the single-platform {@code MatrixProxyController}/
+     * {@code MastodonProxyController} this pattern originates from.
+     */
+    private Mono<String> localpartFor(String platform, Jwt jwt) {
+        return "mastodon".equals(platform) ? mastodonLocalpart(jwt) : canonicalLocalpart(jwt);
+    }
+
+    /**
+     * The caller's canonical MATRIX localpart for the seam calls (live homeserver read, and —
+     * critically — the key of the durable per-credential gateway revocation entry written
+     * by {@link #revoke}).
+     *
+     * <p>Byte-for-byte the same rationale as {@code MatrixProxyController#localpart}: prefers
+     * the {@code localpart} claim {@code BffSessionAuthenticationWebFilter} threads onto the
+     * synthetic Jwt from admin-bff's PERSISTED, collision-checked {@code account.localpart}
+     * (native-login / {@code bff_}-session callers — the primary path). A REAL,
+     * externally-issued Casdoor JWT presented directly to this route never passes through
+     * that filter and so never carries the claim, but still reaches this method (this
+     * route's {@code @PreAuthorize} accepts any validly-signed token holding an
+     * external-client role) — the OLD behaviour here (deriving
+     * {@code preferred_username}/{@code sub} independently) is exactly the
+     * unchecked-candidate bug this fix closes: it can differ from the canonical, persisted
+     * value another surface (or a previous native-login session) already registered for
+     * this same account, so the gateway revocation key {@link #revoke} writes would target
+     * the wrong identity — a "revoke connected client" call that silently doesn't revoke.
      *
      * @param jwt the caller's Casdoor JWT
-     * @return the localpart string (never null)
+     * @return a {@link Mono} of the canonical Matrix localpart; errors (never falls back to
+     *         an unchecked derivation) when it cannot be established
      */
-    private static String localpart(Jwt jwt) {
+    private Mono<String> canonicalLocalpart(Jwt jwt) {
+        String canonical = jwt.getClaimAsString("localpart");
+        if (canonical != null && !canonical.isBlank()) {
+            return Mono.just(canonical);
+        }
+        return resolveAccountView(jwt).flatMap(a -> {
+            String lp = a.localpart();
+            return (lp == null || lp.isBlank())
+                    ? Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
+                            "account has no persisted homeserver localpart yet "
+                                    + "(fail-closed — will not re-derive an unchecked candidate)"))
+                    : Mono.just(lp);
+        });
+    }
+
+    /**
+     * The caller's PERSISTED Mastodon localpart (admin-bff Liquibase changeset 291) — the
+     * value the Mastodon homeserver account is keyed on. Byte-for-byte the same rationale as
+     * {@code MastodonProxyController#mastodonLocalpart}: claim-first ({@code mastodon_localpart}
+     * on the synthetic {@code bff_} session JWT), else a real internal account read
+     * ({@link AdminBffInternalClient.AccountView#mastodonLocalpart()}), with a TRANSITIONAL
+     * fallback (fold the canonical MATRIX localpart via {@link ServiceTokenBroker#mastodonLocalpart}
+     * — exactly the pre-fix behaviour) only when neither the claim nor the account view carries
+     * the Mastodon fold (an admin-bff that predates changeset 291), so a rollout where
+     * user-bff leads admin-bff never breaks Mastodon. FAIL CLOSED (like the Matrix path) only
+     * when even the Matrix localpart is unresolved.
+     */
+    private Mono<String> mastodonLocalpart(Jwt jwt) {
+        String claim = jwt.getClaimAsString("mastodon_localpart");
+        if (claim != null && !claim.isBlank()) {
+            return Mono.just(claim);
+        }
+        return resolveAccountView(jwt).flatMap(a -> {
+            String mastodon = a.mastodonLocalpart();
+            if (mastodon != null && !mastodon.isBlank()) {
+                return Mono.just(mastodon);
+            }
+            String matrix = a.localpart();
+            return (matrix == null || matrix.isBlank())
+                    ? Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
+                            "account has no persisted homeserver localpart yet "
+                                    + "(fail-closed — will not re-derive an unchecked candidate)"))
+                    : Mono.just(ServiceTokenBroker.mastodonLocalpart(matrix));
+        });
+    }
+
+    /**
+     * Resolve the canonical {@link AdminBffInternalClient.AccountView} for a JWT that carries
+     * no synthetic-session localpart claim. Byte-for-byte identical to
+     * {@code MatrixProxyController}/{@code MastodonProxyController}'s copy (this org's
+     * established duplication pattern for these small per-controller identity resolvers):
+     * {@code email} claim -&gt; {@code google:<email-lc>}, else {@code preferred_username} -&gt;
+     * {@code discord:<username-lc>}, FAIL CLOSED throughout.
+     */
+    private Mono<AdminBffInternalClient.AccountView> resolveAccountView(Jwt jwt) {
+        String email = jwt.getClaimAsString("email");
         String pu = jwt.getClaimAsString("preferred_username");
-        return (pu == null || pu.isBlank()) ? jwt.getSubject() : pu;
+        Mono<AdminBffInternalClient.AccountView> byEmail = (email != null && !email.isBlank())
+                ? adminBff.getAccount(idFor("google", email))
+                        .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
+                : Mono.empty();
+        Mono<AdminBffInternalClient.AccountView> byUsername = (pu != null && !pu.isBlank())
+                ? adminBff.getAccount(idFor("discord", pu))
+                        .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
+                : Mono.empty();
+        return byEmail.switchIfEmpty(byUsername)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                        "no registered account for this token's identity claims "
+                                + "(fail-closed homeserver-localpart resolution)")));
+    }
+
+    /** Mirrors {@code AccountStore.idFor(provider, handle) = provider + ":" +
+     *  handle.toLowerCase()} — the same textual convention {@code MatrixProxyController}
+     *  and {@code MastodonProxyController} already replicate for this exact purpose. */
+    private static String idFor(String provider, String handle) {
+        return provider + ":" + handle.toLowerCase(Locale.ROOT);
     }
 
     /**

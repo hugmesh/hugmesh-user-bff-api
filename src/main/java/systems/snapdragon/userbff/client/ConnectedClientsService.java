@@ -11,6 +11,7 @@ import systems.snapdragon.commons.web.ApiException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Owner-enforced CONNECTED APPS & DEVICES operations. EVERY method takes the owner
@@ -18,14 +19,14 @@ import java.util.Set;
  * clients:
  *
  * <ul>
- *   <li>{@link #list(String, String, String, Set)} — the owner's connected OAuth apps +
- *       device sessions, merged from the durable {@code connected_client_audit} rows +
+ *   <li>{@link #list(String, Function, String, String, Set)} — the owner's connected OAuth
+ *       apps + device sessions, merged from the durable {@code connected_client_audit} rows +
  *       the live homeserver client-API read through the mTLS proxy (a GATED stub-seam,
  *       never hard-fail);</li>
- *   <li>{@link #revoke(String, String, String, Set)} — revoke one of the owner's
- *       clients: write the PER-CREDENTIAL gateway revocation key FIRST, then best-effort
- *       DELETE the homeserver device/app, then stamp {@code revoked_at} on the audit
- *       row. Owner-AND-id scoped so a caller can never revoke another user's client.</li>
+ *   <li>{@link #revoke(String, String, Function, String, String, Set)} — revoke one of the
+ *       owner's clients: write the PER-CREDENTIAL gateway revocation key FIRST, then
+ *       best-effort DELETE the homeserver device/app, then stamp {@code revoked_at} on the
+ *       audit row. Owner-AND-id scoped so a caller can never revoke another user's client.</li>
  * </ul>
  *
  * <p>EXTERNAL-CLIENT-ROLE GATE (service leg / defence-in-depth): registering/using a
@@ -68,56 +69,75 @@ public class ConnectedClientsService {
      * role for, and only the gated/enabled seams) is merged best-effort on top. A user
      * with NO external-client role gets only their durable audit rows (no live read) —
      * they cannot drive a homeserver client-API read they're not entitled to.
+     *
+     * <p>{@code localpartFor} resolves the caller's canonical homeserver localpart FOR A
+     * GIVEN PLATFORM (matrix and mastodon localparts are independently collision-checked —
+     * see {@code ConnectedClientsController#localpartFor}'s javadoc — so they can never share
+     * one resolution). Called lazily, once per platform actually queried. A resolution
+     * failure for one platform degrades to "skip that platform's live merge" (best-effort;
+     * the durable audit rows, keyed on {@code owner} alone, are unaffected and never
+     * queried with an unchecked candidate).
      */
-    public Flux<ConnectedClient> list(String owner, String localpart, String bearer, String domain,
-                                      Set<String> callerRoles) {
+    public Flux<ConnectedClient> list(String owner, Function<String, Mono<String>> localpartFor,
+                                      String bearer, String domain, Set<String> callerRoles) {
         requireOwner(owner);
         Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
         Flux<ConnectedClient> audited = repo.listForOwner(owner, domain);
         Flux<ConnectedClient> live = Flux.fromIterable(clientsByPlatform.values())
                 .filter(c -> roles.contains(externalClientRoleFor(c.platform())))
-                .flatMap(c -> c.list(localpart, bearer)
+                .flatMap(c -> localpartFor.apply(c.platform())
                         .onErrorResume(e -> {
-                            log.warn("[connected-clients] best-effort {} live list for {} failed: {}",
+                            log.warn("[connected-clients] could not resolve {} localpart for {}; "
+                                            + "live merge for that platform skipped: {}",
                                     c.platform(), owner, e.toString());
-                            return Flux.empty();
-                        }));
+                            return Mono.empty();
+                        })
+                        .flatMapMany(lp -> c.list(lp, bearer)
+                                .onErrorResume(e -> {
+                                    log.warn("[connected-clients] best-effort {} live list for {} failed: {}",
+                                            c.platform(), owner, e.toString());
+                                    return Flux.empty();
+                                })));
         return audited.concatWith(live);
     }
 
     /** Back-compat overload — scopes to the platform {@code default} domain. */
-    public Flux<ConnectedClient> list(String owner, String localpart, String bearer,
-                                      Set<String> callerRoles) {
-        return list(owner, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    public Flux<ConnectedClient> list(String owner, Function<String, Mono<String>> localpartFor,
+                                      String bearer, Set<String> callerRoles) {
+        return list(owner, localpartFor, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
     }
 
     /** Back-compat overload — scopes to the platform {@code default} domain. */
-    public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
-                                            Set<String> callerRoles) {
-        return revoke(owner, id, localpart, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
+    public Mono<Map<String, Object>> revoke(String owner, String id, Function<String, Mono<String>> localpartFor,
+                                            String bearer, Set<String> callerRoles) {
+        return revoke(owner, id, localpartFor, bearer, DomainRegistry.DEFAULT_DOMAIN, callerRoles);
     }
 
     /**
      * Revoke one of the owner's connected clients (audit row id). Ordering (per the
-     * design): (1) write the per-credential gateway revocation key FIRST (so the gateway
-     * filter denies future use within ≤5s), (2) best-effort homeserver DELETE, (3) stamp
-     * {@code revoked_at} on the audit row. The external-client role for the client's
-     * platform is required (service leg). Owner-AND-id scoped (a 404 for a non-owner /
-     * unknown / already-revoked id).
+     * design): (1) resolve the canonical localpart FOR THIS CLIENT'S PLATFORM (known only
+     * once the audit row is found — see {@code localpartFor}'s javadoc on {@link #list}),
+     * FAILING CLOSED on any resolution error (never falling back to an unchecked candidate
+     * — the localpart keys the durable enforcement written in step 2); (2) write the
+     * per-credential gateway revocation key FIRST (so the gateway filter denies future use
+     * within ≤5s), (3) best-effort homeserver DELETE, (4) stamp {@code revoked_at} on the
+     * audit row. The external-client role for the client's platform is required (service
+     * leg). Owner-AND-id scoped (a 404 for a non-owner / unknown / already-revoked id).
      */
-    public Mono<Map<String, Object>> revoke(String owner, String id, String localpart, String bearer,
-                                            String domain, Set<String> callerRoles) {
+    public Mono<Map<String, Object>> revoke(String owner, String id, Function<String, Mono<String>> localpartFor,
+                                            String bearer, String domain, Set<String> callerRoles) {
         requireOwner(owner);
         Set<String> roles = callerRoles == null ? Set.of() : callerRoles;
-        // Locate the audit row, guard it, then execute the three-step revocation sequence.
+        // Locate the audit row, guard it, then execute the four-step revocation sequence.
         return repo.find(owner, id, domain)
                 .switchIfEmpty(Mono.error(ApiException.notFound("no such connected client for this user")))
-                .flatMap(client -> revokeClient(client, owner, id, localpart, bearer, domain, roles));
+                .flatMap(client -> revokeClient(client, owner, id, localpartFor, bearer, domain, roles));
     }
 
-    /** Guard active+role, then write the revocation key, upstream DELETE, and audit stamp. */
+    /** Guard active+role, resolve the platform-specific localpart (fail-closed), then write
+     *  the revocation key, upstream DELETE, and audit stamp. */
     private Mono<Map<String, Object>> revokeClient(ConnectedClient client, String owner, String id,
-                                                   String localpart, String bearer,
+                                                   Function<String, Mono<String>> localpartFor, String bearer,
                                                    String domain, Set<String> roles) {
         if (!client.active()) {
             return Mono.error(ApiException.notFound("connected client already revoked"));
@@ -126,11 +146,14 @@ public class ConnectedClientsService {
         if (forbidden != null) {
             return Mono.error(forbidden);
         }
-        // Write the gateway revocation key first, then best-effort upstream DELETE, then stamp the audit row.
-        return revocations.revokeConnectedClient(client.platform(), localpart, client.externalRef())
-                .flatMap(keyWritten -> revokeUpstream(localpart, bearer, client)
-                        .flatMap(upstream -> repo.revoke(owner, id, domain)
-                                .map(stamped -> result(client, keyWritten, upstream, stamped))));
+        // Resolve THIS client's platform localpart — any resolution error propagates as-is
+        // (fail closed) and none of the writes below ever run.
+        return localpartFor.apply(client.platform()).flatMap(localpart ->
+                // Write the gateway revocation key first, then best-effort upstream DELETE, then stamp the audit row.
+                revocations.revokeConnectedClient(client.platform(), localpart, client.externalRef())
+                        .flatMap(keyWritten -> revokeUpstream(localpart, bearer, client)
+                                .flatMap(upstream -> repo.revoke(owner, id, domain)
+                                        .map(stamped -> result(client, keyWritten, upstream, stamped)))));
     }
 
     /**

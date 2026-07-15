@@ -12,6 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.util.ArrayList;
@@ -59,6 +60,11 @@ class ConnectedClientsControllerGateTest {
 
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean ConnectedClientsService clients;
+    // Only consulted when a mockJwt() carries no synthetic "localpart" claim
+    // (canonicalLocalpart's fallback path) — the two "reaches the service" tests below
+    // mint WITH that claim, so this mock is never invoked; still required for context
+    // wiring since the controller now takes it as a constructor dependency.
+    @MockitoBean AdminBffInternalClient adminBff;
 
     private static final String ID = UUID.randomUUID().toString();
 
@@ -76,7 +82,7 @@ class ConnectedClientsControllerGateTest {
                 .get().uri("/bff/user/connected-clients")
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(clients, never()).list(anyString(), anyString(), any(), any(), any());
+        verify(clients, never()).list(anyString(), any(), any(), any(), any());
     }
 
     @Test
@@ -85,7 +91,7 @@ class ConnectedClientsControllerGateTest {
                 .delete().uri("/bff/user/connected-clients/" + ID)
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(clients, never()).revoke(anyString(), anyString(), anyString(), any(), any(), any());
+        verify(clients, never()).revoke(anyString(), anyString(), any(), any(), any(), any());
     }
 
     @Test
@@ -95,15 +101,15 @@ class ConnectedClientsControllerGateTest {
                 .get().uri("/bff/user/connected-clients")
                 .exchange()
                 .expectStatus().isForbidden();
-        verify(clients, never()).list(anyString(), anyString(), any(), any(), any());
+        verify(clients, never()).list(anyString(), any(), any(), any(), any());
     }
 
     // ── with an external-client role → reaches the service ───────────────────
 
     @Test
     void list_withMatrixExternalClientRole_reachesService() {
-        when(clients.list(anyString(), anyString(), any(), any(), any())).thenReturn(Flux.empty());
-        client.mutateWith(mockJwt().jwt(j -> j.subject("alice"))
+        when(clients.list(anyString(), any(), any(), any(), any())).thenReturn(Flux.empty());
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice").claim("localpart", "alice"))
                         .authorities(authorities("ROLE_USER", "ROLE_MATRIX_EXTERNAL_CLIENT")))
                 .get().uri("/bff/user/connected-clients")
                 .exchange()
@@ -112,9 +118,9 @@ class ConnectedClientsControllerGateTest {
 
     @Test
     void revoke_withMastodonExternalClientRole_reachesService() {
-        when(clients.revoke(anyString(), anyString(), anyString(), any(), any(), any()))
+        when(clients.revoke(anyString(), anyString(), any(), any(), any(), any()))
                 .thenReturn(Mono.just(Map.of("revoked", true)));
-        client.mutateWith(mockJwt().jwt(j -> j.subject("bob"))
+        client.mutateWith(mockJwt().jwt(j -> j.subject("bob").claim("localpart", "bob"))
                         .authorities(authorities("ROLE_USER", "ROLE_MASTODON_EXTERNAL_CLIENT")))
                 .delete().uri("/bff/user/connected-clients/" + ID)
                 .exchange()

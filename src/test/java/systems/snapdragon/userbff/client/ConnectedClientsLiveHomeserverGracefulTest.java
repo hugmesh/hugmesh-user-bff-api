@@ -16,15 +16,20 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockJwt;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
@@ -124,6 +129,12 @@ class ConnectedClientsLiveHomeserverGracefulTest {
     @MockitoBean ReactiveJwtDecoder jwtDecoder;
     @MockitoBean ConnectedClientAuditRepository repo;
     @MockitoBean RevocationWriter revocations;
+    // Only consulted when a mockJwt() carries no synthetic "localpart" claim — every JWT
+    // this file mints carries one (see listAsMatrixExternalClient / the MASTODON-role
+    // test), so this mock is never invoked; still required for context wiring since the
+    // controller now takes it as a constructor dependency, and this test's concern is the
+    // homeserver-seam merge behavior, not localpart resolution.
+    @MockitoBean AdminBffInternalClient adminBff;
 
     @AfterEach
     void resetSeams() {
@@ -146,7 +157,7 @@ class ConnectedClientsLiveHomeserverGracefulTest {
 
     private WebTestClient.ResponseSpec listAsMatrixExternalClient() {
         return client.mutateWith(mockJwt()
-                        .jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
+                        .jwt(j -> j.subject("alice").claim("preferred_username", "alice").claim("localpart", "alice"))
                         .authorities(authorities("ROLE_USER", "ROLE_MATRIX_EXTERNAL_CLIENT")))
                 .get().uri("/bff/user/connected-clients")
                 .exchange();
@@ -206,6 +217,94 @@ class ConnectedClientsLiveHomeserverGracefulTest {
         }
 
         /**
+         * REGRESSION (Matrix/Mastodon fold divergence — the class of bug this whole fix
+         * exists to close): the Matrix and Mastodon legs of a connected-clients call MUST
+         * resolve their localparts INDEPENDENTLY, never share one value. {@code
+         * ServiceTokenBroker.mastodonLocalpart} folds {@code [^a-z0-9_]} to {@code _}, so a
+         * dotted Matrix localpart like {@code john.doe} is a DIFFERENT, independently
+         * collision-checked value from its Mastodon-folded form {@code john_doe} (admin-bff
+         * Liquibase changeset 291). A caller whose synthetic session carries both claims
+         * distinctly must have the MATRIX seam driven with the matrix claim and the
+         * MASTODON seam driven with the mastodon claim — never the matrix value re-used
+         * for mastodon (which is exactly what a single-resolution port of the
+         * MatrixProxyController pattern would silently do, and did in an earlier revision
+         * of this fix before an adversarial review caught it).
+         */
+        @Test
+        void bothPlatformsEnabled_matrixAndMastodonLocalpartsDiffer_eachSeamGetsItsOwnFold() {
+            when(repo.listForOwner(anyString(), any())).thenReturn(Flux.empty());
+            matrixSeam.mode = ConfigurableSeam.Mode.OK;
+            mastodonSeam.mode = ConfigurableSeam.Mode.OK;
+
+            client.mutateWith(mockJwt()
+                            // A realistic synthetic bff_-session JWT: BOTH claims present and
+                            // DELIBERATELY DIFFERENT, exactly as BffSessionAuthenticationWebFilter
+                            // threads them from the two independently-collision-checked
+                            // AccountView columns.
+                            .jwt(j -> j.subject("erin")
+                                    .claim("localpart", "john.doe")
+                                    .claim("mastodon_localpart", "john_doe"))
+                            .authorities(authorities("ROLE_USER",
+                                    "ROLE_MATRIX_EXTERNAL_CLIENT", "ROLE_MASTODON_EXTERNAL_CLIENT")))
+                    .get().uri("/bff/user/connected-clients")
+                    .exchange()
+                    .expectStatus().isOk()
+                    .expectBodyList(ConnectedClient.class)
+                    .hasSize(2)
+                    .value(list -> {
+                        org.assertj.core.api.Assertions.assertThat(list)
+                                .filteredOn(c -> "matrix".equals(c.platform()))
+                                .as("the matrix seam must be driven with the MATRIX-fold localpart")
+                                .allSatisfy(c -> org.assertj.core.api.Assertions
+                                        .assertThat(c.owner()).isEqualTo("john.doe"));
+                        org.assertj.core.api.Assertions.assertThat(list)
+                                .filteredOn(c -> "mastodon".equals(c.platform()))
+                                .as("the mastodon seam must be driven with the MASTODON-fold "
+                                        + "localpart, NOT the matrix value")
+                                .allSatisfy(c -> org.assertj.core.api.Assertions
+                                        .assertThat(c.owner()).isEqualTo("john_doe"));
+                    });
+        }
+
+        /**
+         * REGRESSION (identity-key correctness): a caller whose canonical homeserver
+         * localpart cannot be resolved (no synthetic {@code localpart} claim, and
+         * admin-bff has no registered account for the identity claims present) must NOT
+         * have the live homeserver leg driven with an unchecked/guessed candidate — the
+         * live read is skipped entirely and only the durable (owner-keyed, always-safe)
+         * audit floor surfaces, even though the seam is healthy and the caller holds the
+         * matching external-client role. This is the exact fix for the
+         * ConnectedClientsController "revoke doesn't revoke" class of bug: the SAME
+         * unresolvable-identity path that here safely degrades a READ is fail-CLOSED on
+         * the write side ({@code revoke}, covered elsewhere) rather than ever writing a
+         * gateway revocation key under a wrong localpart.
+         */
+        @Test
+        void enabledHealthySeam_callerWithUnresolvableIdentity_liveReadNotAttempted_onlyAuditFloor() {
+            when(repo.listForOwner(anyString(), any())).thenReturn(Flux.just(new ConnectedClient(
+                    "audit-1", "carol", "matrix", ConnectedClient.KIND_DEVICE,
+                    "AUDIT-REF", "Audited Element", Instant.now(), null)));
+            matrixSeam.mode = ConfigurableSeam.Mode.OK;   // healthy — would return a live row if driven
+            // No "localpart" claim; "preferred_username" present so resolveCanonicalLocalpart
+            // actually calls admin-bff (not the zero-claims shortcut) — and admin-bff has no
+            // registered account for this identity (Mono.empty(), same effective outcome as a
+            // 404 recovered to empty).
+            when(adminBff.getAccount("discord:carol")).thenReturn(Mono.empty());
+
+            client.mutateWith(mockJwt()
+                            .jwt(j -> j.subject("carol").claim("preferred_username", "carol"))
+                            .authorities(authorities("ROLE_USER", "ROLE_MATRIX_EXTERNAL_CLIENT")))
+                    .get().uri("/bff/user/connected-clients")
+                    .exchange()
+                    .expectStatus().isOk()   // degrades gracefully — never a 500 or 401 on the read path
+                    .expectBodyList(ConnectedClient.class)
+                    .hasSize(1)              // only the audit floor; the live leg was never attempted
+                    .value(list -> org.assertj.core.api.Assertions.assertThat(list)
+                            .noneSatisfy(c -> org.assertj.core.api.Assertions
+                                    .assertThat(c.externalRef()).isEqualTo("LIVE-REF")));
+        }
+
+        /**
          * Even with a healthy ENABLED seam, a caller lacking that platform's
          * external-client role never drives the live read — only the audit floor
          * surfaces. (The class @PreAuthorize requires SOME external-client role to
@@ -218,7 +317,11 @@ class ConnectedClientsLiveHomeserverGracefulTest {
             matrixSeam.mode = ConfigurableSeam.Mode.OK;   // healthy, but caller lacks the matrix ext role
 
             client.mutateWith(mockJwt()
-                            .jwt(j -> j.subject("alice").claim("preferred_username", "alice"))
+                            // "mastodon_localpart" (not "localpart") is the claim consulted for a
+                            // MASTODON-role caller — the caller here never touches the matrix leg
+                            // at all (filtered out by role before localpartFor is ever called for
+                            // it), so no matrix claim/admin-bff stub is needed either way.
+                            .jwt(j -> j.subject("alice").claim("mastodon_localpart", "alice"))
                             .authorities(authorities("ROLE_USER", "ROLE_MASTODON_EXTERNAL_CLIENT")))
                     .get().uri("/bff/user/connected-clients")
                     .exchange()
@@ -228,6 +331,46 @@ class ConnectedClientsLiveHomeserverGracefulTest {
                     .value(list -> org.assertj.core.api.Assertions.assertThat(list)
                             .noneSatisfy(c -> org.assertj.core.api.Assertions
                                     .assertThat(c.externalRef()).isEqualTo("LIVE-REF")));
+        }
+    }
+
+    /**
+     * The WRITE-side counterpart to {@code enabledHealthySeam_callerWithUnresolvableIdentity_
+     * liveReadNotAttempted_onlyAuditFloor} above: unlike {@code mine()}'s best-effort READ
+     * degrade, {@code revoke()} must fail CLOSED when the canonical localpart cannot be
+     * resolved — the localpart keys the DURABLE per-credential gateway revocation entry
+     * (the actual enforcement), so writing it under an unresolved/guessed candidate would
+     * produce a "revoked": true response that does not actually deny the credential.
+     */
+    @Nested
+    class RevokeFailsClosed {
+        @Test
+        void revoke_callerWithUnresolvableIdentity_is401_gatewayKeyNeverWritten_auditRowNeverTouched() {
+            String id = UUID.randomUUID().toString();
+            // The client's PLATFORM is only known once the audit row is found, so the
+            // localpart resolution (and its failure) happens AFTER this lookup, not before —
+            // a real, active matrix client for this owner+id must resolve here.
+            when(repo.find(eq("dave"), eq(id), any())).thenReturn(Mono.just(new ConnectedClient(
+                    id, "dave", "matrix", ConnectedClient.KIND_DEVICE,
+                    "DEV-DAVE", "Dave's device", Instant.now(), null)));
+            // No "localpart" claim; "preferred_username" present so canonicalLocalpart's
+            // fallback actually calls admin-bff — which has no registered account for this
+            // identity.
+            when(adminBff.getAccount("discord:dave")).thenReturn(Mono.empty());
+
+            client.mutateWith(mockJwt()
+                            .jwt(j -> j.subject("dave").claim("preferred_username", "dave"))
+                            .authorities(authorities("ROLE_USER", "ROLE_MATRIX_EXTERNAL_CLIENT")))
+                    .delete().uri("/bff/user/connected-clients/" + id)
+                    .exchange()
+                    .expectStatus().isUnauthorized();   // fail-closed, NOT a false "revoked": true
+
+            // The audit row WAS looked up (needed to learn the client's platform), but the
+            // gateway revocation key write and the final revoked_at stamp were never
+            // attempted — the chain errored out at localpart resolution, before either.
+            verify(repo).find(eq("dave"), eq(id), any());
+            verify(revocations, never()).revokeConnectedClient(any(), any(), any());
+            verify(repo, never()).revoke(anyString(), anyString(), any());
         }
     }
 }

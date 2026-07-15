@@ -17,6 +17,7 @@ import org.springframework.web.server.ServerWebExchange;
 import systems.snapdragon.userbff.web.ApiExceptionHandler;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import systems.snapdragon.userbff.auth.AdminBffInternalClient;
 import systems.snapdragon.userbff.client.ConnectedClient;
 import systems.snapdragon.userbff.client.ConnectedClientAuditRepository;
 import systems.snapdragon.userbff.client.ConnectedClientsController;
@@ -29,6 +30,7 @@ import systems.snapdragon.userbff.testsupport.TestIssuer;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -126,8 +128,14 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
                 repo,
                 List.of(new DisabledSeam("matrix"), new DisabledSeam("mastodon")),
                 revocations);
+        // AdminBffInternalClient is only consulted when a minted token carries no synthetic
+        // "localpart" claim (the resolveCanonicalLocalpart fallback for a REAL external
+        // Casdoor JWT) — this suite mints every token WITH that claim (see mintWithLocalpart
+        // below), so the mock is never invoked; still wired since the class-under-test now
+        // requires the collaborator.
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         ConnectedClientsController controller =
-                new ConnectedClientsController(service, new PrincipalDomain(registry));
+                new ConnectedClientsController(service, new PrincipalDomain(registry), adminBff);
 
         // REAL multi-issuer resolver, built exactly as TenancyResourceServerConfig does.
         TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
@@ -158,6 +166,19 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
         rogue.close();
     }
 
+    /**
+     * Mints a token carrying the synthetic {@code localpart} claim
+     * {@code BffSessionAuthenticationWebFilter} threads onto a native-login session, so
+     * {@code ConnectedClientsController#canonicalLocalpart} resolves via the fast
+     * claim-first path and this cross-domain suite never needs to also stub
+     * {@link AdminBffInternalClient} responses per brand/subject.
+     */
+    private static String mintWithLocalpart(TestIssuer issuer, String subject, List<String> roleNames) {
+        List<Map<String, String>> roles = roleNames.stream().map(r -> Map.of("name", r)).toList();
+        return issuer.mintWithClaims(subject,
+                Map.of("roles", roles, "name", subject, "localpart", subject));
+    }
+
     /** One durable audit row for the given owner (the repo floor). */
     private static ConnectedClient auditRow(String owner) {
         return new ConnectedClient(UUID.randomUUID().toString(), owner, "matrix",
@@ -170,7 +191,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
     void list_brandXToken_scopesRepoToBrandX_neverBrandY() {
         when(repo.listForOwner(eq("alice"), eq("brandx"))).thenReturn(Flux.just(auditRow("alice")));
 
-        String token = brandX.mint("alice", List.of("matrix_external_client"));
+        String token = mintWithLocalpart(brandX, "alice", List.of("matrix_external_client"));
         client.get().uri("/bff/user/connected-clients")
                 .header("Authorization", "Bearer " + token)
                 .exchange()
@@ -193,7 +214,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
         // brand-scoped repo call IS the cross-domain assertion (the 404 is incidental).
         when(repo.find(eq("alice"), eq(id), eq("brandx"))).thenReturn(Mono.empty());
 
-        String token = brandX.mint("alice", List.of("matrix_external_client"));
+        String token = mintWithLocalpart(brandX, "alice", List.of("matrix_external_client"));
         client.delete().uri("/bff/user/connected-clients/" + id)
                 .header("Authorization", "Bearer " + token)
                 .exchange()
@@ -210,7 +231,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
     void list_brandYToken_scopesRepoToBrandY_neverBrandX() {
         when(repo.listForOwner(eq("carol"), eq("brandy"))).thenReturn(Flux.just(auditRow("carol")));
 
-        String token = brandY.mint("carol", List.of("mastodon_external_client"));
+        String token = mintWithLocalpart(brandY, "carol", List.of("mastodon_external_client"));
         client.get().uri("/bff/user/connected-clients")
                 .header("Authorization", "Bearer " + token)
                 .exchange()
@@ -230,7 +251,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
         // A perfectly valid, correctly-signed token — just NOT in app.tenancy.issuers.
         // The per-issuer resolver returns Mono.empty() => 401 before any controller code,
         // so the repo is NEVER queried (not even with the __deny__ sentinel).
-        String token = rogue.mint("mallory", List.of("matrix_external_client"));
+        String token = mintWithLocalpart(rogue, "mallory", List.of("matrix_external_client"));
         client.get().uri("/bff/user/connected-clients")
                 .header("Authorization", "Bearer " + token)
                 .exchange()

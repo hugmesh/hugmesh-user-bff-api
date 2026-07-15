@@ -1742,6 +1742,19 @@
               }
             }
           },
+          "409" : {
+            "description" : "Caller's account has no persisted homeserver localpart yet (fail-closed localpart resolution).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          },
           "500" : {
             "description" : "Database error.",
             "content" : {

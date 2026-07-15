@@ -12,9 +12,12 @@ import systems.snapdragon.commons.testsupport.PostgresTestSupport;
 import systems.snapdragon.userbff.support.PostgresSliceTestConfig;
 import systems.snapdragon.commons.web.ApiException;
 
+import reactor.core.publisher.Mono;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -62,12 +65,18 @@ class ConnectedClientsServiceTest extends PostgresTestSupport {
     private static final Set<String> MATRIX_EXT = Set.of("ROLE_USER", "ROLE_MATRIX_EXTERNAL_CLIENT");
     private static final Set<String> MASTODON_EXT = Set.of("ROLE_USER", "ROLE_MASTODON_EXTERNAL_CLIENT");
 
+    /** This suite's concern is owner/role/id scoping, not platform-specific localpart
+     *  resolution — resolve the SAME value regardless of platform. */
+    private static Function<String, Mono<String>> same(String localpart) {
+        return platform -> Mono.just(localpart);
+    }
+
     @Test
     void list_isOwnerScoped() {
         repo.record("alice", "matrix", ConnectedClient.KIND_DEVICE, "DEV-A", "Element").block();
         repo.record("bob", "matrix", ConnectedClient.KIND_DEVICE, "DEV-B", "Element").block();
 
-        assertThat(service.list("alice", "alice", null, MATRIX_EXT).collectList().block())
+        assertThat(service.list("alice", same("alice"), null, MATRIX_EXT).collectList().block())
                 .anySatisfy(c -> assertThat(c.externalRef()).isEqualTo("DEV-A"))
                 .noneSatisfy(c -> assertThat(c.externalRef()).isEqualTo("DEV-B"));
     }
@@ -78,7 +87,7 @@ class ConnectedClientsServiceTest extends PostgresTestSupport {
                 .block();
         // only the ROLE_USER floor — no external-client role
         ApiException ex = catchApiException(
-                () -> service.revoke("alice", c.id(), "alice", null, Set.of("ROLE_USER")).block());
+                () -> service.revoke("alice", c.id(), same("alice"), null, Set.of("ROLE_USER")).block());
         assertThat(ex.status().value()).isEqualTo(403);
         // not revoked
         assertThat(repo.find("alice", c.id()).block().active()).isTrue();
@@ -88,7 +97,7 @@ class ConnectedClientsServiceTest extends PostgresTestSupport {
     void revoke_withMatchingExternalClientRole_writesKeyStubAndStampsAudit() {
         ConnectedClient c = repo.record("alice", "matrix", ConnectedClient.KIND_DEVICE, "DEV-OK", "Element")
                 .block();
-        Map<String, Object> out = service.revoke("alice", c.id(), "alice", null, MATRIX_EXT).block();
+        Map<String, Object> out = service.revoke("alice", c.id(), same("alice"), null, MATRIX_EXT).block();
         assertThat(out).containsEntry("revoked", true)
                 .containsEntry("platform", "matrix")
                 .containsEntry("revocationKey", "stubbed")   // gateway-write disabled in tests
@@ -102,7 +111,7 @@ class ConnectedClientsServiceTest extends PostgresTestSupport {
         ConnectedClient c = repo.record("alice", "matrix", ConnectedClient.KIND_DEVICE, "DEV-X", "Element")
                 .block();
         ApiException ex = catchApiException(
-                () -> service.revoke("alice", c.id(), "alice", null, MASTODON_EXT).block());
+                () -> service.revoke("alice", c.id(), same("alice"), null, MASTODON_EXT).block());
         assertThat(ex.status().value()).isEqualTo(403);
     }
 
@@ -112,7 +121,7 @@ class ConnectedClientsServiceTest extends PostgresTestSupport {
                 .block();
         // bob cannot revoke alice's client even with the right role + exact id
         ApiException ex = catchApiException(
-                () -> service.revoke("bob", aliceClient.id(), "bob", null, MATRIX_EXT).block());
+                () -> service.revoke("bob", aliceClient.id(), same("bob"), null, MATRIX_EXT).block());
         assertThat(ex.status().value()).isEqualTo(404);
         assertThat(repo.find("alice", aliceClient.id()).block().active()).isTrue();
     }
@@ -121,9 +130,9 @@ class ConnectedClientsServiceTest extends PostgresTestSupport {
     void revoke_alreadyRevoked_isNotFound404() {
         ConnectedClient c = repo.record("carol", "mastodon", ConnectedClient.KIND_OAUTH_APP, "APP-R", "Tusky")
                 .block();
-        service.revoke("carol", c.id(), "carol", null, MASTODON_EXT).block();
+        service.revoke("carol", c.id(), same("carol"), null, MASTODON_EXT).block();
         ApiException ex = catchApiException(
-                () -> service.revoke("carol", c.id(), "carol", null, MASTODON_EXT).block());
+                () -> service.revoke("carol", c.id(), same("carol"), null, MASTODON_EXT).block());
         assertThat(ex.status().value()).isEqualTo(404);
     }
 

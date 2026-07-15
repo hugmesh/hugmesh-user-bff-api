@@ -452,7 +452,7 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *   <li>{@code email} (provider {@code "google"}) or {@code preferred_username}
      *       (every other provider) = {@link AccountView#handle()} — best-effort so the
      *       {@code preferred_username}-with-{@code sub}-fallback pattern used by {@code
-     *       ProfileController.usernameOf}/{@code ConnectedClientsController.localpart}/
+     *       ProfileController.usernameOf}/{@code ConnectedClientsController.resolveAccountView}/
      *       {@code MatrixProxyController.localpart}/{@code
      *       MastodonProxyController.localpart}/{@code SelfSilenceController.localpart}
      *       (the latter's admin-bff-fallback branch only)
@@ -485,8 +485,12 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *       all). Threading it through the ALREADY-fetched {@link AccountView} here costs
      *       no additional admin-bff round trip — this filter resolves it via {@link
      *       AdminBffInternalClient#resolveSession} for every bff_-session request
-     *       regardless. {@code ConnectedClientsController} is unchanged by this fix — it
-     *       is not a homeserver MINT call site. {@code SelfSilenceController} ALSO now
+     *       regardless. {@code ConnectedClientsController} ALSO now reads this claim first
+     *       (a later, separate fix — its live homeserver read + the durable gateway
+     *       revocation-key write, neither a mint site) via its own {@code
+     *       localpartFor}/{@code canonicalLocalpart}/{@code mastodonLocalpart} dispatch,
+     *       fail-closed on the write (revoke) leg and best-effort-degrading on the read
+     *       (list) leg. {@code SelfSilenceController} ALSO now
      *       reads this claim first (a later, separate fix — its two homeserver hide seams,
      *       not a mint site), but unlike the two proxy controllers it degrades to a blank
      *       localpart rather than failing closed when neither this claim nor an admin-bff
