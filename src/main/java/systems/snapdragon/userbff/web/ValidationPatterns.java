@@ -45,4 +45,16 @@ public final class ValidationPatterns {
      *  the varchar(128) column; starts/ends with an alnum so it can't be blank or a
      *  bare separator, and carries no whitespace/quotes so it stays a safe key. */
     public static final String PREF_STORE_KEY = "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$";
+
+    /** A Meshtastic LoRa radio node id as CLAIMED (pre-normalization): exactly 8 hex
+     *  digits with an OPTIONAL {@code !} prefix, ANY case ({@code a1b2c3d4} /
+     *  {@code !A1B2C3D4} both accepted). The service canonicalizes to
+     *  {@code "!" + lowercase} BEFORE storage; the 019
+     *  {@code ck_mesh_device_node_id} CHECK ({@code ^![0-9a-f]{8}$}) is the DB parity
+     *  for the CANONICAL stored form, so this API pattern is deliberately the
+     *  looser accept-then-normalize shape. */
+    public static final String MESH_NODE_ID = "^!?[0-9a-fA-F]{8}$";
+
+    /** mesh_device.visibility — mirrors the 019 CHECK + MeshDevice.validVisibility. */
+    public static final String MESH_VISIBILITY = "^(private|friends|channels)$";
 }

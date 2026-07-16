@@ -10,6 +10,8 @@ import systems.snapdragon.userbff.federation.FederationModerationModels;
 import systems.snapdragon.userbff.federation.UserModuleCard;
 import systems.snapdragon.userbff.media.MediaPoisonDecision;
 import systems.snapdragon.userbff.media.PoisonModels;
+import systems.snapdragon.userbff.meshdevice.InternalMeshDeviceController;
+import systems.snapdragon.userbff.meshdevice.MeshDevice;
 import systems.snapdragon.userbff.profile.UserProfile;
 import systems.snapdragon.userbff.silence.SelfSilence;
 
@@ -63,7 +65,14 @@ public class NativeHintsConfig {
                     .registerType(PoisonModels.Health.class, dtoCategories())
                     .registerType(PoisonModels.PoisonResult.class, dtoCategories())
                     .registerType(PoisonModels.SizedBytes.class, dtoCategories())
-                    .registerType(PoisonModels.SurvivalVerdict.class, dtoCategories());
+                    .registerType(PoisonModels.SurvivalVerdict.class, dtoCategories())
+                    // mesh-device DTOs: the owner-facing device record + the
+                    // SERVICE-only bridge records (mapping row / batch status report)
+                    // crossing Jackson — explicit binding hints so they survive
+                    // native image.
+                    .registerType(MeshDevice.class, dtoCategories())
+                    .registerType(InternalMeshDeviceController.BridgeMapping.class, dtoCategories())
+                    .registerType(InternalMeshDeviceController.StatusReport.class, dtoCategories());
 
             // Swagger UI static assets shipped inside the springdoc webflux-ui
             // starter's webjar. native-image drops classpath resources unless

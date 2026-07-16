@@ -33,6 +33,9 @@
     "name" : "Self-block",
     "description" : "The caller's OWN blocks (owner = JWT subject) + instance-block recommendation."
   }, {
+    "name" : "Mesh-devices",
+    "description" : "The caller's OWN claimed Meshtastic LoRa radio node ids (owner = JWT subject). Node ids are globally unique — one owner per radio."
+  }, {
     "name" : "Notification preferences",
     "description" : "Per-category notification preferences (owner = JWT subject, domain-scoped). account-restriction is forced-on / un-silenceable."
   }, {
@@ -41,6 +44,9 @@
   }, {
     "name" : "Cards",
     "description" : "The caller's OWN federation bundles (owner = JWT subject), via snapdragon-federation-api."
+  }, {
+    "name" : "Mesh-devices (internal bridge)",
+    "description" : "SERVICE-PRINCIPAL ONLY: the full node-id → Matrix-localpart mapping (active rows only) + the batch LoRa status write-back for the mesh↔Matrix bridge."
   }, {
     "name" : "Self-silence",
     "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
@@ -223,6 +229,103 @@
                   "additionalProperties" : {
                     "type" : "boolean"
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/mesh-devices/{id}/visibility" : {
+      "put" : {
+        "tags" : [ "Mesh-devices" ],
+        "summary" : "Change who may see MY device's LoRa status (private|friends|channels). Frozen on a revoked device (409); a device that is not mine is a 404.",
+        "operationId" : "setVisibility",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/VisibilityRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Visibility updated; the device is returned.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "visibility not in private|friends|channels.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Principal lacks ROLE_USER.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "No such mesh device for this user (foreign/unknown id — no existence leak).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Device is revoked — visibility cannot be changed.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "500" : {
+            "description" : "Database error.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
                 }
               }
             }
@@ -736,6 +839,131 @@
         }
       }
     },
+    "/bff/user/mesh-devices" : {
+      "get" : {
+        "tags" : [ "Mesh-devices" ],
+        "summary" : "List my claimed mesh devices (newest first; revoked rows included with state + reason; bridge-reported LoRa status fields included).",
+        "operationId" : "mine",
+        "responses" : {
+          "200" : {
+            "description" : "The caller's own mesh devices (may be empty).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/MeshDevice"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/MeshDevice"
+                  }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Principal lacks ROLE_USER.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/MeshDevice"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Mesh-devices" ],
+        "summary" : "Claim a Meshtastic LoRa node id (owner = JWT subject). Accepts 'a1b2c3d4' / '!A1B2C3D4'; stores the canonical '!'+lowercase form. A node id already registered by anyone is a 409.",
+        "operationId" : "claim",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Node id claimed; the persisted device is returned (canonical nodeId, visibility 'private', state 'active').",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Missing/malformed nodeId (not 8 hex digits with an optional '!' prefix) or label over 64 chars.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Principal lacks ROLE_USER.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Node id already registered on this platform (by anyone, any domain, active or revoked — one owner per radio).",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          },
+          "500" : {
+            "description" : "Database error writing the claim row.",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/MeshDevice"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/media/upload" : {
       "post" : {
         "tags" : [ "Media-cloak" ],
@@ -809,6 +1037,41 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/DeliveryResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/mesh-devices/status" : {
+      "post" : {
+        "tags" : [ "Mesh-devices (internal bridge)" ],
+        "summary" : "Batch LoRa status write-back from the bridge (SERVICE-principal only). Fail-soft per element: unknown node ids / revoked rows are counted 'ignored'; out-of-range telemetry is clamped. Returns {updated, ignored}.",
+        "operationId" : "applyStatusBatch",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "array",
+                "items" : {
+                  "$ref" : "#/components/schemas/StatusReport"
+                }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
                 }
               }
             }
@@ -1001,7 +1264,7 @@
       "get" : {
         "tags" : [ "Self-block" ],
         "summary" : "List my self-blocks.",
-        "operationId" : "mine",
+        "operationId" : "mine_1",
         "responses" : {
           "200" : {
             "description" : "The caller's own self-blocks (may be empty).",
@@ -1375,6 +1638,28 @@
         }
       }
     },
+    "/bff/user/internal/mesh-devices" : {
+      "get" : {
+        "tags" : [ "Mesh-devices (internal bridge)" ],
+        "summary" : "FULL mesh-device mapping for the bridge (SERVICE-principal only; every ACTIVE claim across all owners and domains). Rows whose owner's Matrix localpart cannot be resolved are omitted (fail-soft).",
+        "operationId" : "fullMapping",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/BridgeMapping"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/home-guide" : {
       "get" : {
         "tags" : [ "Home guide" ],
@@ -1410,7 +1695,7 @@
       "get" : {
         "tags" : [ "Connected clients" ],
         "summary" : "List my connected apps + device sessions (owner = JWT subject). Requires an external-client role.",
-        "operationId" : "mine_1",
+        "operationId" : "mine_2",
         "responses" : {
           "200" : {
             "description" : "The caller's connected apps + device sessions. Merges durable audit rows with live homeserver read (best-effort, may be empty when seams are stubbed).",
@@ -1485,7 +1770,7 @@
       "get" : {
         "tags" : [ "Cards" ],
         "summary" : "List my cards (my federation bundles).",
-        "operationId" : "mine_2",
+        "operationId" : "mine_3",
         "responses" : {
           "200" : {
             "description" : "OK",
@@ -1657,6 +1942,38 @@
         "responses" : {
           "200" : {
             "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/user/mesh-devices/{id}" : {
+      "delete" : {
+        "tags" : [ "Mesh-devices" ],
+        "summary" : "Release one of MY mesh-device claims (scoped to me + id). Releasing a REVOKED row is allowed and frees the node id.",
+        "operationId" : "release",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "204" : {
+            "description" : "Claim released."
+          },
+          "401" : {
+            "description" : "Missing or invalid Casdoor JWT."
+          },
+          "403" : {
+            "description" : "Principal lacks ROLE_USER."
+          },
+          "404" : {
+            "description" : "No such mesh device for this user (or wrong domain)."
+          },
+          "500" : {
+            "description" : "Database error."
           }
         }
       }
@@ -2016,6 +2333,67 @@
           }
         }
       },
+      "VisibilityRequest" : {
+        "required" : [ "visibility" ],
+        "type" : "object",
+        "properties" : {
+          "visibility" : {
+            "minLength" : 1,
+            "pattern" : "^(private|friends|channels)$",
+            "type" : "string"
+          }
+        }
+      },
+      "MeshDevice" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "nodeId" : {
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "visibility" : {
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "revokeReason" : {
+            "type" : "string"
+          },
+          "revokedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastSeenAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "batteryPct" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "snr" : {
+            "type" : "number",
+            "format" : "double"
+          },
+          "hopsAway" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "viaDevice" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
       "UserModuleCard" : {
         "type" : "object",
         "properties" : {
@@ -2190,6 +2568,22 @@
           }
         }
       },
+      "ClaimRequest" : {
+        "required" : [ "nodeId" ],
+        "type" : "object",
+        "properties" : {
+          "nodeId" : {
+            "minLength" : 1,
+            "pattern" : "^!?[0-9a-fA-F]{8}$",
+            "type" : "string"
+          },
+          "label" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
       "DeliverRequest" : {
         "required" : [ "category", "domain", "sourceId", "sourceTable", "title", "userSubject" ],
         "type" : "object",
@@ -2244,6 +2638,33 @@
             "type" : "boolean"
           },
           "reason" : {
+            "type" : "string"
+          }
+        }
+      },
+      "StatusReport" : {
+        "type" : "object",
+        "properties" : {
+          "nodeId" : {
+            "type" : "string"
+          },
+          "lastSeenAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "batteryPct" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "snr" : {
+            "type" : "number",
+            "format" : "double"
+          },
+          "hopsAway" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "viaDevice" : {
             "type" : "string"
           }
         }
@@ -2483,6 +2904,23 @@
           "createdAt" : {
             "type" : "string",
             "format" : "date-time"
+          }
+        }
+      },
+      "BridgeMapping" : {
+        "type" : "object",
+        "properties" : {
+          "nodeId" : {
+            "type" : "string"
+          },
+          "localpart" : {
+            "type" : "string"
+          },
+          "displayName" : {
+            "type" : "string"
+          },
+          "visibility" : {
+            "type" : "string"
           }
         }
       },

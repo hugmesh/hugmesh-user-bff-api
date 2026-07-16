@@ -91,6 +91,20 @@
               can flip the owning row PENDING→ACTIVE/REJECTED. NOT a hard FK (the finding lives
               in another service); an index supports the reconciler's row-for-finding lookup.
               The SERVICE-gated /bff/user/internal/character flip endpoint is the consumer.
+        019 — mesh_device: a Meshtastic LoRa radio node CLAIMED by a platform user so the
+              mesh↔Matrix bridge can attribute that radio's messages to them. node_id is
+              stored CANONICAL ("!"+8 lowercase hex, service-normalized, regex CHECK on
+              Postgres) and UNIQUE ALONE — one owner per radio platform-wide (a duplicate
+              claim is a 409). Carries the owner-managed status visibility
+              (private|friends|channels), the bridge-written LoRa status columns
+              (last_seen_at/battery_pct 0..101/snr/hops_away/via_device — SERVICE-gated
+              batch write-back, ACTIVE rows only, fail-soft), and the moderation state
+              columns (state active|revoked + revoked_by/revoked_at/revoke_reason; the
+              mod-bff revocation WRITER is a later wave — a revoked row is excluded from
+              the bridge mapping, its visibility frozen, and its node_id stays occupied
+              so revocation can't be dodged by re-claiming). DB-generated UUID PK
+              ((gen_random_uuid())::text, 015 idiom); owner_subject + domain scoped;
+              visibility/state/battery CHECK parity.
     -->
 
     <include file="db/changelog/001-user-profile.xml"/>
@@ -111,4 +125,5 @@
     <include file="db/changelog/016-vn-character-part.xml"/>
     <include file="db/changelog/017-vn-sticker-pack.xml"/>
     <include file="db/changelog/018-vn-moderation-finding-id.xml"/>
+    <include file="db/changelog/019-mesh-device.xml"/>
 </databaseChangeLog>

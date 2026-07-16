@@ -541,6 +541,7 @@ live on `main`.
 | Concern | Destination |
 | --- | --- |
 | Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs, VN-character parts + expression stickers | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`, `vn_character_part`, `vn_sticker_pack`) |
+| Mesh-device claims (Meshtastic LoRa node id → owner, + status visibility, bridge-reported LoRa status, moderation state) | **own R2DBC table** (`mesh_device`, 019 — `node_id` globally UNIQUE, one owner per radio). Exported to the mesh↔Matrix bridge (active rows only, node id → Matrix localpart via the admin-bff account read) and status-updated by it through the SERVICE-only `/bff/user/internal/mesh-devices` surface |
 | Account / session data for the relocated login/session surfaces | **`snapdragon-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
@@ -747,7 +748,7 @@ admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
 Reactive WebFlux everywhere (Mono/Flux, reactive WebClient; no `.block()` /
 `Thread.sleep` on the event loop). R2DBC for all runtime data; JDBC only for the
-Liquibase migrations (`db/changelog`, **001–018**). 010 = domain-scoping (the
+Liquibase migrations (`db/changelog`, **001–019**). 010 = domain-scoping (the
 `domain` column on every owner-keyed table); 011 = `user_preferences_store` (the
 durable per-user/per-brand preferences table backing `/bff/user/preferences`,
 domain-first composite PK `(user_id, pref_key, domain)`); 012 = the notifications
@@ -760,7 +761,13 @@ byte-identical to the prior `UUID.randomUUID().toString()`; adopts admin-bff #13
 mod-bff #36); 016 = `vn_character_part` (user-drawn character-studio SVG parts,
 `status` PENDING/ACTIVE/REJECTED-checked); 017 = `vn_sticker_pack` (VN-character
 expression stickers, same status lifecycle + an `expression` CHECK); 018 = adds the
-`finding_id` federation-moderation back-link column to both 016/017 tables. Spring
+`finding_id` federation-moderation back-link column to both 016/017 tables; 019 =
+`mesh_device` (claimed Meshtastic LoRa node ids for the mesh↔Matrix bridge —
+`node_id` stored canonical `!`+lowercase-hex and globally UNIQUE, one owner per
+radio; owner-managed status `visibility` private/friends/channels, bridge-written
+LoRa status columns, and the moderation `state` active/revoked trio whose mod-bff
+writer lands in a later wave; visibility/state/battery CHECK parity + a
+Postgres-gated canonical-shape regex CHECK). Spring
 Native: `native` profile + native-maven-plugin, surefire `argLine
 -Dnet.bytebuddy.experimental=true`, `NativeHintsConfig` with reflection hints for the
 JSON-bound DTOs + swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps

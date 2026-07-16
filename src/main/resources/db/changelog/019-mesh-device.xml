@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        mesh_device — a Meshtastic LoRa radio node CLAIMED by a platform user, so the
+        platform's mesh↔Matrix bridge can attribute that radio's messages to them. The
+        stored node_id is ALWAYS the CANONICAL form "!" + exactly 8 LOWERCASE hex digits
+        (e.g. !a1b2c3d4) — MeshDeviceService normalizes the accepted client shapes
+        (A1B2C3D4 / !A1B2C3D4) BEFORE anything lands here; the shape CHECK below is the
+        DB backstop, and node_id is UNIQUE ALONE (no owner/domain in the key): a radio
+        has exactly ONE owner across the whole platform — a second claim by ANYONE is a
+        duplicate-key violation the service maps to a 409.
+
+        The row carries three concerns beyond the claim itself:
+          - VISIBILITY (owner-managed): who may see the device's LoRa status
+            (private|friends|channels, DEFAULT private) — the bridge reads it off the
+            SERVICE-only mapping export to gate status fan-out.
+          - LoRa STATUS (bridge-written): last_seen_at / battery_pct / snr / hops_away /
+            via_device, written ONLY by the bridge's SERVICE-gated batch status endpoint
+            (ACTIVE rows only, fail-soft); all NULL until the radio is first heard.
+            battery_pct is 0..100 percent with 101 = "externally powered" (the
+            Meshtastic convention) — hence the 0..101 CHECK.
+          - MODERATION STATE (schema shipped NOW, the mod-bff writer lands in a LATER
+            wave): state active|revoked (DEFAULT active) + the revoked_by / revoked_at /
+            revoke_reason audit trio. A REVOKED row is excluded from the bridge mapping,
+            its visibility is frozen, and — because it keeps occupying the UNIQUE
+            node_id — the radio cannot be re-claimed by anyone while the row exists
+            (revocation is not circumventable by re-claiming). The owner MAY still
+            delete the row, which frees the node id (documented trade-off for the
+            moderation wave to revisit).
+
+        Columns (owner-keyed, one row per radio):
+          • id             — DB-generated UUID PK ((gen_random_uuid())::text, changelog
+                             015 idiom): the INSERT OMITS id and RETURNING id reads the
+                             generated string back.
+          • owner_subject  — Casdoor JWT subject (owner); NEVER from the request body.
+                             For a native-login caller this IS the admin-bff account id
+                             (the synthetic session JWT's subject), which is what the
+                             internal bridge mapping resolves to a Matrix localpart.
+          • domain         — the brand/tenant (DEFAULT 'default', NOT NULL), derived
+                             server-side from the validated token issuer (mirrors 010).
+                             NOTE: node_id uniqueness is deliberately NOT per-domain —
+                             a physical radio is one radio regardless of brand.
+          • node_id        — the CANONICAL Meshtastic node id, "!"+8 lowercase hex
+                             (<=16 varchar headroom); UNIQUE alone + shape CHECK.
+          • label          — the user's optional name for the radio (<=64 chars).
+          • visibility     — private|friends|channels; DEFAULT 'private'. A CHECK gives
+                             DB parity with the API-enforced vocabulary (pattern 005/016).
+          • state          — active|revoked; DEFAULT 'active'. CHECK parity as above.
+          • revoked_by     — the revoking moderator (audit; NEVER exposed to the owner).
+          • revoked_at     — when the device was revoked.
+          • revoke_reason  — the user-facing reason shown in the owner's own list.
+          • last_seen_at   — when the bridge last heard the radio (bridge-written).
+          • battery_pct    — 0..101 (101 = externally powered); CHECK-bounded.
+          • snr            — last reported signal-to-noise ratio (dB; real).
+          • hops_away      — mesh hops between the radio and the bridge's gateway node.
+          • via_device     — the neighbouring node the report arrived through (<=64).
+          • created_at     — when the claim was made (server-side now()).
+
+        Numbered 019 — the band ABOVE the current max (018) in db.changelog-master.xml;
+        registered LAST in the master with a SINGLE <include>.
+    -->
+
+    <changeSet id="019-1-mesh-device" author="snapdragon">
+        <createTable tableName="mesh_device">
+            <column name="id" type="varchar(64)" defaultValueComputed="(gen_random_uuid())::text">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="owner_subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="domain" type="varchar(255)" defaultValue="default">
+                <constraints nullable="false"/>
+            </column>
+            <column name="node_id" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="label" type="varchar(64)"/>
+            <column name="visibility" type="varchar(16)" defaultValue="private">
+                <constraints nullable="false"/>
+            </column>
+            <column name="state" type="varchar(16)" defaultValue="active">
+                <constraints nullable="false"/>
+            </column>
+            <column name="revoked_by" type="varchar(255)"/>
+            <column name="revoked_at" type="timestamp"/>
+            <column name="revoke_reason" type="varchar(255)"/>
+            <column name="last_seen_at" type="timestamp"/>
+            <column name="battery_pct" type="int"/>
+            <column name="snr" type="real"/>
+            <column name="hops_away" type="int"/>
+            <column name="via_device" type="varchar(64)"/>
+            <column name="created_at" type="timestamp" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <!-- node_id unique ALONE (not per owner/domain): one owner per radio across the
+             whole platform. The service maps the violation to a 409; a REVOKED row keeps
+             occupying the id so revocation cannot be dodged by re-claiming. -->
+        <addUniqueConstraint tableName="mesh_device"
+                             columnNames="node_id"
+                             constraintName="uq_mesh_device_node_id"/>
+    </changeSet>
+
+    <!-- Owner + domain list index for the "my devices, newest first" read. -->
+    <changeSet id="019-2-mesh-device-index" author="snapdragon">
+        <createIndex tableName="mesh_device" indexName="idx_mesh_device_owner_domain">
+            <column name="owner_subject"/>
+            <column name="domain"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="mesh_device" indexName="idx_mesh_device_owner_domain"/>
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the CANONICAL node-id shape the service normalizes to. UNLIKE the
+         plain-ANSI IN (...) CHECKs (016-3 idiom), a regex CHECK needs Postgres's `~`
+         operator, so this changeset is GATED to PostgreSQL exactly like the 015 pgcrypto
+         changeset (MARK_RAN elsewhere): production Postgres AND the Testcontainers-
+         Postgres slices get the CHECK; the residual H2 slices — which never touch
+         mesh_device — skip it. -->
+    <changeSet id="019-3-mesh-device-node-id-check" author="snapdragon">
+        <preConditions onFail="MARK_RAN" onError="MARK_RAN">
+            <dbms type="postgresql"/>
+        </preConditions>
+        <sql>
+            ALTER TABLE mesh_device
+                ADD CONSTRAINT ck_mesh_device_node_id
+                CHECK (node_id ~ '^![0-9a-f]{8}$')
+        </sql>
+        <rollback>
+            ALTER TABLE mesh_device DROP CONSTRAINT ck_mesh_device_node_id
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the API-enforced visibility vocabulary (plain ANSI col IN (...),
+         runs identically on production Postgres AND the H2 PostgreSQL-compat slice). -->
+    <changeSet id="019-4-mesh-device-visibility-check" author="snapdragon">
+        <sql>
+            ALTER TABLE mesh_device
+                ADD CONSTRAINT ck_mesh_device_visibility
+                CHECK (visibility IN ('private', 'friends', 'channels'))
+        </sql>
+        <rollback>
+            ALTER TABLE mesh_device DROP CONSTRAINT ck_mesh_device_visibility
+        </rollback>
+    </changeSet>
+
+    <!-- DB parity for the moderation-state vocabulary (same ANSI idiom). -->
+    <changeSet id="019-5-mesh-device-state-check" author="snapdragon">
+        <sql>
+            ALTER TABLE mesh_device
+                ADD CONSTRAINT ck_mesh_device_state
+                CHECK (state IN ('active', 'revoked'))
+        </sql>
+        <rollback>
+            ALTER TABLE mesh_device DROP CONSTRAINT ck_mesh_device_state
+        </rollback>
+    </changeSet>
+
+    <!-- Battery telemetry bounds: 0..100 percent, 101 = externally powered (Meshtastic
+         convention). NULL passes a CHECK by definition (not-yet-reported rows). Plain
+         ANSI BETWEEN — Postgres + H2 identical. The service CLAMPS bridge telemetry into
+         this range before the UPDATE; this is the backstop. -->
+    <changeSet id="019-6-mesh-device-battery-check" author="snapdragon">
+        <sql>
+            ALTER TABLE mesh_device
+                ADD CONSTRAINT ck_mesh_device_battery_pct
+                CHECK (battery_pct BETWEEN 0 AND 101)
+        </sql>
+        <rollback>
+            ALTER TABLE mesh_device DROP CONSTRAINT ck_mesh_device_battery_pct
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
