@@ -67,9 +67,12 @@
          (InternalTokenWebFilter), the InternalSurfaceBootGuard and the canonical
          reserved.ReservedNames (this repo's local profile.ReservedNames dup is deleted
          in favour of it). Unlike snapdragon-commons, auth-core is NOT parent-managed —
-         so this dependency carries an EXPLICIT <version>. PINNED to 2.0.0: that is the
-         release that ships every class this BFF's OIDC-login relocation consumes
-         (BffCustodyCipher / SessionCookieService / OidcExchangeClient). -->
+         so this dependency carries an EXPLICIT <version>. PINNED to 2.3.3 (crossing
+         2.3.1's ensureAccount roles + 2.3.2's bff_ cookie custody bridge on the way from
+         the original 2.0.0 pin): 2.3.3 is the release that picks up auth-core's
+         ReservedNames canonical-revision sync (character-studio / v1 / ai + 4 frontend
+         webroot filenames), which this BFF's ProfileService/UsernameSkeleton username
+         guard consumes directly. -->
     <dependency>
       <groupId>systems.snapdragon</groupId>
       <artifactId>snapdragon-auth-core</artifactId>

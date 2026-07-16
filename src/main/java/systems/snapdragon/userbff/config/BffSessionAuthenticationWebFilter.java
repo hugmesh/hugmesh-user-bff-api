@@ -450,57 +450,41 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *       already-correct authorities-collection overloads this filter already fed —
      *       agree with the authorities on this SAME {@link Authentication}.</li>
      *   <li>{@code email} (provider {@code "google"}) or {@code preferred_username}
-     *       (every other provider) = {@link AccountView#handle()} — best-effort so the
-     *       {@code preferred_username}-with-{@code sub}-fallback pattern used by {@code
-     *       ProfileController.usernameOf}/{@code ConnectedClientsController.resolveAccountView}/
-     *       {@code MatrixProxyController.localpart}/{@code
-     *       MastodonProxyController.localpart}/{@code SelfSilenceController.localpart}
-     *       (the latter's admin-bff-fallback branch only)
-     *       resolves a real handle instead of falling back to the "{@code
-     *       provider:handle}" composite {@code sub} string (which is not a valid
-     *       homeserver localpart). For {@code "google"}/{@code "discord"} accounts this
-     *       ALSO makes {@code SessionsService.accountIdFromJwt} reconstruct the EXACT
-     *       account id admin-bff stored, so {@code SessionsController} (one of the 16)
-     *       works correctly end-to-end for those two provider types.
-     *       <p><b>Known residual gap (pre-existing, NOT introduced or fixed here):</b>
-     *       {@code SessionsService.accountIdFromJwt} only ever reconstructs a {@code
-     *       "google:"} or {@code "discord:"} prefixed id — it has NO branch for {@code
-     *       "casdoor"} (the native-login provider {@code AccountView} accounts mostly
-     *       carry today, per admin-bff's {@code InternalAccountController#ensureAccount}
-     *       "#112 SSO subject extraction" doc). A REAL Casdoor JWT for a casdoor-provider
-     *       account already hits this exact mismatch today (independent of this filter
-     *       or either Bug-2 fix option), so {@code SessionsController} already returns
-     *       an empty list / 404s any revoke for native-login accounts via ANY carrier;
-     *       this fix does not regress that further, but does not fix it either — flagged
-     *       here rather than silently worked around, since a real fix belongs in {@code
-     *       SessionsService}, out of this change's scope.</li>
+     *       (every other provider) = {@link AccountView#handle()} — best-effort, kept for
+     *       display/UX call sites ({@code ProfileController.usernameOf} and similar) that
+     *       want a real handle instead of the "{@code provider:handle}" composite {@code
+     *       sub} string (which is not a valid homeserver localpart). This claim is
+     *       {@code SUBJECT_CLAIMS}-adjacent but is NOT itself the identity-resolution
+     *       mechanism any more — see {@code localpart}/{@code mastodon_localpart} below and
+     *       {@link systems.snapdragon.userbff.auth.CanonicalIdentityResolver}, which own that
+     *       policy today for every homeserver-identity call site (mint, self-silence hide,
+     *       connected-clients, active-session management). Historical note: an earlier
+     *       revision of several of those call sites derived a candidate identity as {@code
+     *       email -> google:<email>} else {@code preferred_username -> discord:<preferred
+     *       _username>} for a REAL (non-bff_-session) Casdoor JWT — that cross-namespace
+     *       guess could resolve a DIFFERENT user's admin-invite account and was deleted
+     *       org-wide in favour of {@code CanonicalIdentityResolver}'s claim-first / own-{@code
+     *       casdoor:}-key policy (see that class's own doc for the full rationale).</li>
      *   <li>{@code localpart} = {@link AccountView#localpart()}, when non-blank — the
      *       CANONICAL, admin-bff-persisted, collision-checked homeserver username
      *       (account-takeover-by-collision fix, Liquibase changeset 290 on admin-bff).
-     *       {@code MatrixProxyController.localpart}/{@code MastodonProxyController.localpart}
-     *       (the two homeserver-MINT call sites — {@code broker.mintMatrix}/{@code
-     *       mintMastodon}) now read THIS claim first, falling back to the
-     *       {@code preferred_username}/{@code sub} derivation only when it is absent (a
-     *       real, non-bff_-session Casdoor JWT, which never runs through this filter at
-     *       all). Threading it through the ALREADY-fetched {@link AccountView} here costs
-     *       no additional admin-bff round trip — this filter resolves it via {@link
-     *       AdminBffInternalClient#resolveSession} for every bff_-session request
-     *       regardless. {@code ConnectedClientsController} ALSO now reads this claim first
-     *       (a later, separate fix — its live homeserver read + the durable gateway
-     *       revocation-key write, neither a mint site) via its own {@code
-     *       localpartFor}/{@code canonicalLocalpart}/{@code mastodonLocalpart} dispatch,
-     *       fail-closed on the write (revoke) leg and best-effort-degrading on the read
-     *       (list) leg. {@code SelfSilenceController} ALSO now
-     *       reads this claim first (a later, separate fix — its two homeserver hide seams,
-     *       not a mint site), but unlike the two proxy controllers it degrades to a blank
-     *       localpart rather than failing closed when neither this claim nor an admin-bff
-     *       lookup resolves one, since a self-silence hide is best-effort + gated.</li>
+     *       {@link systems.snapdragon.userbff.auth.CanonicalIdentityResolver#matrixLocalpart}
+     *       reads THIS claim first for every call site that needs a canonical Matrix
+     *       localpart (the two D6 proxy mint legs, the media-custody mint,
+     *       {@code ConnectedClientsController}, {@code SelfSilenceController}), falling back
+     *       to a fail-closed lookup of the caller's OWN {@code casdoor:<subject>} account only
+     *       when the claim is absent (a real, non-bff_-session Casdoor JWT, which never runs
+     *       through this filter at all). Threading it through the ALREADY-fetched
+     *       {@link AccountView} here costs no additional admin-bff round trip — this filter
+     *       resolves it via {@link AdminBffInternalClient#resolveSession} for every
+     *       bff_-session request regardless.</li>
      *   <li>{@code mastodon_localpart} = {@link AccountView#mastodonLocalpart()}, when
      *       non-blank — the coarser Mastodon fold (admin-bff changeset 291) with its OWN
-     *       uniqueness. {@code MastodonProxyController.mastodonLocalpart} reads THIS claim
-     *       (falling back to an internal account read only when absent), so a Mastodon mint is
-     *       never a client-side re-fold of {@code localpart} — the residual half of the
-     *       account-takeover-by-collision fix (the Matrix {@code localpart} above is 290's half).</li>
+     *       uniqueness. {@link systems.snapdragon.userbff.auth.CanonicalIdentityResolver#mastodonLocalpart}
+     *       reads THIS claim first (falling back to an internal account read only when
+     *       absent), so a Mastodon mint is never a client-side re-fold of {@code localpart}
+     *       — the residual half of the account-takeover-by-collision fix (the Matrix
+     *       {@code localpart} above is 290's half).</li>
      *   <li>{@code iss} = {@link #singleTrustedIssuerOrNull} — see its own doc for the
      *       single- vs multi-issuer distinction this claim exists to serve.</li>
      * </ul>

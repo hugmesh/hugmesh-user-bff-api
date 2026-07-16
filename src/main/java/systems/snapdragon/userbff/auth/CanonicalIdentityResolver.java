@@ -204,7 +204,15 @@ public class CanonicalIdentityResolver {
 
     /** First non-blank of {@link #SUBJECT_CLAIMS}, mirroring admin-bff's account-key derivation
      *  ({@code sub} is read via the same claim so a real access token and the id_token that
-     *  created the account agree when both carry it). */
+     *  created the account agree when both carry it).
+     *
+     *  <p>TODO(#124 residual, unverified offline): this assumes a real Casdoor ACCESS token
+     *  carries the same {@code email}/{@code preferred_username} claims the ID token carried
+     *  when admin-bff derived the account's {@code casdoor:<subject>} key at creation time. If
+     *  the access token carries a narrower claim set (e.g. only {@code sub}), this lookup could
+     *  miss for an existing account and fail closed — an availability regression, not a
+     *  security one (see the PR body / README "Known gaps"). Needs confirming against a live
+     *  Casdoor token capture before this can be crossed off. */
     private static String subjectOf(Jwt jwt) {
         for (String claim : SUBJECT_CLAIMS) {
             String v = jwt.getClaimAsString(claim);

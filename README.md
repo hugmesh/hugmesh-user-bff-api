@@ -42,7 +42,7 @@ flowchart LR
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
 
-    AdminBff["snapdragon-admin-bff-api /bff/internal<br/>(account/session DATA, mTLS + X-Internal-Token)"]:::planned
+    AdminBff["snapdragon-admin-bff-api /bff/internal<br/>(account/session DATA + identity resolve,<br/>mTLS + X-Internal-Token)"]:::gated
     Fed["snapdragon-federation-api<br/>(cards + moderation, forwarded JWT)"]
     HS["homeservers via mTLS proxy<br/>tuwunel / Akkoma<br/>(gated stub-seams)"]:::gated
     Actions["snapdragon-actions reconciler<br/>(only writer of user_notifications)"]:::planned
@@ -53,8 +53,8 @@ flowchart LR
     Casdoor -.->|code→token exchange / refresh| BFF
     Casdoor -.->|validates iss / roles| GW
     Surfaces --> DB
-    Surfaces -->|forwarded JWT| Fed
-    Surfaces -.->|account/session data| AdminBff
+    Surfaces -->|forwarded JWT, or exchanged bff_→custody JWT| Fed
+    Surfaces -->|session introspect/exchange,<br/>canonical identity resolve| AdminBff
     Surfaces -->|gated, never hard-fail| HS
     Surfaces -->|password / email| Casdoor
     Actions -->|ROLE_SERVICE deliver| Internal
@@ -64,10 +64,13 @@ flowchart LR
     classDef gated stroke-dasharray:2,stroke:#b58900;
 ```
 
-In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed nodes are 🔭 planned
-or built/landing elsewhere (`login-ui`, `snapdragon-user-ui`, the `snapdragon-actions`
-reconciler, and the in-flight admin-bff→user-bff login/session relocation), and the
-amber-dashed homeserver leg is the ✅-shipped-but-**gated** stub-seam (off by default).
+In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed grey nodes are 🔭
+planned or built/landing elsewhere (`login-ui`, `snapdragon-user-ui`, the
+`snapdragon-actions` reconciler); the amber-dashed nodes are ✅-shipped-but-**gated**
+stub-seams — the homeserver leg (off by default) and the admin-bff `/bff/internal`
+leg (the client + `BffSessionAuthenticationWebFilter` + `CanonicalIdentityResolver` are
+all real, always-registered code, but every call fail-closed-stubs unless
+`app.bff.oidc.enabled=true`).
 
 ## Auth model / SSO relocation 🚧
 
@@ -140,6 +143,50 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
 > **SSO e2e**. Until that flip, login stays operationally owned by admin-bff: the
 > `/bff/login` (native) + `/bff/register` routes exist but 503 / are inert while the
 > flags are off.
+
+### Native-login session bridge — `BffSessionAuthenticationWebFilter` ✅ shipped
+
+Even with `app.bff.oidc.enabled=false` (the default), this filter is always registered
+and runs on every request: it is what lets an opaque `bff_` session (cookie or
+`Authorization: Bearer bff_…` header) authenticate against **this service's own**
+`hasRole()`/`.authenticated()` gates, not just the gateway's route-access decision. It
+introspects the token via `AdminBffInternalClient#resolveSession` (admin-bff `GET
+/bff/internal/session/introspect`), then builds a **synthetic, server-only** `Jwt`
+principal (never decoded from client input, never forwarded) carrying `sub` = the
+admin-bff account id, mapped `ROLE_*` authorities, `MFA_SATISFIED` when the session's
+step-up is satisfied, and — for the identity-resolution fixes below — the account's
+persisted `localpart`/`mastodon_localpart` claims. A suspended/banned session is an
+explicit `403`; an unknown/expired session passes through unauthenticated (clean 401
+downstream); any other admin-bff failure (timeout, 5xx, unreachable) fails **closed**
+with `503` rather than silently demoting every native-login caller to logged-out. When
+`AdminBffInternalClient` itself is the disabled fail-closed stub (the default), the
+filter treats that as permanent pass-through, not a 503.
+
+The raw session token is also stashed in the Reactor context (never the principal) so
+`FederationApiClient`/the media clients can swap it for a **real, forwardable** custody
+JWT via `AdminBffInternalClient#exchangeSession` (admin-bff `POST
+/bff/internal/session/exchange`) before calling federation-api or a homeserver proxy —
+otherwise a native-login caller's synthetic principal would reach those services
+credential-less and get rejected.
+
+### Canonical homeserver-identity resolution — `CanonicalIdentityResolver` ✅ shipped
+
+Every call site that needs the caller's Matrix/Mastodon **localpart** (the D6 proxy
+mints, the media-custody mint, self-silence hide, connected-clients read/revoke, active
+session listing) resolves it through one shared bean, `auth.CanonicalIdentityResolver`,
+rather than a per-controller copy: **claim-first** (the `localpart`/`mastodon_localpart`
+claims the filter above stamps for a native-login session), else the caller's **own**
+`casdoor:<subject>` account (subject = first non-blank of `email`/`preferred_username`/
+`sub`, mirroring admin-bff's own account-key derivation), else **fail closed** — never a
+raw derived/guessed candidate. This closes a real cross-user account-takeover class
+found by a dedicated adversarial security audit of the merged native-login surface: a
+real (non-`bff_`) Casdoor JWT with no `email` claim used to fall through to `preferred
+_username -> discord:<preferred_username>`, which could resolve **another user's**
+admin-invite account and mint/hide/revoke against their homeserver identity. Mint sites
+fail closed (`401`/`409`, no mint); self-silence degrades to a blank leg (best-effort,
+already gated off by default); `SessionsService` uses the same resolver so
+`/bff/user/sessions` lists/revokes only the caller's own rows regardless of how they
+authenticated.
 
 ## The core invariant: owner-enforcement
 
@@ -297,9 +344,12 @@ row, or a revocation key — login/home stays normal for the silenced user. Own 
 - `POST /bff/user/self-silence/email-mod` — ask a mod/admin to reactivate me sooner
   (writes a self-silence-appeal moderation request; NOT SMTP).
 
-The homeserver localpart used for the visibility-hide seams comes from the JWT
-`preferred_username` claim. All three hide legs are **gated stub-seams that never
-hard-fail**: the federation user-scope hide-profile apply/clear leg
+The homeserver localpart used for the visibility-hide seams is resolved via the shared
+`CanonicalIdentityResolver` (claim-first from a native-login session, else the caller's
+own persisted account — see *Canonical homeserver-identity resolution* above), never a
+raw JWT claim guess, and degrades to a blank leg (skipped, not failed) rather than
+blocking activate/cancel when it cannot be resolved. All three hide legs are **gated
+stub-seams that never hard-fail**: the federation user-scope hide-profile apply/clear leg
 (`self-silence.federation.enabled`) and the homeserver directory/discovery hides
 (`external.matrix.enabled` / `external.mastodon.enabled` — tuwunel
 exclude-from-directory, akkoma `discoverable=false`) are all OFF by default; the
@@ -327,6 +377,12 @@ authorities converter — no converter change.
 - `DELETE /bff/user/connected-clients/{id}` — revoke one of mine: write the
   **per-credential** gateway revocation key `hs:<platform>:<localpart>:<appId|deviceId>`
   first (`RevocationWriter`), best-effort homeserver delete, then stamp `revoked_at`.
+
+Both the live homeserver read and the revocation-key write resolve `<localpart>`
+**per platform** via `CanonicalIdentityResolver` (claim-first, else the caller's own
+persisted account, never a raw `preferred_username`/subject guess) — the read degrades
+to "skip that platform's live merge" on a resolution miss, the revoke fails **closed**
+(`401`/`409`) since the localpart keys the durable enforcement mechanism.
 
 Removing the external-client role → `ConnectedClientsService.reconcilePersonalClient
 Revocation` writes `external-client:<localpart>:<platform>` (the gateway filter checks
@@ -422,6 +478,22 @@ upload path). `ROLE_USER` floor.
   direct-to-homeserver by the Matrix client, never proxied through this BFF.
 - `GET /bff/user/character/stickers` — list MY stickers (newest first).
 
+**MSC2545 sticker-pack registration — `StickerPackRegistrationService`** (no HTTP
+surface of its own) — the SERVER half of getting a user's ACTIVE stickers into their
+Matrix client's sticker picker: on every ACTIVE flip (`CharacterModerationService
+#resolveSticker`), a `ROLE_SERVICE`-context, no-JWT job read-modify-writes the owner's
+`im.ponies.user_emotes` Matrix account-data (the MSC2545 convention), merging the
+owner's active stickers in as `images` entries **without clobbering** any pre-existing
+non-VN emotes, de-duplicated by expression (newest wins). The **send** side
+(`m.sticker` into a room) stays entirely client-side — this BFF has no `roomId` source,
+so there is deliberately no send endpoint here. DARK BY DEFAULT
+(`sticker.matrix.register.enabled=false`): the check short-circuits before any
+cipher/custody/Matrix work, so dev/CI run as if the feature does not exist. Fail-soft
+throughout — a homeserver outage or missing custody token never fails the moderator's
+activation, it just skips registration; the Matrix localpart/token it needs is resolved
+via the shared `CanonicalIdentityResolver` (never a raw derivation from the owner
+subject — the same account-takeover-by-collision fix the D6 proxy mints apply).
+
 **Internal moderation receiver — `InternalCharacterModerationController`
 (`/bff/user/internal/character/{parts,stickers}/{id}/moderation`)** — **SERVICE-PRINCIPAL
 ONLY** (same `/bff/user/internal/**` gate as the notifications deliver endpoint: `ROLE_SERVICE`
@@ -439,8 +511,10 @@ token brokered by `ServiceTokenBroker` (the reactive port of admin-bff's broker 
 register-then-login for Matrix, password-grant for Mastodon; the minted token is
 AES-encrypted into the `hs_service_token` custody store and its SHA-256 hash written
 to the gateway revocation filter). The homeserver service-account password
-(`app.hs-token.svc-password` / `APP_HS_TOKEN_SVC_PASSWORD`) is **MANDATORY** — there
-is no baked default; a missing value fails context start (fail-closed).
+(`app.hs-token.svc-password` / `APP_HS_TOKEN_SVC_PASSWORD`) has an **empty default** —
+`ServiceTokenBroker` still wires at boot either way, but a blank password refuses every
+mint with a `503` (fail-closed at request time, not a context-start crash; see
+`ServiceTokenBroker`'s own doc for why the boot-crash shape was deliberately dropped).
 
 - `GET|PUT|POST|DELETE|PATCH /bff/user/matrix/**` → tuwunel client API via the
   `tuwunel-proxy` sidecar.
@@ -455,6 +529,15 @@ unconfigured deploy degrades to a clean 503 rather than serving a broken proxy. 
 `APP_HS_TOKEN_ENABLED=false` to fully dark the surface instead. The JSON response decode
 runs off the WebFlux codec path (read-as-String + Jackson-2 `readTree`) because Boot 4's
 reactive codec is Jackson 3 and cannot decode the Jackson-2 `JsonNode` type directly.
+
+A first-use (no custody row yet) re-mint resolves the caller's canonical localpart via
+`CanonicalIdentityResolver` (claim-first, else the caller's own persisted account, never
+a raw derivation) — see *Canonical homeserver-identity resolution* above; the Mastodon
+leg mints against Akkoma's real app-credential + password-grant/register OAuth contract
+(the bare grant never actually worked). A body-bearing write (POST/PUT/PATCH/DELETE)
+that hits a 401 mid-flight re-mints and retries without re-subscribing the once-only
+request-body stream (the earlier shape 500'd on every body-bearing write after token
+expiry — GET-only tests had missed it).
 
 ### Account status — `AccountStatusController` (`/bff/user/status`) ✅ shipped
 A `ROLE_USER`-floor, owner-scoped, **read-only polling** endpoint. There is no write
@@ -588,6 +671,17 @@ live on `main`.
 - `PoisonWorkerClient` / `HomeserverMediaClient` — the media-proxy worker call +
   the real homeserver upload/re-fetch through the akkoma-proxy / tuwunel-proxy mTLS
   proxies (`app.media.proxy.{matrix,mastodon}.*`).
+- `MatrixClientApiClient` (wired by `MatrixClientApiConfig`) — reactive WebClient for
+  Matrix account-data GET/PUT, used only by `StickerPackRegistrationService` to
+  read-modify-write the owner's MSC2545 `im.ponies.user_emotes` sticker pack. Gated by
+  `sticker.matrix.register.enabled` (default false).
+- `AdminBffInternalClient` — the service-to-service client to admin-bff's `/bff/internal`
+  surface (account/session ensure/get/create/delete, session introspect/exchange,
+  custody-stamp, allowlist check). Wired unconditionally but fail-closed-stubbed
+  (`enabled()==false`, every call errors) unless `app.bff.oidc.enabled=true`; consumed by
+  `BffSessionAuthenticationWebFilter` and — as of the identity-resolution hardening pass
+  — by `CanonicalIdentityResolver` for every homeserver-identity call site. See *Native-login
+  session bridge* and *Canonical homeserver-identity resolution* above.
 
 ## Security — defence in depth
 
@@ -658,12 +752,15 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/systems/snapdragon/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.snapdragon:snapdragon-auth-core:2.3.0`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.snapdragon:snapdragon-auth-core:2.3.3`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
    the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
    infra) is extracted to `snapdragon-auth-core` (depends on `snapdragon-commons`,
    consumed by **user-bff + admin-bff only**) rather than copied. This adoption is
-   in-flight alongside the SSO relocation above.
+   in-flight alongside the SSO relocation above. The pin has moved twice since the
+   initial 2.0.0 adoption (2.3.1 `ensureAccount` roles, 2.3.2 the `bff_` cookie custody
+   bridge) up to today's 2.3.3, which picks up auth-core's `ReservedNames`
+   canonical-revision sync that `ProfileService`/`UsernameSkeleton` consume directly.
 
    The committed [`openapi.json`](src/main/resources/openapi/openapi.json) is
    **byte-identical** after the commons refactor (internal-only change).
@@ -904,13 +1001,15 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 - **Paired `snapdragon-user-ui`** is built later, NOT here; this BFF's
   `/v3/api-docs` spec is the contract its ng-openapi-gen typed client will consume.
 
-## Current State
+## Status
 
 State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or landing) ·
-🔭 planned (design-complete, no code here).
+🔭 planned (design-complete, no code here). Every claim below is grounded in code/tests
+actually present in this worktree as of the commit this section was last refreshed
+against (`f0a73b9`, #124) — see `git log --oneline -40` for the full recent history.
 
 - ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.7 / Spring Cloud
-  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–015, incl. DB-generated UUID
+  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–018, incl. DB-generated UUID
   primary keys), Spring Native hints, springdoc OpenAPI.
 - ✅ **Casdoor JWT resource server + owner-enforcement** across every `/bff/user/**`
   surface; the canonical `CasdoorAuthorities` converter; `ROLE_SERVICE`-exclusive
@@ -924,25 +1023,57 @@ State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or l
   polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark), and the VN character-studio drawn-parts + expression-sticker surfaces (sanitized-SVG / magic-byte-sniffed PNG, both moderation-queued with a SERVICE-only internal resolve receiver).
 - ✅ **Homeserver proxy (D6) live by default** (`app.hs-token.enabled=true`); still
   fail-closed (503) until the custody key + service-account password are provisioned.
-- ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons:2.7.0`
-  (shared security/tenancy/web); GitLab-only CI with the shared OWASP pentest harness.
+- ✅ **Native-login session bridge + canonical identity resolution — on `main`, ALWAYS
+  active** (unlike the OIDC-login surface below, `BffSessionAuthenticationWebFilter` is
+  not behind `app.bff.oidc.enabled`): bridges an opaque `bff_` session into this
+  service's own Spring Security context (`MFA_SATISFIED` + suspended/banned 403 +
+  fail-closed 503 on introspection failure), and the shared `CanonicalIdentityResolver`
+  bean is the single policy for every homeserver-identity call site (D6 proxy mints,
+  media-custody mint, self-silence hide, connected-clients, active-session management).
+  This closed a real cross-user account-takeover class (a stale per-controller
+  `preferred_username -> discord:<handle>` guess could resolve another user's account) —
+  see *Native-login session bridge* and *Canonical homeserver-identity resolution* above,
+  and PRs #115/#116/#117/#118/#120/#123/#124.
+- ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons` (shared
+  security/tenancy/web) + `snapdragon-auth-core:2.3.3`; GitLab-only CI with the shared
+  OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI.
-- ✅ **SSO relocation — on `main`, ships DARK** (the headline this cycle): server-side
+- ✅ **SSO relocation — on `main`, ships DARK** (the headline of an earlier cycle, now
+  followed by a cross-cutting identity-resolution hardening pass, see above): server-side
   OIDC code→token exchange, per-session JWT custody/refresh, the browser-side opaque
   `bff_` session, the `/bff/login,/register,/session,/me` surface, and the admin-bff
   `/bff/internal` account/session client — merged and inert behind default-off flags
   (`app.bff.oidc.enabled` / `app.bff.custody-key` / `app.internal.token`),
   fail-closed-stubbed, byte-identical runtime when off. The **live flag-flip + SSO
   e2e** is the only remaining work (🚧, see Roadmap) — the code itself is merged.
-- ✅ **`snapdragon-auth-core:2.3.0` adoption — on `main`** — the shared account/session/
-  MFA/Casdoor-admin core (depends on commons; consumed by user-bff + admin-bff only),
-  pinned in `pom.xml` and `@Import`ed (active under the SSO flags above).
 - 🚧 **Edge authz alignment:** the gateway is a pure Casdoor-JWT RS that swaps
   `bff_` → the internal custody JWT (pre-security filter) and gates routes from the
   `gateway_route_access` Postgres table via `GatewayRouteAccessFilter`; SCG-5 moved
   route config to `spring.cloud.gateway.server.webflux.routes` (gateway/generator
   templates corrected). This BFF participates as the JWT custodian behind that edge.
+
+### Known gaps
+
+- **`hs_token` claim never populated for native-login sessions.** The synthetic Jwt
+  `BffSessionAuthenticationWebFilter` builds carries no homeserver-native-token claim
+  (admin-bff's session-introspect contract has no such field), so
+  `ConnectedClientsController`'s live homeserver read/revoke has no bearer to forward
+  for a native-login caller — the durable gateway revocation key is the real
+  enforcement there, and this is a documented, not silently broken, gap.
+- **Multi-issuer `bff_` sessions resolve no `DOMAIN_` scope.** `AccountView` carries no
+  brand/domain field, so `BffSessionAuthenticationWebFilter` can only recover the
+  correct issuer-derived domain in single-issuer mode (today's only configured mode);
+  a genuinely multi-brand deployment would need a brand-aware field added to the
+  admin-bff introspection contract before a `bff_`-session caller can be scoped
+  cross-brand — until then it fails closed (denies domain-scoped rows) rather than
+  guessing.
+- **Residual uncertainty flagged by PR #124 itself** (not yet independently verified
+  against a live Casdoor deployment): whether a real Casdoor **access** token carries
+  the same `email`/`preferred_username` claims the **id_token** carried when admin-bff
+  created the account. If it does not, `CanonicalIdentityResolver`'s own-account lookup
+  could miss for an existing account and fail closed (an availability regression, not a
+  security one — see the `CanonicalIdentityResolver` TODO in code).
 
 ## Roadmap
 
@@ -951,7 +1082,7 @@ otherwise; the items below are NOT yet shipped here.
 
 ### SSO end-to-end + e2e 🚧 in-flight
 The relocation **code** is merged on `main` but ships DARK (see *Auth model* +
-*Current State*). The active work is now the **live flag-flip + e2e**, not a code
+*Status*). The active work is now the **live flag-flip + e2e**, not a code
 merge: pin the admin-bff #112 internal contract, add the cross-repo egress
 NetworkPolicy peer, flip the default-off flags (`app.bff.oidc.enabled` /
 `app.bff.custody-key` / `app.internal.token`), and prove SSO login end-to-end
