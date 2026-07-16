@@ -7,6 +7,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.security.PrincipalDomain;
 
 import java.time.Instant;
@@ -22,19 +23,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Self-silence identity-canonicalisation close — the companion to {@code
- * HsProxyLocalpartFallbackTest}'s plain-object style, for the two homeserver hide seams
- * instead of the two D6 proxy mint sites. {@link SelfSilenceController}'s activate/cancel
- * used to derive the hide-seam localpart from the raw JWT {@code preferred_username}
- * claim — the SAME class of account-takeover-by-collision bug {@code
- * MatrixProxyController}/{@code MastodonProxyController} already closed for the
- * homeserver-MINT call sites: two DIFFERENT admin-bff accounts CAN share a {@code
- * preferred_username} (it is not admin-bff's uniqueness key), so the old derivation could
- * hide/un-hide the WRONG account's directory entry.
- *
- * <p>Drives the controller's public {@code activate}/{@code cancel} entry points directly
- * (no Spring context) with a mocked {@link SelfSilenceService} + {@link
- * AdminBffInternalClient} + {@link PrincipalDomain}.
+ * Self-silence identity-canonicalisation close -- the companion to {@code
+ * HsProxyLocalpartFallbackTest}'s plain-object style, for the two homeserver hide seams instead
+ * of the two D6 proxy mint sites, now via the shared {@link CanonicalIdentityResolver}.
+ * {@link SelfSilenceController}'s activate/cancel used to derive the hide-seam localpart from a
+ * RAW cross-namespace guess ({@code email -> google:}, else {@code preferred_username ->
+ * discord:}) -- the SAME account-takeover-by-collision class the mint sites closed: two DIFFERENT
+ * admin-bff accounts CAN share a {@code preferred_username}, so the old derivation could hide/un-
+ * hide the WRONG account's directory entry. The fix resolves the caller's OWN
+ * {@code casdoor:<subject>} account; UNLIKE the mint sites it degrades to {@code ""} on a miss
+ * (best-effort hide), never failing the caller's own request.
  */
 class SelfSilenceControllerLocalpartFallbackTest {
 
@@ -48,6 +46,10 @@ class SelfSilenceControllerLocalpartFallbackTest {
         return b.build();
     }
 
+    private static CanonicalIdentityResolver resolver(AdminBffInternalClient adminBff) {
+        return new CanonicalIdentityResolver(adminBff);
+    }
+
     private static SelfSilenceController.ActivateRequest activateBody() {
         return new SelfSilenceController.ActivateRequest(Instant.now().plusSeconds(3600), null);
     }
@@ -59,7 +61,7 @@ class SelfSilenceControllerLocalpartFallbackTest {
     @Test
     void activate_syntheticLocalpartClaims_usedDirectly_adminBffNeverCalled() {
         // The PRIMARY (native-login / bff_-session) path: the claims BffSessionAuthentication
-        // WebFilter.syntheticJwt stamps are used as-is — no admin-bff hop at all.
+        // WebFilter.syntheticJwt stamps are used as-is -- no admin-bff hop at all.
         SelfSilenceService silence = mock(SelfSilenceService.class);
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         PrincipalDomain principalDomain = mock(PrincipalDomain.class);
@@ -67,7 +69,7 @@ class SelfSilenceControllerLocalpartFallbackTest {
         when(silence.activate(eq("casdoor:uuid"), eq("mx-lp"), eq("md-lp"), any(), any(), eq("default")))
                 .thenReturn(Mono.just(rowFor("casdoor:uuid")));
 
-        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, adminBff);
+        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, resolver(adminBff));
         Jwt jwt = jwtWithClaims("casdoor:uuid", Map.of(
                 "localpart", "mx-lp", "mastodon_localpart", "md-lp", "preferred_username", "ignored"));
 
@@ -78,53 +80,50 @@ class SelfSilenceControllerLocalpartFallbackTest {
     }
 
     @Test
-    void activate_realJwt_noClaims_resolvesCanonicalValueViaAdminBff_notRawClaim() {
+    void activate_realJwt_noClaims_resolvesOwnCasdoorAccount_notRawClaim() {
         SelfSilenceService silence = mock(SelfSilenceService.class);
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         PrincipalDomain principalDomain = mock(PrincipalDomain.class);
         when(principalDomain.forScope(any())).thenReturn("default");
-        when(adminBff.getAccount("google:alice@x.com")).thenReturn(Mono.just(
-                new AdminBffInternalClient.AccountView("google:alice@x.com", "google", "alice@x.com",
+        when(adminBff.getAccount("casdoor:alice@x.com")).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView("casdoor:alice@x.com", "casdoor", "alice@x.com",
                         true, List.of("user"), "alice-mx", "alice_md")));
         when(silence.activate(eq("casdoor-subject"), eq("alice-mx"), eq("alice_md"), any(), any(), eq("default")))
                 .thenReturn(Mono.just(rowFor("casdoor-subject")));
 
-        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, adminBff);
+        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, resolver(adminBff));
         Jwt jwt = jwtWithClaims("casdoor-subject", Map.of("email", "alice@x.com"));
 
         StepVerifier.create(controller.activate(jwt, activateBody())).expectNextCount(1).verifyComplete();
 
         verify(silence).activate(eq("casdoor-subject"), eq("alice-mx"), eq("alice_md"), any(), any(), eq("default"));
-        // The OLD (pre-fix) behaviour would have hidden under the raw preferred_username/sub —
-        // must never happen once admin-bff resolves a canonical value.
+        // The OLD (pre-fix) behaviour would have looked up google:<email> and hidden under a raw
+        // value -- must never happen once admin-bff resolves the caller's OWN canonical value.
+        verify(adminBff, never()).getAccount("google:alice@x.com");
         verify(silence, never()).activate(anyString(), eq("alice@x.com"), anyString(), any(), any(), anyString());
     }
 
     @Test
     void activate_twoAccountsShareSamePreferredUsername_resolveToDistinctLocalparts_noCollision() {
-        // The exact collision vector the old preferred_username-derivation was vulnerable
-        // to: two DIFFERENT admin-bff accounts sharing "alice" as preferred_username, but
-        // registered under different emails, MUST resolve to their OWN distinct canonical
-        // Matrix localpart — never collide on the same directory-hide target.
+        // The exact collision vector the old preferred_username-derivation was vulnerable to:
+        // two DIFFERENT admin-bff accounts sharing "alice" as preferred_username but registered
+        // under different emails. subject-precedence is email-first, so each resolves its OWN
+        // distinct casdoor: account -- never colliding on the same directory-hide target, and
+        // never touching a shared discord:alice namespace.
         SelfSilenceService silence = mock(SelfSilenceService.class);
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         PrincipalDomain principalDomain = mock(PrincipalDomain.class);
         when(principalDomain.forScope(any())).thenReturn("default");
         when(silence.activate(anyString(), anyString(), anyString(), any(), any(), anyString()))
                 .thenAnswer(inv -> Mono.just(rowFor(inv.getArgument(0))));
-        when(adminBff.getAccount("google:alice@x.com")).thenReturn(Mono.just(
-                new AdminBffInternalClient.AccountView("google:alice@x.com", "google", "alice@x.com",
+        when(adminBff.getAccount("casdoor:alice@x.com")).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView("casdoor:alice@x.com", "casdoor", "alice@x.com",
                         true, List.of("user"), "alice-account-a", "alice-account-a")));
-        when(adminBff.getAccount("google:alice@y.com")).thenReturn(Mono.just(
-                new AdminBffInternalClient.AccountView("google:alice@y.com", "google", "alice@y.com",
+        when(adminBff.getAccount("casdoor:alice@y.com")).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView("casdoor:alice@y.com", "casdoor", "alice@y.com",
                         true, List.of("user"), "alice-account-b", "alice-account-b")));
-        // resolveAccountView builds the discord-derived candidate Mono EAGERLY too (a real
-        // WebClient call is lazy until subscribed; a Mockito stub invocation is not) — it is
-        // never actually used here since byEmail always resolves first, but must be stubbed
-        // to avoid an NPE on construction.
-        when(adminBff.getAccount("discord:alice")).thenReturn(Mono.empty());
 
-        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, adminBff);
+        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, resolver(adminBff));
         Jwt jwtA = jwtWithClaims("casdoor-a", Map.of("email", "alice@x.com", "preferred_username", "alice"));
         Jwt jwtB = jwtWithClaims("casdoor-b", Map.of("email", "alice@y.com", "preferred_username", "alice"));
 
@@ -135,13 +134,15 @@ class SelfSilenceControllerLocalpartFallbackTest {
                 any(), any(), eq("default"));
         verify(silence).activate(eq("casdoor-b"), eq("alice-account-b"), eq("alice-account-b"),
                 any(), any(), eq("default"));
+        // The shared invite namespace is NEVER consulted.
+        verify(adminBff, never()).getAccount("discord:alice");
     }
 
     @Test
     void activate_unresolvableIdentity_degradesToBlank_neverFailsTheCallersOwnRequest() {
-        // UNLIKE the homeserver-MINT call sites (MatrixProxyController et al.), a self-
-        // silence hide is best-effort + gated: an unresolved identity must NOT fail the
-        // caller's own activate — it degrades to "" and SelfSilenceService skips that leg.
+        // UNLIKE the homeserver-MINT call sites (MatrixProxyController et al.), a self-silence
+        // hide is best-effort + gated: an unresolved identity must NOT fail the caller's own
+        // activate -- it degrades to "" and SelfSilenceService skips that leg.
         SelfSilenceService silence = mock(SelfSilenceService.class);
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         PrincipalDomain principalDomain = mock(PrincipalDomain.class);
@@ -151,7 +152,7 @@ class SelfSilenceControllerLocalpartFallbackTest {
         when(silence.activate(eq("mallory"), eq(""), eq(""), any(), any(), eq("default")))
                 .thenReturn(Mono.just(rowFor("mallory")));
 
-        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, adminBff);
+        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, resolver(adminBff));
         Jwt jwt = jwtWithClaims("mallory", Map.of("preferred_username", "mallory"));
 
         StepVerifier.create(controller.activate(jwt, activateBody())).expectNextCount(1).verifyComplete();
@@ -168,7 +169,7 @@ class SelfSilenceControllerLocalpartFallbackTest {
         when(silence.cancel(eq("casdoor:uuid"), eq("mx-lp"), eq("md-lp"), eq("default")))
                 .thenReturn(Mono.empty());
 
-        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, adminBff);
+        SelfSilenceController controller = new SelfSilenceController(silence, principalDomain, resolver(adminBff));
         Jwt jwt = jwtWithClaims("casdoor:uuid", Map.of("localpart", "mx-lp", "mastodon_localpart", "md-lp"));
 
         StepVerifier.create(controller.cancel(jwt)).expectNextCount(1).verifyComplete();

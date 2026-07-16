@@ -6,6 +6,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.hsproxy.HsServiceTokenRow;
 import systems.snapdragon.userbff.hsproxy.HsTokenCustody;
 import systems.snapdragon.userbff.hsproxy.MintedToken;
@@ -26,15 +27,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit test for {@link StickerPackRegistrationService} — the SERVER (write-side) half of the
- * MSC2545 sticker-pack feature — with EVERYTHING mocked (no DB, no homeserver). Proves:
+ * Unit test for {@link StickerPackRegistrationService} -- the SERVER (write-side) half of the
+ * MSC2545 sticker-pack feature -- with EVERYTHING mocked (no DB, no homeserver). Proves:
  * <ul>
- *   <li>DARK-BY-DEFAULT: the flag OFF short-circuits to a no-op — ZERO cipher/custody/Matrix
+ *   <li>DARK-BY-DEFAULT: the flag OFF short-circuits to a no-op -- ZERO cipher/custody/Matrix
  *       calls (the feature ships inert in dev + CI);</li>
- *   <li>cipher unavailable ⇒ no-op (nothing to authorise with);</li>
- *   <li>HAPPY PATH (custody token present): GET → MERGE → PUT, the merged pack PRESERVING a
+ *   <li>cipher unavailable =&gt; no-op (nothing to authorise with);</li>
+ *   <li>HAPPY PATH (custody token present): GET -&gt; MERGE -&gt; PUT, the merged pack PRESERVING a
  *       pre-existing NON-VN emote and de-duping VN expressions newest-first;</li>
  *   <li>MINT-ON-EMPTY: an empty custody token re-mints once, then registers;</li>
+ *   <li>CANONICAL-LOCALPART MINT (no custody row): the first-ever mint resolves the owner's OWN
+ *       {@code casdoor:} account localpart via {@link CanonicalIdentityResolver} and FAILS CLOSED
+ *       (no mint) when it cannot -- never the old raw-subject derivation;</li>
  *   <li>FAIL-SOFT: any downstream error is swallowed (completes empty, never throws).</li>
  * </ul>
  * The static {@link StickerPackRegistrationService#mergePack} is unit-tested directly.
@@ -42,6 +46,8 @@ import static org.mockito.Mockito.when;
 class StickerPackRegistrationServiceTest {
 
     private static final String OWNER = "alice-sub";
+    /** The owner's OWN account key (subject has no ':' -> normalised to casdoor:<subject>). */
+    private static final String OWNER_ACCOUNT_ID = "casdoor:alice-sub";
     private static final String LOCALPART = "alice";
     private static final String USER_ID = "@alice:hs.test";
     private static final String SERVER = "hs.test";
@@ -53,9 +59,10 @@ class StickerPackRegistrationServiceTest {
     private final MatrixClientApiClient matrix = mock(MatrixClientApiClient.class);
     private final AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
 
-    /** Build the service with the dark flag set as requested. */
+    /** Build the service with the dark flag set as requested (real resolver over the mock). */
     private StickerPackRegistrationService service(boolean enabled) {
-        return new StickerPackRegistrationService(stickerRepo, custody, broker, matrix, adminBff, enabled, SERVER);
+        return new StickerPackRegistrationService(stickerRepo, custody, broker, matrix,
+                new CanonicalIdentityResolver(adminBff), enabled, SERVER);
     }
 
     private static VnSticker sticker(String id, String expr, String mxc, Instant created) {
@@ -67,13 +74,18 @@ class StickerPackRegistrationServiceTest {
                 "enc", null, null, LOCALPART, Instant.now());
     }
 
-    // ── DARK-BY-DEFAULT (flag OFF) ────────────────────────────────────────────────
+    private static AdminBffInternalClient.AccountView account(String localpart) {
+        return new AdminBffInternalClient.AccountView(OWNER_ACCOUNT_ID, "casdoor", OWNER, true,
+                List.of("user"), localpart);
+    }
+
+    // -- DARK-BY-DEFAULT (flag OFF) --------------------------------------------------------
 
     @Test
     void flagOff_isNoOp_zeroMatrixCalls() {
         StepVerifier.create(service(false).registerActivePack(OWNER)).verifyComplete();
 
-        // Nothing downstream is touched — the short-circuit is BEFORE cipher/custody/matrix.
+        // Nothing downstream is touched -- the short-circuit is BEFORE cipher/custody/matrix.
         verify(custody, never()).cipherAvailable();
         verify(custody, never()).findRow(anyString(), anyString());
         verify(matrix, never()).getAccountData(any(), any(), any());
@@ -86,7 +98,7 @@ class StickerPackRegistrationServiceTest {
         verify(custody, never()).cipherAvailable();
     }
 
-    // ── cipher unavailable ────────────────────────────────────────────────────────
+    // -- cipher unavailable ----------------------------------------------------------------
 
     @Test
     void cipherUnavailable_isNoOp_noCustodyOrMatrix() {
@@ -98,7 +110,7 @@ class StickerPackRegistrationServiceTest {
         verify(matrix, never()).setAccountData(any(), any(), any(), any());
     }
 
-    // ── HAPPY PATH (token present) ────────────────────────────────────────────────
+    // -- HAPPY PATH (token present) --------------------------------------------------------
 
     @Test
     void happyPath_loadedToken_getMergePut_preservesNonVnEmote() {
@@ -143,13 +155,13 @@ class StickerPackRegistrationServiceTest {
         assertThat(pack.get("usage")).isEqualTo(List.of("sticker"));
     }
 
-    // ── MINT-ON-EMPTY-TOKEN ───────────────────────────────────────────────────────
+    // -- MINT-ON-EMPTY-TOKEN ---------------------------------------------------------------
 
     @Test
     void emptyToken_reMintsOnce_thenRegisters() {
         when(custody.cipherAvailable()).thenReturn(true);
         when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.just(custodyRow()));
-        // loaded token is empty → re-mint path supplies one
+        // loaded token is empty -> re-mint path supplies one
         when(custody.loadAccessToken(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
         when(broker.mintMatrix(OWNER, LOCALPART))
                 .thenReturn(Mono.just(new MintedToken("syt_minted", null, null, LOCALPART)));
@@ -163,14 +175,15 @@ class StickerPackRegistrationServiceTest {
         verify(matrix).setAccountData(any(), any(), any(), eq("syt_minted"));
     }
 
+    // -- canonical-localpart mint (account-takeover-by-collision fix, sticker leg) ----------
+
     @Test
-    void noCustodyRow_mintsCreatesRow_thenRegisters() {
+    void noCustodyRow_resolvesCanonicalLocalpart_mintsCreatesRow_thenRegisters() {
         when(custody.cipherAvailable()).thenReturn(true);
-        // No custody row at all → mintThenRegister. No admin-bff account resolvable either →
-        // falls back to today's ServiceTokenBroker.localpart(ownerSubject) derivation.
+        // No custody row at all -> mintThenRegister resolves the owner's OWN casdoor account.
         when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
-        when(adminBff.getAccount(OWNER)).thenReturn(Mono.empty());
-        when(broker.mintMatrix(eq(OWNER), anyString()))
+        when(adminBff.getAccount(OWNER_ACCOUNT_ID)).thenReturn(Mono.just(account(LOCALPART)));
+        when(broker.mintMatrix(eq(OWNER), eq(LOCALPART)))
                 .thenReturn(Mono.just(new MintedToken("syt_fresh", null, null, LOCALPART)));
         when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
         when(matrix.getAccountData(any(), any(), eq("syt_fresh"))).thenReturn(Mono.empty());
@@ -178,22 +191,20 @@ class StickerPackRegistrationServiceTest {
 
         StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
 
+        verify(adminBff).getAccount(OWNER_ACCOUNT_ID);
+        verify(broker).mintMatrix(eq(OWNER), eq(LOCALPART));
         verify(matrix).setAccountData(any(), any(), any(), eq("syt_fresh"));
     }
 
-    // ── canonical-localpart mint (account-takeover-by-collision fix, sticker leg) ──
-
     @Test
     void mintThenRegister_prefersCanonicalPersistedLocalpart_overRawSubjectDerivation() {
-        // The custody-row path (tokenFor/registerWith) already mints under the PERSISTED
-        // row.localpart() for a returning owner. mintThenRegister (first-ever mint for this
-        // owner) must now mint under the SAME kind of canonical value — not a sanitized
-        // derivation of the raw ownerSubject — proving parity between the two mint paths.
+        // The custody-row path already mints under the PERSISTED row.localpart() for a returning
+        // owner. mintThenRegister (first-ever mint) must mint under the SAME kind of canonical
+        // value from the owner's OWN casdoor account -- not a sanitized derivation of the raw
+        // ownerSubject -- proving parity between the two mint paths.
         when(custody.cipherAvailable()).thenReturn(true);
         when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
-        when(adminBff.getAccount(OWNER)).thenReturn(Mono.just(
-                new AdminBffInternalClient.AccountView(OWNER, "google", OWNER, true,
-                        java.util.List.of("user"), "alice-canonical")));
+        when(adminBff.getAccount(OWNER_ACCOUNT_ID)).thenReturn(Mono.just(account("alice-canonical")));
         when(broker.mintMatrix(eq(OWNER), eq("alice-canonical")))
                 .thenReturn(Mono.just(new MintedToken("syt_canonical", null, null, "alice-canonical")));
         when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
@@ -203,31 +214,42 @@ class StickerPackRegistrationServiceTest {
         StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
 
         verify(broker).mintMatrix(eq(OWNER), eq("alice-canonical"));
-        // The OLD (pre-fix) behaviour would have minted under the raw-subject derivation —
+        // The OLD (pre-fix) behaviour would have minted under the raw-subject derivation --
         // must never happen once admin-bff resolves a canonical value.
         verify(broker, never()).mintMatrix(eq(OWNER), eq(ServiceTokenBroker.localpart(OWNER)));
     }
 
     @Test
-    void mintThenRegister_adminBffUnresolvable_fallsBackToRawSubjectDerivation_neverFails() {
-        // admin-bff errors (unreachable / disabled) → fail-SOFT fallback to today's
-        // derivation, exactly like every other seam in this class (never fails activation).
+    void mintThenRegister_adminBffUnresolvable_failsClosed_noMint_neverRawDerivation() {
+        // admin-bff errors (unreachable / disabled) -> FAIL CLOSED: no candidate resolves, so the
+        // sticker pack is simply NOT registered (a no-op). The class stays fail-soft overall (the
+        // moderator's activation is never failed), but the OLD raw-subject fallback -- the exact
+        // takeover vector on this leg -- is GONE: NOTHING is minted.
         when(custody.cipherAvailable()).thenReturn(true);
         when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
-        when(adminBff.getAccount(OWNER)).thenReturn(Mono.error(new IllegalStateException("admin-bff disabled")));
-        String fallback = ServiceTokenBroker.localpart(OWNER);
-        when(broker.mintMatrix(eq(OWNER), eq(fallback)))
-                .thenReturn(Mono.just(new MintedToken("syt_fallback", null, null, fallback)));
-        when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
-        when(matrix.getAccountData(any(), any(), eq("syt_fallback"))).thenReturn(Mono.empty());
-        when(matrix.setAccountData(any(), any(), any(), eq("syt_fallback"))).thenReturn(Mono.empty());
+        when(adminBff.getAccount(OWNER_ACCOUNT_ID)).thenReturn(Mono.error(new IllegalStateException("admin-bff disabled")));
 
         StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
 
-        verify(broker).mintMatrix(eq(OWNER), eq(fallback));
+        verify(broker, never()).mintMatrix(anyString(), anyString());
+        verify(matrix, never()).setAccountData(any(), any(), any(), any());
     }
 
-    // ── FAIL-SOFT ─────────────────────────────────────────────────────────────────
+    @Test
+    void mintThenRegister_noCanonicalAccount_failsClosed_noMint() {
+        // The owner's own casdoor account has no persisted localpart (blank) -> no candidate ->
+        // no mint. Never the raw-subject derivation.
+        when(custody.cipherAvailable()).thenReturn(true);
+        when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
+        when(adminBff.getAccount(OWNER_ACCOUNT_ID)).thenReturn(Mono.just(account("")));
+
+        StepVerifier.create(service(true).registerActivePack(OWNER)).verifyComplete();
+
+        verify(broker, never()).mintMatrix(anyString(), anyString());
+        verify(matrix, never()).setAccountData(any(), any(), any(), any());
+    }
+
+    // -- FAIL-SOFT -------------------------------------------------------------------------
 
     @Test
     void downstreamError_isSwallowed_completesEmpty() {
@@ -236,7 +258,7 @@ class StickerPackRegistrationServiceTest {
         when(custody.loadAccessToken(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.just(TOKEN));
         when(stickerRepo.listActiveForOwner(OWNER)).thenReturn(Flux.empty());
         when(matrix.getAccountData(any(), any(), any())).thenReturn(Mono.just(new LinkedHashMap<>()));
-        // the PUT blows up — the service must SWALLOW it (no throw, completes empty).
+        // the PUT blows up -- the service must SWALLOW it (no throw, completes empty).
         when(matrix.setAccountData(any(), any(), any(), any()))
                 .thenReturn(Mono.error(new RuntimeException("homeserver down")));
 
@@ -247,7 +269,7 @@ class StickerPackRegistrationServiceTest {
     void blankMintedToken_isNoOp_noMatrixWrite() {
         when(custody.cipherAvailable()).thenReturn(true);
         when(custody.findRow(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.just(custodyRow()));
-        // load empty → mint returns a BLANK token → registerWith short-circuits (no write).
+        // load empty -> mint returns a BLANK token -> registerWith short-circuits (no write).
         when(custody.loadAccessToken(OWNER, HsServiceTokenRow.PLATFORM_MATRIX)).thenReturn(Mono.empty());
         when(broker.mintMatrix(OWNER, LOCALPART))
                 .thenReturn(Mono.just(new MintedToken("   ", null, null, LOCALPART)));
@@ -257,7 +279,7 @@ class StickerPackRegistrationServiceTest {
         verify(matrix, never()).setAccountData(any(), any(), any(), any());
     }
 
-    // ── mergePack (static — direct unit test) ─────────────────────────────────────
+    // -- mergePack (static -- direct unit test) --------------------------------------------
 
     @Test
     void mergePack_preservesNonVn_overwritesStaleSameKey_skipsMalformed_dedupsNewestFirst() {
@@ -272,9 +294,9 @@ class StickerPackRegistrationServiceTest {
         Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
         List<VnSticker> active = List.of(
                 sticker("s1", "happy", "mxc://h/happy-new", t0.plusSeconds(10)), // newest happy wins
-                sticker("sX", "  ", "mxc://h/whatever", t0.plusSeconds(8)),       // blank expr → skip
-                sticker("sY", "blank_mxc", null, t0.plusSeconds(7)),             // null mxc → skip
-                sticker("s3", "happy", "mxc://h/happy-old", t0.plusSeconds(1)),  // older happy → skip (de-dup)
+                sticker("sX", "  ", "mxc://h/whatever", t0.plusSeconds(8)),       // blank expr -> skip
+                sticker("sY", "blank_mxc", null, t0.plusSeconds(7)),             // null mxc -> skip
+                sticker("s3", "happy", "mxc://h/happy-old", t0.plusSeconds(1)),  // older happy -> skip (de-dup)
                 sticker("s4", "sad", "mxc://h/sad", t0));
 
         Map<String, Object> merged = StickerPackRegistrationService.mergePack(OWNER, existing, active);

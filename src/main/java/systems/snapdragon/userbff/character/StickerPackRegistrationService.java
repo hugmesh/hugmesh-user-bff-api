@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.hsproxy.HsServiceTokenRow;
 import systems.snapdragon.userbff.hsproxy.HsTokenCustody;
 import systems.snapdragon.userbff.hsproxy.ServiceTokenBroker;
@@ -17,21 +17,21 @@ import java.util.Map;
 
 /**
  * Registers an owner's ACTIVE VN-character expression stickers as a server-side MSC2545
- * sticker pack — the {@code im.ponies.user_emotes} entry in the owner's Matrix
- * account-data — so Matrix clients show them in the sticker picker. This is the SERVER
+ * sticker pack -- the {@code im.ponies.user_emotes} entry in the owner's Matrix
+ * account-data -- so Matrix clients show them in the sticker picker. This is the SERVER
  * (registration) half ONLY: the {@code m.sticker} SEND stays client-side (the BFF has no
  * roomId source), so there is NO send/roomId endpoint here.
  *
  * <p>CONTEXT: this runs under the {@code ROLE_SERVICE} principal off the moderation
- * activation loop ({@link CharacterModerationService#resolveSticker} ACTIVE branch) — there
+ * activation loop ({@link CharacterModerationService#resolveSticker} ACTIVE branch) -- there
  * is NO user JWT, so EVERYTHING is resolved from the OWNER SUBJECT carried on the post-flip
  * {@link VnSticker}, never a bearer.
  *
- * <p>FLOW (all fail-soft — a homeserver outage NEVER fails the moderator's activation):
+ * <p>FLOW (all fail-soft -- a homeserver outage NEVER fails the moderator's activation):
  * <ol>
  *   <li>load the owner's decrypted Matrix custody token ({@link HsTokenCustody#loadAccessToken});
  *       on empty, re-mint once via {@link ServiceTokenBroker#mintMatrix} (mirrors the
- *       HsReverseProxy re-mint pattern). Still empty ⇒ no-op (nothing to authorise with);</li>
+ *       HsReverseProxy re-mint pattern). Still empty =&gt; no-op (nothing to authorise with);</li>
  *   <li>resolve the FULL Matrix user id {@code @localpart:server} from the custody row's
  *       localpart + the configured homeserver name;</li>
  *   <li>READ-MODIFY-WRITE: GET the current {@code im.ponies.user_emotes}, MERGE the owner's
@@ -68,11 +68,11 @@ public class StickerPackRegistrationService {
     private final HsTokenCustody custody;
     private final ServiceTokenBroker broker;
     private final MatrixClientApiClient matrix;
-    private final AdminBffInternalClient adminBff;
+    private final CanonicalIdentityResolver identity;
     /** The homeserver name = the {@code :server} part of {@code @localpart:server}. */
     private final String serverName;
     /**
-     * DARK-BY-DEFAULT master switch. FALSE (the default) ⇒ the whole feature is inert: the
+     * DARK-BY-DEFAULT master switch. FALSE (the default) =&gt; the whole feature is inert: the
      * very first check in {@link #registerActivePack(String)} short-circuits to a no-op
      * BEFORE any cipher / custody / Matrix work, so dev + CI run as if the feature did not
      * exist. Flip to {@code true} (alongside the live {@link MatrixClientApiClient} wiring)
@@ -85,7 +85,7 @@ public class StickerPackRegistrationService {
             HsTokenCustody custody,
             ServiceTokenBroker broker,
             MatrixClientApiClient matrix,
-            AdminBffInternalClient adminBff,
+            CanonicalIdentityResolver identity,
             @Value("${sticker.matrix.register.enabled:false}") boolean enabled,
             @Value("${sticker.matrix.server-name:${MATRIX_SERVER_NAME:snapdragon-backend.svc.cluster.local}}")
             String serverName) {
@@ -93,14 +93,14 @@ public class StickerPackRegistrationService {
         this.custody = custody;
         this.broker = broker;
         this.matrix = matrix;
-        this.adminBff = adminBff;
+        this.identity = identity;
         this.enabled = enabled;
         this.serverName = serverName;
     }
 
     /**
      * Upsert {@code ownerSubject}'s ACTIVE sticker set into their Matrix
-     * {@code im.ponies.user_emotes} account-data. BEST-EFFORT + FAIL-SOFT throughout — the
+     * {@code im.ponies.user_emotes} account-data. BEST-EFFORT + FAIL-SOFT throughout -- the
      * caller hooks this onto a successful activation and swallows any error, so a homeserver
      * outage never fails the moderator's flip. A no-op (completes empty) when: the cipher is
      * unavailable; no custody token can be loaded OR minted; or (dark mode) the live client
@@ -108,7 +108,7 @@ public class StickerPackRegistrationService {
      */
     public Mono<Void> registerActivePack(String ownerSubject) {
         if (!enabled) {
-            // DARK-BY-DEFAULT: the master switch is off — short-circuit BEFORE any cipher /
+            // DARK-BY-DEFAULT: the master switch is off -- short-circuit BEFORE any cipher /
             // custody / Matrix work so dev + CI are wholly inert (the feature ships dark).
             return Mono.empty();
         }
@@ -116,8 +116,8 @@ public class StickerPackRegistrationService {
             return Mono.empty();
         }
         if (!custody.cipherAvailable()) {
-            // No at-rest key ⇒ no decryptable token ⇒ nothing to authorise with. No-op.
-            log.info("[sticker-pack] cipher unavailable — skip pack registration for owner={}", ownerSubject);
+            // No at-rest key => no decryptable token => nothing to authorise with. No-op.
+            log.info("[sticker-pack] cipher unavailable -- skip pack registration for owner={}", ownerSubject);
             return Mono.empty();
         }
         // Resolve the custody ROW first (it carries the localpart we need for the user id),
@@ -125,7 +125,7 @@ public class StickerPackRegistrationService {
         return custody.findRow(ownerSubject, HsServiceTokenRow.PLATFORM_MATRIX)
                 .flatMap(row -> tokenFor(ownerSubject, row.localpart())
                         .flatMap(token -> registerWith(ownerSubject, row.localpart(), token)))
-                // No custody row at all → try a fresh mint (which creates one), then register.
+                // No custody row at all -> try a fresh mint (which creates one), then register.
                 .switchIfEmpty(mintThenRegister(ownerSubject))
                 .onErrorResume(e -> {
                     // Activation must NEVER fail on a registration error.
@@ -143,44 +143,31 @@ public class StickerPackRegistrationService {
     }
 
     /**
-     * No custody row yet: resolve the mint candidate, mint (creates the row + localpart),
-     * then register with that token.
+     * No custody row yet: resolve the CANONICAL, persisted mint candidate, mint (creates the row
+     * + localpart), then register with that token.
      *
-     * <p>Prefers the PERSISTED, collision-checked {@code account.localpart} (admin-bff
-     * Liquibase changeset 290) via a real internal account read keyed by {@code
-     * ownerSubject} (the Casdoor JWT subject the controller stamped onto {@link VnSticker
-     * #ownerSubject} — see its javadoc) — the SAME account-takeover-by-collision fix
-     * {@code MatrixProxyController}/{@code MastodonProxyController} apply to their mint
-     * sites. The OLD behaviour ({@link ServiceTokenBroker#localpart}-sanitizing the raw
-     * subject itself) is exactly the unchecked-candidate bug that fix closes: two
-     * different accounts can derive the SAME sanitized candidate from unrelated subjects.
-     *
-     * <p>FALLBACK on empty/error (no persisted localpart yet, or admin-bff unreachable):
-     * today's {@link ServiceTokenBroker#localpart} derivation — this class's flow is
-     * explicitly fail-soft throughout (a homeserver outage NEVER fails the moderator's
-     * activation, see the class doc), so the fix strictly improves the primary path with
-     * zero regression risk on the fallback.
+     * <p>Resolves the PERSISTED, collision-checked {@code account.localpart} (admin-bff Liquibase
+     * changeset 290) for the owner's OWN account via the shared {@link CanonicalIdentityResolver}
+     * ({@link CanonicalIdentityResolver#ownMatrixLocalpartForSubject}) -- the SAME
+     * account-takeover-by-collision fix the proxy/media mint sites apply. FAIL CLOSED: when no
+     * canonical localpart can be resolved (no such account, a blank localpart, or an admin-bff
+     * failure) this completes EMPTY, so NOTHING is minted or registered. The OLD behaviour here
+     * ({@link ServiceTokenBroker#localpart}-sanitizing the raw {@code ownerSubject}) was the exact
+     * unchecked-candidate takeover bug -- two different accounts can derive the SAME sanitized
+     * candidate from unrelated subjects -- and is deliberately GONE. The class stays fail-soft
+     * overall (a no-op never fails the moderator's activation), so failing closed here only means
+     * "no sticker pack registered", never a failed flip.
      */
     private Mono<Void> mintThenRegister(String ownerSubject) {
-        return Mono.defer(() -> mintCandidateLocalpart(ownerSubject)
+        return Mono.defer(() -> identity.ownMatrixLocalpartForSubject(ownerSubject)
                 .flatMap(candidate -> broker.mintMatrix(ownerSubject, candidate))
                 .flatMap(minted -> registerWith(ownerSubject, minted.localpart(), minted.accessToken())));
-    }
-
-    /** See {@link #mintThenRegister}'s doc: canonical persisted localpart, else the
-     *  raw-subject derivation fallback. */
-    private Mono<String> mintCandidateLocalpart(String ownerSubject) {
-        return adminBff.getAccount(ownerSubject)
-                .map(AdminBffInternalClient.AccountView::localpart)
-                .filter(lp -> !lp.isBlank())
-                .onErrorResume(e -> Mono.empty())
-                .defaultIfEmpty(ServiceTokenBroker.localpart(ownerSubject));
     }
 
     /** With a localpart + token in hand: build the user id, read-modify-write the pack. */
     private Mono<Void> registerWith(String ownerSubject, String localpart, String token) {
         if (token == null || token.isBlank()) {
-            log.info("[sticker-pack] no Matrix token for owner={} — skip pack registration", ownerSubject);
+            log.info("[sticker-pack] no Matrix token for owner={} -- skip pack registration", ownerSubject);
             return Mono.empty();
         }
         String userId = matrixUserId(localpart);
@@ -209,11 +196,11 @@ public class StickerPackRegistrationService {
 
     /**
      * Merge the owner's ACTIVE stickers into the EXISTING account-data object as MSC2545
-     * images, de-duplicating by expression (newest-first list ⇒ the FIRST occurrence of an
+     * images, de-duplicating by expression (newest-first list =&gt; the FIRST occurrence of an
      * expression wins). The merge:
      * <ul>
      *   <li>PRESERVES every existing {@code images.*} entry that the VN set does not replace
-     *       (so non-VN / hand-curated emotes are never clobbered) — a VN expression key DOES
+     *       (so non-VN / hand-curated emotes are never clobbered) -- a VN expression key DOES
      *       overwrite a stale same-key entry (re-registration converges to the live mxc);</li>
      *   <li>sets/refreshes the {@code pack} block (display name + sticker usage) without
      *       dropping any other pack metadata the user may have set.</li>
@@ -226,14 +213,14 @@ public class StickerPackRegistrationService {
         Map<String, Object> result = new LinkedHashMap<>(
                 existing == null ? Map.of() : existing);
 
-        // ── images: copy the existing object, then layer the VN stickers on top ──
+        // -- images: copy the existing object, then layer the VN stickers on top --
         Map<String, Object> images = new LinkedHashMap<>();
         Object existingImages = result.get(K_IMAGES);
         if (existingImages instanceof Map<?, ?> em) {
             em.forEach((k, v) -> images.put(String.valueOf(k), v));
         }
         // De-dup by expression: the list is newest-first, so the FIRST occurrence of an
-        // expression is the newest mxc — a later (older) row for the same expression is
+        // expression is the newest mxc -- a later (older) row for the same expression is
         // skipped (a 'seen' set, not a re-overwrite, so the newest never gets clobbered).
         java.util.Set<String> placed = new java.util.HashSet<>();
         for (VnSticker s : active) {
@@ -242,7 +229,7 @@ public class StickerPackRegistrationService {
                 continue; // skip malformed rows (defence-in-depth)
             }
             if (!placed.add(expr)) {
-                continue; // an older row for this expression already won — keep the newest
+                continue; // an older row for this expression already won -- keep the newest
             }
             Map<String, Object> img = new LinkedHashMap<>();
             img.put(K_URL, s.mxcUrl());
@@ -252,7 +239,7 @@ public class StickerPackRegistrationService {
         }
         result.put(K_IMAGES, images);
 
-        // ── pack: preserve other pack metadata, set display_name + sticker usage ──
+        // -- pack: preserve other pack metadata, set display_name + sticker usage --
         Map<String, Object> pack = new LinkedHashMap<>();
         Object existingPack = result.get(K_PACK);
         if (existingPack instanceof Map<?, ?> ep) {

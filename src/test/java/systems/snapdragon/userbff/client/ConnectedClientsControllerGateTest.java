@@ -13,6 +13,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.util.ArrayList;
@@ -43,7 +44,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * </ul>
  */
 @WebFluxTest(controllers = ConnectedClientsController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, CanonicalIdentityResolver.class})
 class ConnectedClientsControllerGateTest {
 
     @Autowired ApplicationContext context;

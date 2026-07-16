@@ -18,6 +18,7 @@ import systems.snapdragon.userbff.web.ApiExceptionHandler;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.client.ConnectedClient;
 import systems.snapdragon.userbff.client.ConnectedClientAuditRepository;
 import systems.snapdragon.userbff.client.ConnectedClientsController;
@@ -135,7 +136,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
         // requires the collaborator.
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         ConnectedClientsController controller =
-                new ConnectedClientsController(service, new PrincipalDomain(registry), adminBff);
+                new ConnectedClientsController(service, new PrincipalDomain(registry), new CanonicalIdentityResolver(adminBff));
 
         // REAL multi-issuer resolver, built exactly as TenancyResourceServerConfig does.
         TenancyResourceServerConfig tenancy = new TenancyResourceServerConfig(registry, "", "", false, 600000L);
@@ -176,7 +177,7 @@ class ConnectedClientsControllerCrossDomainTest extends SecuritySliceSupport {
     private static String mintWithLocalpart(TestIssuer issuer, String subject, List<String> roleNames) {
         List<Map<String, String>> roles = roleNames.stream().map(r -> Map.of("name", r)).toList();
         return issuer.mintWithClaims(subject,
-                Map.of("roles", roles, "name", subject, "localpart", subject));
+                Map.of("roles", roles, "name", subject, "localpart", subject, "mastodon_localpart", subject));
     }
 
     /** One durable audit row for the given owner (the repo floor). */

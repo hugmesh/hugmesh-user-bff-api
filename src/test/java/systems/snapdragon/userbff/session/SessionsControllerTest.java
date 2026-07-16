@@ -35,7 +35,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * <ul>
  *   <li>unauthenticated ⇒ 401 (the ROLE_USER floor);</li>
  *   <li>a ROLE_USER caller lists ONLY their own sessions, scoped by the account derived
- *       SERVER-SIDE from the JWT (email ⇒ {@code google:<lc>}), and the raw bff_ token is
+ *       SERVER-SIDE from the JWT (email ⇒ the caller's OWN {@code casdoor:<lc>}), and the raw bff_ token is
  *       NEVER in the response (only the opaque fingerprint id);</li>
  *   <li>the account passed to admin-bff is the JWT-derived one even when a {@code ?account=}
  *       param is supplied — the param is ignored;</li>
@@ -75,7 +75,7 @@ class SessionsControllerTest {
     }
 
     private static BffSessionWire wire(String token) {
-        return new BffSessionWire(token, "google:alice@example.com", NOW, LATER);
+        return new BffSessionWire(token, "casdoor:alice@example.com", NOW, LATER);
     }
 
     @Test
@@ -85,7 +85,7 @@ class SessionsControllerTest {
 
     @Test
     void list_returnsOnlyMine_byJwtDerivedAccount_neverLeaksRawToken() {
-        when(internal.sessionsForAccount(eq("google:alice@example.com")))
+        when(internal.sessionsForAccount(eq("casdoor:alice@example.com")))
                 .thenReturn(Flux.just(wire(ALICE_TOKEN_A), wire(ALICE_TOKEN_B)));
 
         client.mutateWith(mockJwt()
@@ -102,8 +102,8 @@ class SessionsControllerTest {
                 .jsonPath("$[0].expiresAt").isNotEmpty()
                 .jsonPath("$[?(@.token)]").doesNotExist();
 
-        // The email claim was lower-cased into google:<lc> — the production AuthController mapping.
-        verify(internal).sessionsForAccount("google:alice@example.com");
+        // The email claim is the subject -> the caller's OWN key casdoor:<lc>, NOT the old google: guess.
+        verify(internal).sessionsForAccount("casdoor:alice@example.com");
     }
 
     @Test
@@ -118,14 +118,14 @@ class SessionsControllerTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        // admin-bff was asked for ALICE's account (from the token), never bob's (the param).
-        verify(internal).sessionsForAccount("google:alice@example.com");
+        // admin-bff was asked for ALICE's OWN account (from the token), never bob's (the param).
+        verify(internal).sessionsForAccount("casdoor:alice@example.com");
         verify(internal, never()).sessionsForAccount("google:bob@example.com");
     }
 
     @Test
-    void list_discordUser_mapsPreferredUsername_whenNoEmail() {
-        when(internal.sessionsForAccount(eq("discord:zed"))).thenReturn(Flux.empty());
+    void list_realJwt_noEmail_mapsPreferredUsernameToOwnCasdoor_neverDiscord() {
+        when(internal.sessionsForAccount(eq("casdoor:zed"))).thenReturn(Flux.empty());
 
         client.mutateWith(mockJwt()
                         .jwt(j -> j.subject("zed").claim("preferred_username", "Zed"))
@@ -134,13 +134,14 @@ class SessionsControllerTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        verify(internal).sessionsForAccount("discord:zed");
+        verify(internal).sessionsForAccount("casdoor:zed");
+        verify(internal, never()).sessionsForAccount("discord:zed");
     }
 
     @Test
     void revoke_ownSession_resolvesIdToToken_andDeletes() {
         // The caller's own sessions (account-scoped server-side).
-        when(internal.sessionsForAccount(eq("google:alice@example.com")))
+        when(internal.sessionsForAccount(eq("casdoor:alice@example.com")))
                 .thenReturn(Flux.just(wire(ALICE_TOKEN_A), wire(ALICE_TOKEN_B)));
         when(internal.deleteSession(eq(ALICE_TOKEN_B))).thenReturn(Mono.empty());
 
@@ -160,7 +161,7 @@ class SessionsControllerTest {
     void revoke_foreignId_isGenericNotFound_andDoesNotDelete() {
         // Alice owns only TOKEN_A; the id below is the fingerprint of a session she does NOT
         // own — it can never match her account-scoped list, so it must 404 with no delete.
-        when(internal.sessionsForAccount(eq("google:alice@example.com")))
+        when(internal.sessionsForAccount(eq("casdoor:alice@example.com")))
                 .thenReturn(Flux.just(wire(ALICE_TOKEN_A)));
 
         String foreignId = SessionsService.fingerprint("bff_someoneElsesToken");

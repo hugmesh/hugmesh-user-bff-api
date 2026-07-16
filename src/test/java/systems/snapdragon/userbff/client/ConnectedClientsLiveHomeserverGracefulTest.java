@@ -17,6 +17,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.time.Instant;
@@ -60,6 +61,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  */
 @WebFluxTest(controllers = ConnectedClientsController.class)
 @Import({SecurityConfig.class,
+        CanonicalIdentityResolver.class,
         ConnectedClientsLiveHomeserverGracefulTest.Wiring.class})
 class ConnectedClientsLiveHomeserverGracefulTest {
 
@@ -285,11 +287,11 @@ class ConnectedClientsLiveHomeserverGracefulTest {
                     "audit-1", "carol", "matrix", ConnectedClient.KIND_DEVICE,
                     "AUDIT-REF", "Audited Element", Instant.now(), null)));
             matrixSeam.mode = ConfigurableSeam.Mode.OK;   // healthy — would return a live row if driven
-            // No "localpart" claim; "preferred_username" present so resolveCanonicalLocalpart
+            // No "localpart" claim; "preferred_username" present so the resolver
             // actually calls admin-bff (not the zero-claims shortcut) — and admin-bff has no
             // registered account for this identity (Mono.empty(), same effective outcome as a
             // 404 recovered to empty).
-            when(adminBff.getAccount("discord:carol")).thenReturn(Mono.empty());
+            when(adminBff.getAccount("casdoor:carol")).thenReturn(Mono.empty());
 
             client.mutateWith(mockJwt()
                             .jwt(j -> j.subject("carol").claim("preferred_username", "carol"))
@@ -353,10 +355,10 @@ class ConnectedClientsLiveHomeserverGracefulTest {
             when(repo.find(eq("dave"), eq(id), any())).thenReturn(Mono.just(new ConnectedClient(
                     id, "dave", "matrix", ConnectedClient.KIND_DEVICE,
                     "DEV-DAVE", "Dave's device", Instant.now(), null)));
-            // No "localpart" claim; "preferred_username" present so canonicalLocalpart's
+            // No "localpart" claim; "preferred_username" present so the resolver's
             // fallback actually calls admin-bff — which has no registered account for this
             // identity.
-            when(adminBff.getAccount("discord:dave")).thenReturn(Mono.empty());
+            when(adminBff.getAccount("casdoor:dave")).thenReturn(Mono.empty());
 
             client.mutateWith(mockJwt()
                             .jwt(j -> j.subject("dave").claim("preferred_username", "dave"))

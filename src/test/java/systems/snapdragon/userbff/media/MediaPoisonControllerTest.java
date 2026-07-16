@@ -17,6 +17,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.config.SecurityConfig;
 import systems.snapdragon.userbff.media.MediaPoisonService.UploadOutcome;
 import systems.snapdragon.userbff.media.PoisonModels.Backend;
@@ -46,7 +47,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * PLUS the server-owned cloak block; capability + status route through the service.
  */
 @WebFluxTest(controllers = MediaPoisonController.class)
-@Import({SecurityConfig.class, MediaPoisonControllerTest.Props.class})
+@Import({SecurityConfig.class, CanonicalIdentityResolver.class, MediaPoisonControllerTest.Props.class})
 @EnableReactiveMethodSecurity
 class MediaPoisonControllerTest {
 
@@ -144,8 +145,8 @@ class MediaPoisonControllerTest {
         // mints under the PERSISTED, collision-checked Mastodon fold. Here the account's Matrix
         // localpart is "al.ice" but the persisted Mastodon fold is "al_ice"; the media leg must use
         // "al_ice", never a re-fold of the subject/preferred_username.
-        when(adminBff.getAccount("google:alice@x.com")).thenReturn(Mono.just(new AdminBffInternalClient.AccountView(
-                "google:alice@x.com", "google", "alice@x.com", true, List.of("ROLE_USER"), "al.ice", "al_ice")));
+        when(adminBff.getAccount("casdoor:alice@x.com")).thenReturn(Mono.just(new AdminBffInternalClient.AccountView(
+                "casdoor:alice@x.com", "casdoor", "alice@x.com", true, List.of("ROLE_USER"), "al.ice", "al_ice")));
         MediaPoisonDecision dec = new MediaPoisonDecision("dec-2", "alice", "mastodon",
                 "media-88", "glaze", "protected", "cuda", Instant.now());
         when(service.upload(eq("alice"), eq("al_ice"), eq("mastodon"), any(), any(), anyString(), any(), any()))

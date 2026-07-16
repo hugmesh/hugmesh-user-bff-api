@@ -13,6 +13,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.time.Instant;
@@ -43,7 +44,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * </ul>
  */
 @WebFluxTest(controllers = SelfSilenceController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, CanonicalIdentityResolver.class})
 class SelfSilenceControllerTest {
 
     @Autowired ApplicationContext context;

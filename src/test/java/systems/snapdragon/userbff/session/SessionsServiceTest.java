@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -53,28 +54,52 @@ class SessionsServiceTest {
     // ── account derivation = the production AuthController.accountFromJwt mapping ──────────
 
     @Test
-    void accountIdFromJwt_email_mapsToGoogleLowercased() {
+    void accountIdFromJwt_realJwt_email_mapsToOwnCasdoorLowercased() {
+        // Own-account key, mirroring admin-bff (subject=email, casdoor:<lc>) -- NOT the old google: guess.
         Jwt jwt = jwt(java.util.Map.of("email", "Alice@Example.COM"));
-        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("google:alice@example.com");
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("casdoor:alice@example.com");
     }
 
     @Test
-    void accountIdFromJwt_preferredUsername_mapsToDiscordLowercased_whenNoEmail() {
+    void accountIdFromJwt_realJwt_preferredUsername_mapsToOwnCasdoorLowercased_whenNoEmail() {
+        // subject precedence email>preferred_username>sub; no email -> casdoor:<pu-lc>, never discord:.
         Jwt jwt = jwt(java.util.Map.of("preferred_username", "ZeD"));
-        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("discord:zed");
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("casdoor:zed");
     }
 
     @Test
-    void accountIdFromJwt_emailWins_overPreferredUsername() {
+    void accountIdFromJwt_realJwt_emailWins_overPreferredUsername() {
         Jwt jwt = jwt(java.util.Map.of("email", "alice@example.com", "preferred_username", "alice"));
-        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("google:alice@example.com");
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("casdoor:alice@example.com");
     }
 
     @Test
-    void accountIdFromJwt_neitherClaim_isUnauthorized() {
-        Jwt jwt = jwt(java.util.Map.of("name", "nobody"));
+    void accountIdFromJwt_realJwt_onlySub_resolvesOwnCasdoorBySub() {
+        // sub is the LAST subject-precedence source (mirroring admin-bff's SUBJECT_CLAIMS) -- a real
+        // Casdoor JWT with only sub resolves casdoor:<sub>, its OWN account (an improvement over the
+        // old code, which failed closed when email+preferred_username were both absent).
+        Jwt jwt = jwt(java.util.Map.of("name", "nobody")); // jwt() helper also sets sub="subject"
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("casdoor:subject");
+    }
+
+    @Test
+    void accountIdFromJwt_realJwt_noSubjectClaimAtAll_isUnauthorized() {
+        // A token carrying NO email/preferred_username/sub -> no derivable own account -> 401.
+        Jwt jwt = Jwt.withTokenValue("t").header("alg", "none")
+                .claim("name", "nobody")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(3600))
+                .build();
         assertThatThrownBy(() -> SessionsService.accountIdFromJwt(jwt))
                 .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void accountIdFromJwt_realJwt_preferredUsernameCollidesWithVictimDiscord_resolvesOwnCasdoor_neverVictim() {
+        // THE takeover regression: a real Casdoor JWT with preferred_username == an existing
+        // discord: invite account's handle MUST resolve the caller's OWN casdoor:<handle> account
+        // id, never the victim's discord:<handle>.
+        Jwt jwt = jwt(java.util.Map.of("preferred_username", "victim"));
+        assertThat(SessionsService.accountIdFromJwt(jwt)).isEqualTo("casdoor:victim");
     }
 
     // ── native-login synthetic principal: sub IS the account id (the casdoor gap fix) ─────
@@ -136,8 +161,8 @@ class SessionsServiceTest {
     @Test
     void listMine_usesJwtDerivedAccount_andProjectsToOpaqueId() {
         SessionsInternalClient internal = mock(SessionsInternalClient.class);
-        when(internal.sessionsForAccount(eq("google:alice@example.com")))
-                .thenReturn(Flux.just(new BffSessionWire("bff_tokA", "google:alice@example.com", NOW, LATER)));
+        when(internal.sessionsForAccount(eq("casdoor:alice@example.com")))
+                .thenReturn(Flux.just(new BffSessionWire("bff_tokA", "casdoor:alice@example.com", NOW, LATER)));
         SessionsService svc = new SessionsService(internal);
 
         StepVerifier.create(svc.listMine(jwt(java.util.Map.of("email", "alice@example.com"))))
@@ -146,14 +171,37 @@ class SessionsServiceTest {
                     assertThat(s.createdAt()).isEqualTo(NOW);
                 })
                 .verifyComplete();
-        verify(internal).sessionsForAccount("google:alice@example.com");
+        verify(internal).sessionsForAccount("casdoor:alice@example.com");
+    }
+
+    @Test
+    void listMine_realJwt_preferredUsernameCollidesWithVictimDiscord_listsOwnCasdoor_neverVictimDiscordSessions() {
+        // THE takeover regression at the SERVICE boundary: a real Casdoor JWT whose
+        // preferred_username equals an existing discord: invite account's handle must list the
+        // caller's OWN casdoor:<handle> sessions and NEVER query admin-bff for the victim's
+        // discord:<handle> sessions (which the old guess would have listed/revoked).
+        SessionsInternalClient internal = mock(SessionsInternalClient.class);
+        when(internal.sessionsForAccount(eq("casdoor:victim")))
+                .thenReturn(Flux.just(new BffSessionWire("bff_caller", "casdoor:victim", NOW, LATER)));
+        // The victim's sessions -- stubbed to catch a leak; must never be requested.
+        when(internal.sessionsForAccount(eq("discord:victim")))
+                .thenReturn(Flux.just(new BffSessionWire("bff_victim", "discord:victim", NOW, LATER)));
+        SessionsService svc = new SessionsService(internal);
+
+        StepVerifier.create(svc.listMine(jwt(java.util.Map.of("preferred_username", "victim"))))
+                .assertNext(session -> assertThat(session.id())
+                        .isEqualTo(SessionsService.fingerprint("bff_caller")))
+                .verifyComplete();
+
+        verify(internal).sessionsForAccount("casdoor:victim");
+        verify(internal, never()).sessionsForAccount("discord:victim");
     }
 
     @Test
     void revokeMine_ownSession_deletesResolvedRawToken() {
         SessionsInternalClient internal = mock(SessionsInternalClient.class);
-        when(internal.sessionsForAccount(eq("google:alice@example.com")))
-                .thenReturn(Flux.just(new BffSessionWire("bff_tokA", "google:alice@example.com", NOW, LATER)));
+        when(internal.sessionsForAccount(eq("casdoor:alice@example.com")))
+                .thenReturn(Flux.just(new BffSessionWire("bff_tokA", "casdoor:alice@example.com", NOW, LATER)));
         when(internal.deleteSession(eq("bff_tokA"))).thenReturn(Mono.empty());
         SessionsService svc = new SessionsService(internal);
 
@@ -166,8 +214,8 @@ class SessionsServiceTest {
     @Test
     void revokeMine_foreignId_isNotFound_andNeverDeletes() {
         SessionsInternalClient internal = mock(SessionsInternalClient.class);
-        when(internal.sessionsForAccount(eq("google:alice@example.com")))
-                .thenReturn(Flux.just(new BffSessionWire("bff_tokA", "google:alice@example.com", NOW, LATER)));
+        when(internal.sessionsForAccount(eq("casdoor:alice@example.com")))
+                .thenReturn(Flux.just(new BffSessionWire("bff_tokA", "casdoor:alice@example.com", NOW, LATER)));
         SessionsService svc = new SessionsService(internal);
 
         StepVerifier.create(svc.revokeMine(jwt(java.util.Map.of("email", "alice@example.com")),

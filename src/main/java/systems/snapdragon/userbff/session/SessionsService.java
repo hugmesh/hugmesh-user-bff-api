@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import systems.snapdragon.commons.web.ApiException;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.config.BffSessionAuthenticationWebFilter;
 import systems.snapdragon.userbff.session.SessionsInternalClient.BffSessionWire;
 
@@ -22,12 +23,16 @@ import java.util.HexFormat;
  * inputs:
  * <ul>
  *   <li>the caller's {@code account_id} is DERIVED from the validated JWT principal via
- *       {@link #accountIdFromJwt(Jwt)} — the SAME mapping admin-bff's production
- *       {@code AuthController.accountFromJwt} uses (email → {@code google:<email-lc>}, else
- *       preferred_username → {@code discord:<username-lc>}; {@code AccountStore.idFor} =
- *       {@code provider + ":" + handle.toLowerCase()}). admin-bff stores exactly that string
- *       in {@code bff_session.account_id}, so a list scoped to it returns ONLY the caller's
- *       rows. The account is NEVER taken from a request param/body/header.</li>
+ *       {@link #accountIdFromJwt(Jwt)} — the caller's OWN account id, keyed exactly as
+     *       admin-bff persists it: the bff_ synthetic principal's {@code sub} verbatim (it IS
+     *       {@code provider:handle} for every provider), else -- for a real Casdoor JWT --
+     *       {@code casdoor:<subject>} via {@link CanonicalIdentityResolver#ownAccountId(Jwt)}
+     *       (subject = first non-blank of {email, preferred_username, sub}; {@code AccountStore.idFor}
+     *       = {@code provider + ":" + handle.toLowerCase()}). This is a claim-derived OWN key, NEVER
+     *       the old email-to-google:/preferred_username-to-discord: cross-namespace guess (which could
+     *       resolve ANOTHER user's invite account). admin-bff stores exactly that string
+     *       in {@code bff_session.account_id}, so a list scoped to it returns ONLY the caller's
+     *       rows. The account is NEVER taken from a request param/body/header.</li>
  *   <li>on revoke the target {@code id} is validated to belong to the caller by re-listing
  *       the caller's own sessions and matching the opaque fingerprint; a non-matching id is
  *       a generic 404 (anti-enumeration — never reveals whether the id exists for another
@@ -93,12 +98,16 @@ public class SessionsService {
      * 200 []} despite admin-bff holding rows for {@code casdoor:<uuid>}) and revoke 404'd —
      * the whole active-session-management surface was silently dead for native login.
      *
-     * <p><b>Real Casdoor JWT (unchanged, kept for a genuine resource-server token):</b>
-     * mirrors admin-bff's production {@code AuthController.accountFromJwt} — an {@code email}
-     * claim maps to {@code google:<email-lowercased>}, else a {@code preferred_username}
-     * claim maps to {@code discord:<username-lowercased>} (mirroring
-     * {@code AccountStore.idFor(provider, handle) = provider + ":" + handle.toLowerCase()}).
-     * Neither claim present ⇒ 401 (no derivable account; the principal can't own a session).
+     * <p><b>Real Casdoor JWT (a genuine resource-server token presented directly):</b>
+     * resolves the caller's OWN account id via {@link CanonicalIdentityResolver#ownAccountId(Jwt)}
+     * -- {@code casdoor:<subject>}, subject = first non-blank of {email, preferred_username, sub}
+     * (mirroring admin-bff's {@code InternalAccountController.subjectFromIdToken} +
+     * {@code AccountStore.idFor(provider, handle) = provider + ":" + handle.toLowerCase()}). For a
+     * native-Casdoor account the stored id is {@code casdoor:<subject>}, NOT google:/discord:<handle>:
+     * the OLD email-to-google:/preferred_username-to-discord: guess both MISSED the caller's own
+     * sessions AND could resolve ANOTHER user's discord:<handle> account (a cross-user session
+     * enumerate/force-revoke), so it is DELETED. No usable subject claim ==> 401 (the principal can't
+     * own a session).
      */
     static String accountIdFromJwt(Jwt jwt) {
         // Native-login synthetic principal: sub is already the full account id — use verbatim.
@@ -113,17 +122,22 @@ public class SessionsService {
             // (which would mis-map it to a wrong or nonexistent account).
             throw ApiException.unauthorized("no account identity in session principal");
         }
-        String email = jwt.getClaimAsString("email");
-        if (email != null && !email.isBlank()) {
-            return "google:" + email.toLowerCase();
+        // A REAL Casdoor JWT presented directly (not the synthetic principal above): resolve the
+        // caller's OWN account id the SAME way admin-bff keyed it -- casdoor:<subject>, subject =
+        // first non-blank of {email, preferred_username, sub} (CanonicalIdentityResolver.ownAccountId,
+        // mirroring admin-bff's InternalAccountController.subjectFromIdToken + AccountStore.idFor).
+        //
+        // This DELETES the old email->google:<lc> / preferred_username->discord:<lc> guess, which was
+        // the SAME cross-namespace hole the six mint sites closed: for a native-Casdoor account the id
+        // is casdoor:<subject>, never google:/discord:<handle>, so the guess both MISSED the caller's
+        // own sessions AND could resolve ANOTHER user's discord:<handle> account -- letting a caller
+        // enumerate/force-revoke the victim's bff_ sessions by presenting the victim's handle as
+        // preferred_username. Fail closed (401) only when the token carries no usable subject at all.
+        String ownId = CanonicalIdentityResolver.ownAccountId(jwt);
+        if (ownId != null) {
+            return ownId;
         }
-        String username = jwt.getClaimAsString("preferred_username");
-        if (username != null && !username.isBlank()) {
-            return "discord:" + username.toLowerCase();
-        }
-        // No email / preferred_username claim ⇒ no derivable account ⇒ the caller owns no
-        // sessions in the bff_session table. Fail with 401 rather than guess an account.
-        throw ApiException.unauthorized("no account identity in token (email/preferred_username absent)");
+        throw ApiException.unauthorized("no account identity in token (email/preferred_username/sub absent)");
     }
 
     /** Project an admin-bff wire row to the caller-safe view (opaque id, no raw token). */

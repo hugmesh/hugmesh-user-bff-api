@@ -15,6 +15,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 import systems.snapdragon.userbff.auth.AdminBffInternalClient;
+import systems.snapdragon.userbff.auth.CanonicalIdentityResolver;
 import systems.snapdragon.userbff.config.SecurityConfig;
 
 import java.util.ArrayList;
@@ -44,7 +45,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * assertions must override it locally rather than rely on the shipped default.
  */
 @WebFluxTest(controllers = {MatrixProxyController.class, MastodonProxyController.class})
-@Import({SecurityConfig.class, HsProxyControllerSecurityTest.StubClients.class})
+@Import({SecurityConfig.class, CanonicalIdentityResolver.class, HsProxyControllerSecurityTest.StubClients.class})
 @TestPropertySource(properties = "app.hs-token.enabled=false")
 class HsProxyControllerSecurityTest {
 
