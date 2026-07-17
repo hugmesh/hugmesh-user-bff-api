@@ -67,21 +67,59 @@ public class AdminBffInternalClient {
      * take over the first — exactly the residual takeover 291 closes. {@code
      * @JsonIgnoreProperties(ignoreUnknown = true)} is added so a NEWER admin-bff that emits a
      * further account field can never break this consumer's parse (cross-repo deploy skew).
+     *
+     * <p>{@code issuer} (admin-bff Liquibase changeset 301) is the account's OWN Casdoor
+     * issuer URI — the BRAND discriminator (the platform runs one Casdoor per brand), a
+     * different axis entirely from {@code provider}, which is only the OAuth LOGIN provider
+     * (google/discord/casdoor). It closes the multi-brand blocker documented on {@code
+     * BffSessionAuthenticationWebFilter#singleTrustedIssuerOrNull}: without a brand-aware
+     * field, a {@code bff_} session on a genuinely multi-issuer cluster could not resolve its
+     * brand at all and every domain-scoped read/write failed closed.
+     *
+     * <p><b>NOTE it does NOT arrive on this record's own wire.</b> This view is deserialised
+     * from {@code GET /bff/internal/accounts/{id}} ({@code AccountOut}), which carries no
+     * issuer; the issuer lives on the SESSION-introspect body. {@link #resolveSession} folds
+     * it in via {@link #withIssuer} — so it is populated on the session-auth path and blank
+     * everywhere else (a plain {@link #getAccount} view legitimately has none). Blank is
+     * ALWAYS a safe value: consumers must re-validate it against their own trusted set and
+     * degrade to the pre-301 fail-closed behavior. Never trust it without that check.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record AccountView(String id, String provider, String handle,
                               boolean registrationComplete, List<String> roles,
-                              String localpart, String mastodonLocalpart) {
+                              String localpart, String mastodonLocalpart, String issuer) {
+
+        /**
+         * Back-compat constructor for callers/tests that predate the brand/issuer field
+         * (admin-bff changeset 301): {@code issuer} defaults blank ("no brand known" — the
+         * pre-301 shape, which makes the consumer fall back to {@code
+         * singleTrustedIssuerOrNull}). Jackson deserialises admin-bff's {@code AccountOut}
+         * JSON via the CANONICAL (8-arg) record constructor + component names — this extra
+         * constructor is invisible to it, so the wire contract is unchanged.
+         */
+        public AccountView(String id, String provider, String handle, boolean registrationComplete,
+                           List<String> roles, String localpart, String mastodonLocalpart) {
+            this(id, provider, handle, registrationComplete, roles, localpart, mastodonLocalpart, "");
+        }
 
         /**
          * Back-compat constructor for callers/tests that predate the Mastodon fold (changeset
-         * 291): {@code mastodonLocalpart} defaults blank ("resolve it, never re-fold"). Jackson
-         * deserialises admin-bff's JSON via the CANONICAL (7-arg) record constructor + component
-         * names — this extra constructor is invisible to it, so the wire contract is unchanged.
+         * 291): {@code mastodonLocalpart} defaults blank ("resolve it, never re-fold").
          */
         public AccountView(String id, String provider, String handle, boolean registrationComplete,
                            List<String> roles, String localpart) {
-            this(id, provider, handle, registrationComplete, roles, localpart, "");
+            this(id, provider, handle, registrationComplete, roles, localpart, "", "");
+        }
+
+        /**
+         * Return a copy carrying {@code issuer} — the fold-in {@link #resolveSession} performs,
+         * since the brand arrives on the session-introspect body while this view is hydrated
+         * from the account-read endpoint. A null/blank issuer yields a blank field (the
+         * pre-301 fail-closed shape), never null.
+         */
+        public AccountView withIssuer(String issuer) {
+            return new AccountView(id, provider, handle, registrationComplete, roles,
+                    localpart, mastodonLocalpart, issuer == null ? "" : issuer);
         }
 
         // Return a defensive copy so callers cannot mutate the internal list.
@@ -104,6 +142,17 @@ public class AdminBffInternalClient {
         public String mastodonLocalpart() {
             return mastodonLocalpart == null ? "" : mastodonLocalpart;
         }
+
+        /** Never null — the account's validated Casdoor issuer (the BRAND; admin-bff changeset
+         *  301), folded in by {@link #resolveSession} from the session-introspect body. Blank
+         *  means "no brand known": a legacy/off-path account row, an older admin-bff that does
+         *  not emit the field, an issuer admin-bff did not trust, or simply a view obtained
+         *  outside the session path. Blank MUST degrade to the pre-301 {@code
+         *  singleTrustedIssuerOrNull} behavior — and a non-blank value is still only a HINT
+         *  that the consumer re-validates against its own trusted set before use. */
+        public String issuer() {
+            return issuer == null ? "" : issuer;
+        }
     }
 
     /** A freshly-minted opaque {@code bff_} session token from admin-bff. */
@@ -117,9 +166,15 @@ public class AdminBffInternalClient {
      *  {@link #resolveSession}). Unknown fields ignored; {@code null} status defaults to
      *  {@code "active"} so a partial row never NPEs the mapping. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record SessionIntrospect(String id, String status, boolean mfaSatisfied) {
+    private record SessionIntrospect(String id, String status, boolean mfaSatisfied, String issuer) {
         SessionIntrospect {
             if (status == null) status = "active";
+            // Changeset 301: the account's brand. NULLABLE on the wire by design — an older
+            // admin-bff omits it entirely, and a current one emits null for a legacy/off-path
+            // row or an issuer it did not trust. Normalise to blank so the fold-in and the
+            // downstream trusted-set check never see null; blank == "no brand known" == the
+            // pre-301 fail-closed shape.
+            if (issuer == null) issuer = "";
         }
     }
 
@@ -210,8 +265,14 @@ public class AdminBffInternalClient {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + bffToken)
                 .retrieve()
                 .bodyToMono(SessionIntrospect.class)
+                // Changeset 301: fold the account's brand (issuer) from the INTROSPECT body into
+                // the account view — getAccount() reads /bff/internal/accounts/{id}, whose
+                // AccountOut carries no issuer, so this is the only place the two halves meet.
+                // Absent/blank (older admin-bff, legacy row, untrusted issuer) stays blank and
+                // the synthetic-Jwt filter degrades to its pre-301 single-issuer fallback.
                 .flatMap(intro -> getAccount(intro.id())
-                        .map(account -> new SessionResolution(account, intro.status(), intro.mfaSatisfied())))
+                        .map(account -> new SessionResolution(
+                                account.withIssuer(intro.issuer()), intro.status(), intro.mfaSatisfied())))
                 .onErrorMap(WebClientResponseException.Unauthorized.class,
                         e -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session"));
     }

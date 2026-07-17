@@ -136,6 +136,125 @@ class BffSessionSyntheticJwtDomainTest {
                 .isEqualTo("__deny__");
     }
 
+    // ── changeset 301: a brand-aware account RESOLVES its brand on a multi-brand cluster ──
+
+    /** An account carrying a brand — the changeset-301 introspect field, folded into the view
+     *  by {@code AdminBffInternalClient#resolveSession}. */
+    private static AccountView viewWithIssuer(String id, String issuer) {
+        return new AccountView(id, "native", "h", true, List.of("user"), "lp", "", issuer);
+    }
+
+    @Test
+    void multiIssuerRegistry_accountCarryingTrustedIssuer_resolvesThatBrand_notDeny() {
+        // THE FIX. Pre-301 this exact shape resolved "__deny__" (see the test above): the
+        // introspect contract carried no brand, so no iss was stamped. Now the account's own
+        // VALIDATED issuer is preferred and the caller resolves ITS brand — the multi-brand
+        // deployment finally works for native-login sessions.
+        String issuerA = "https://casdoor-brandx.example.tld";
+        String issuerB = "https://casdoor-brandy.example.tld";
+        DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
+        assertThat(registry.isMultiIssuer()).isTrue();
+
+        Jwt jwt = resolveJwt(registry, viewWithIssuer("acct-x", issuerA));
+
+        assertThat(jwt.getIssuer()).hasToString(issuerA);
+        assertThat(Roles.domainOf(jwt, registry)).isEqualTo("brandx");
+        assertThat(new PrincipalDomain(registry).forScope(jwt)).isEqualTo("brandx");
+    }
+
+    @Test
+    void multiIssuerRegistry_theOtherBrandsAccount_resolvesTheOtherBrand_noCrossTalk() {
+        // The discriminator really discriminates: brandy's account must resolve brandy, not
+        // brandx and not a first-entry default.
+        String issuerA = "https://casdoor-brandx.example.tld";
+        String issuerB = "https://casdoor-brandy.example.tld";
+        DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
+
+        Jwt jwt = resolveJwt(registry, viewWithIssuer("acct-y", issuerB));
+
+        assertThat(Roles.domainOf(jwt, registry)).isEqualTo("brandy");
+        assertThat(new PrincipalDomain(registry).forScope(jwt)).isEqualTo("brandy");
+    }
+
+    @Test
+    void multiIssuerRegistry_trailingSlashIssuer_stillResolvesTheBrand() {
+        // DomainRegistry strips a trailing slash from its keys; the stamped claim must be the
+        // canonical key form or the exact-match lookup misses and a legitimate caller is denied.
+        String issuerA = "https://casdoor-brandx.example.tld";
+        String issuerB = "https://casdoor-brandy.example.tld";
+        DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
+
+        Jwt jwt = resolveJwt(registry, viewWithIssuer("acct-slash", issuerA + "/"));
+
+        assertThat(jwt.getIssuer()).hasToString(issuerA);
+        assertThat(new PrincipalDomain(registry).forScope(jwt)).isEqualTo("brandx");
+    }
+
+    // ── changeset 301: everything unverifiable degrades to EXACTLY the pre-301 deny ──
+
+    @Test
+    void multiIssuerRegistry_accountCarryingUNTRUSTEDIssuer_failsClosed_exactlyAsBefore() {
+        // *** THE SECURITY TEST (consumer half). *** A forged/unknown issuer must NOT be
+        // stamped: it names no brand this deployment trusts. It must degrade to precisely the
+        // pre-301 behavior — no iss, "__deny__" — never resolve a brand, never bypass.
+        String issuerA = "https://casdoor-brandx.example.tld";
+        String issuerB = "https://casdoor-brandy.example.tld";
+        DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
+
+        Jwt jwt = resolveJwt(registry, viewWithIssuer("acct-evil", "https://evil.attacker.tld"));
+
+        assertThat(jwt.getIssuer()).as("an untrusted issuer must never be stamped").isNull();
+        assertThat(Roles.domainOf(jwt, registry)).isNull();
+        assertThat(new PrincipalDomain(registry).forScope(jwt)).isEqualTo("__deny__");
+    }
+
+    @Test
+    void multiIssuerRegistry_blankIssuer_failsClosed_exactlyAsBefore() {
+        // The legacy/older-admin-bff shape (field absent or null on the wire → blank in the
+        // view): byte-identical to the pre-301 deny.
+        String issuerA = "https://casdoor-brandx.example.tld";
+        String issuerB = "https://casdoor-brandy.example.tld";
+        DomainRegistry registry = new DomainRegistry("", issuerA + "=brandx," + issuerB + "=brandy");
+
+        Jwt jwt = resolveJwt(registry, viewWithIssuer("acct-blank", ""));
+
+        assertThat(jwt.getIssuer()).isNull();
+        assertThat(new PrincipalDomain(registry).forScope(jwt)).isEqualTo("__deny__");
+    }
+
+    @Test
+    void singleIssuerRegistry_untrustedAccountIssuer_stillFallsBackToTheConfiguredIssuer() {
+        // Fallback semantics on the COMMON deployment shape: an account carrying a bogus brand
+        // must not poison single-issuer mode — it falls through to singleTrustedIssuerOrNull
+        // and resolves DEFAULT_DOMAIN exactly as it did pre-301.
+        String realIssuer = "https://casdoor.example.tld";
+        DomainRegistry registry = new DomainRegistry(realIssuer, "");
+
+        Jwt jwt = resolveJwt(registry, viewWithIssuer("acct-bogus", "https://evil.attacker.tld"));
+
+        assertThat(jwt.getIssuer()).hasToString(realIssuer);
+        assertThat(new PrincipalDomain(registry).forScope(jwt)).isEqualTo(DomainRegistry.DEFAULT_DOMAIN);
+    }
+
+    @Test
+    void emptyRegistry_accountIssuerIsNeverTrusted_theIsTrustedFailOpenGuard() {
+        // DomainRegistry#isTrusted fails OPEN on an empty registry (domainOf short-circuits to
+        // DEFAULT_DOMAIN without inspecting iss), so a membership test written with it would
+        // stamp this attacker-chosen issuer. issuerFor uses strict non-empty-set containment,
+        // so the claim is never stamped; domain still resolves DEFAULT_DOMAIN because the
+        // unconfigured registry ignores iss entirely.
+        DomainRegistry unconfigured = new DomainRegistry("", "");
+        assertThat(unconfigured.isTrusted("https://evil.attacker.tld"))
+                .as("guard premise: isTrusted DOES fail open on an empty registry")
+                .isTrue();
+
+        Jwt jwt = resolveJwt(unconfigured, viewWithIssuer("acct-noconf", "https://evil.attacker.tld"));
+
+        assertThat(jwt.getIssuer()).as("never stamp an attacker-chosen iss").isNull();
+        assertThat(new PrincipalDomain(unconfigured).forScope(jwt))
+                .isEqualTo(DomainRegistry.DEFAULT_DOMAIN);
+    }
+
     // ── SUPERADMIN still bypasses domain-scoping regardless of iss (unchanged) ──
 
     @Test

@@ -529,7 +529,7 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
             builder.claim("mastodon_localpart", mastodonLocalpart);
         }
 
-        String issuer = singleTrustedIssuerOrNull(domainRegistry);
+        String issuer = issuerFor(view, domainRegistry);
         if (issuer != null) {
             builder.issuer(issuer);
         }
@@ -538,34 +538,102 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
     }
 
     /**
-     * The {@code iss} claim {@link #syntheticJwt} should stamp so {@code
-     * Roles.domainOf(Jwt, DomainRegistry)} (read by {@code PrincipalDomain.forScope},
-     * which 13 of the 16 Bug-2 controllers call) resolves the SAME brand-domain scope a
-     * real Casdoor JWT for this account would — closing the previously-known "low"
-     * finding that this filter's {@link Authentication} carried no {@code DOMAIN_}
-     * authority at all.
+     * The {@code iss} to stamp for {@code view}: the account's OWN brand when we can VERIFY it,
+     * else the pre-301 single-issuer fallback.
      *
-     * <p>Correctly recoverable ONLY in single-issuer mode. {@link AccountView} carries
-     * no brand/domain field — only {@code provider}, the OAuth LOGIN provider
-     * ({@code google}/{@code discord}/{@code casdoor}), a completely different axis from
-     * the multi-BRAND per-Casdoor-instance concept {@link DomainRegistry} models — so a
-     * genuinely multi-issuer deployment has no way to recover which brand's Casdoor a
-     * {@code bff_} session's account belongs to from what admin-bff's introspection
-     * response gives us. {@link DomainRegistry#trustedIssuers()} has EXACTLY one entry
-     * in both the fully-unconfigured case (empty registry — {@code
+     * <p>This is the consumer half of admin-bff Liquibase changeset 301, which closes the
+     * multi-brand blocker documented on {@link #singleTrustedIssuerOrNull}: the introspect
+     * contract now carries the account's Casdoor issuer (the brand — one Casdoor per brand),
+     * so a {@code bff_} session on a genuinely multi-issuer cluster can resolve the RIGHT
+     * brand instead of resolving none and failing every domain-scoped read/write closed.
+     *
+     * <h3>Trust posture — the account's issuer is a HINT, never an authority</h3>
+     * admin-bff already validates the issuer against ITS configured trusted set before
+     * persisting it (the id_token it decodes is NOT signature-verified, so an unvalidated
+     * stamp would be a cross-brand forgery primitive). This re-checks it against OUR OWN
+     * {@link DomainRegistry} anyway, because:
+     * <ul>
+     *   <li>defence in depth — this repo must not inherit a tenant-scope decision from
+     *       another service's validation being correct, and the two services' configs can
+     *       legitimately differ or drift;</li>
+     *   <li>an issuer that is not in THIS deployment's registry has no domain to resolve to
+     *       here regardless of who vouched for it ({@code domainOf} would return null).</li>
+     * </ul>
+     * The membership test is deliberately strict {@link DomainRegistry#trustedIssuers()}
+     * containment rather than {@link DomainRegistry#isTrusted}: the latter delegates to
+     * {@code domainOf}, which short-circuits to {@code DEFAULT_DOMAIN} WITHOUT inspecting its
+     * argument on an empty registry — i.e. it answers "trusted" for any string at all in the
+     * no-config case. Strict containment of a non-empty set cannot fail open that way.
+     *
+     * <h3>Byte-identical to today whenever the field is absent/blank/untrusted</h3>
+     * Every non-verifying path falls through to {@link #singleTrustedIssuerOrNull}, so a
+     * legacy row, an older admin-bff, an untrusted issuer or an unconfigured registry all
+     * behave EXACTLY as before this change: single-issuer clusters resolve {@code
+     * DOMAIN_default}; true multi-brand clusters stamp nothing and {@code
+     * PrincipalDomain.forScope} fails closed ({@code "__deny__"}) rather than guessing.
+     */
+    private static String issuerFor(AccountView view, DomainRegistry registry) {
+        if (registry == null || view == null) {
+            return null;
+        }
+        String claimed = view.issuer();
+        if (claimed != null && !claimed.isBlank()) {
+            String candidate = trimSlash(claimed);
+            Set<String> trusted = registry.trustedIssuers();
+            // Strict membership of a NON-EMPTY set (see the javadoc: isTrusted fails open on
+            // an empty registry). Return the SET's element so the stamped claim is
+            // byte-identical to the key DomainRegistry#domainOf will look up.
+            if (trusted != null) {
+                for (String t : trusted) {
+                    if (t != null && t.equals(candidate)) {
+                        return t;
+                    }
+                }
+            }
+            // Claimed but NOT trusted here: fall through to the single-issuer fallback (which
+            // yields null on a multi-issuer cluster → fail closed). Never stamp it.
+        }
+        return singleTrustedIssuerOrNull(registry);
+    }
+
+    /** Mirrors {@code DomainRegistry#trimSlash} (private there) so a configured
+     *  {@code https://casdoor/} and a stamped {@code https://casdoor} compare equal. */
+    private static String trimSlash(String s) {
+        if (s == null) {
+            return "";
+        }
+        String t = s.trim();
+        return t.endsWith("/") ? t.substring(0, t.length() - 1) : t;
+    }
+
+    /**
+     * The BRAND-UNAWARE fallback {@code iss}: the lone trusted issuer when there is exactly
+     * one, else {@code null}. Consulted by {@link #issuerFor} only when the account's own
+     * issuer is absent, blank or not trusted here.
+     *
+     * <p><b>History (read this before "simplifying" the two-step).</b> This helper used to be
+     * the ONLY source of the {@code iss} claim, which made it the documented multi-brand
+     * blocker: {@link AccountView} carried no brand/domain field — only {@code provider}, the
+     * OAuth LOGIN provider ({@code google}/{@code discord}/{@code casdoor}), a completely
+     * different axis from the multi-BRAND per-Casdoor-instance concept {@link DomainRegistry}
+     * models — so a genuinely multi-issuer deployment could not recover which brand's Casdoor
+     * a {@code bff_} session's account belonged to, stamped no {@code iss} at all, and denied
+     * EVERY domain-scoped {@code bff_}-session read/write. admin-bff Liquibase changeset 301
+     * closed that by adding the account's validated issuer to the introspection contract;
+     * {@link #issuerFor} prefers it whenever this deployment also trusts it.
+     *
+     * <p><b>Why it remains, unchanged.</b> It is the exact pre-301 behavior every
+     * non-verifying path still degrades to. {@link DomainRegistry#trustedIssuers()} has
+     * EXACTLY one entry in both the fully-unconfigured case (empty registry — {@code
      * DomainRegistry.domainOf} short-circuits to {@code DEFAULT_DOMAIN} without even
      * inspecting the {@code iss} argument, so leaving it unset there is harmless) and the
-     * single-issuer-configured case (one real issuer URI seeded to {@code
-     * DEFAULT_DOMAIN}); in BOTH, this returns that issuer (or {@code null}, which is
-     * equally safe in the empty case). Only when {@link DomainRegistry#isMultiIssuer()}
-     * (more than one trusted issuer) does this return {@code null} — no {@code iss}
-     * claim is set, and {@code PrincipalDomain.forScope} then FAILS CLOSED (denies
-     * domain-scoped rows, the {@code "__deny__"} sentinel) for a {@code bff_}-session
-     * caller rather than guessing wrong. Documented, narrowed (not fully closed) gap:
-     * single-issuer clusters (the common case) now resolve {@code DOMAIN_default}
-     * correctly; true multi-brand deployments still deny domain-scoped {@code bff_}
-     * -session reads/writes until a real brand-aware field is added to the introspection
-     * contract.
+     * single-issuer-configured case (one real issuer URI seeded to {@code DEFAULT_DOMAIN});
+     * in BOTH, this returns that issuer (or {@code null}, equally safe in the empty case).
+     * Only when {@link DomainRegistry#isMultiIssuer()} does this return {@code null} — no
+     * {@code iss} is set and {@code PrincipalDomain.forScope} FAILS CLOSED (the {@code
+     * "__deny__"} sentinel) rather than guessing wrong. So on a multi-brand cluster an
+     * account whose brand cannot be verified is denied exactly as it was before 301 — the
+     * fix only ever ADDS correctly-resolved scope, never widens an unverified one.
      */
     private static String singleTrustedIssuerOrNull(DomainRegistry registry) {
         if (registry == null) {
