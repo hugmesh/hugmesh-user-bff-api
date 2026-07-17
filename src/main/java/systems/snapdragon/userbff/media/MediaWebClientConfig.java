@@ -17,10 +17,13 @@ import java.time.Duration;
  * Wires the media-proxy collaborators:
  * <ul>
  *   <li>the {@link PoisonWorkerClient} to the OPTIONAL {@code snapdragon-media-poisoner}
- *       worker (plain in-cluster HTTP — the worker is a backend service, not behind the
- *       mTLS homeserver proxies). When {@code app.media.poisoning.worker-url} is blank the
- *       client is wired with a {@code null} WebClient and reports the heavy tier absent
- *       (lean fallback);</li>
+ *       worker. The worker TERMINATES mTLS ITSELF (no sidecar/mesh): its deployment
+ *       projects a Vault-PKI/ESO {@code kubernetes.io/tls} Secret and {@code app/serve.py}
+ *       serves TLS with {@code ssl.CERT_REQUIRED}, so a caller without a valid client cert
+ *       cannot complete the handshake. This client therefore REUSES the same
+ *       {@link FederationHttpClientSsl} client identity as the homeserver leg below.
+ *       When {@code app.media.poisoning.worker-url} is blank the client is wired with a
+ *       {@code null} WebClient and reports the heavy tier absent (lean fallback);</li>
  *   <li>the {@link HomeserverMediaClient} to the EXISTING mTLS homeserver proxies
  *       ({@code akkoma-proxy:4443} / {@code tuwunel-proxy:4443}, {@code ssl_verify_client
  *       on}). It REUSES {@link FederationHttpClientSsl} (this BFF's cluster-CA client
@@ -46,15 +49,27 @@ public class MediaWebClientConfig {
      * client reports {@code backend=none} so the service engages the lean fallback. The
      * per-job timeout is the configured hard latency budget; the health probe gets the
      * (short) health timeout.
+     *
+     * <p>mTLS client-presentation is applied via {@link FederationHttpClientSsl} exactly as
+     * on the homeserver leg ({@link #proxyClient}) — the worker now verifies client certs
+     * (see the class doc), so a certless caller cannot complete the handshake. The
+     * customizer is itself gated ({@code snapdragon.mtls.client.enabled}, default OFF, and
+     * a no-op when the keystore is absent), so local/dev/CI is unaffected.
+     *
+     * <p>NOTE: reactor-netty applies the SSL context ONLY when the request scheme is
+     * {@code https} — {@code worker-url} MUST therefore be {@code https://…} in-cluster for
+     * this connector to engage at all.
      */
     @Bean
     public PoisonWorkerClient poisonWorkerClient(
             MediaPoisoningProperties props,
+            FederationHttpClientSsl mtls,
             @Value("${app.media.poisoning.worker-url:}") String workerUrl) {
         WebClient web = (workerUrl == null || workerUrl.isBlank())
                 ? null
                 : WebClient.builder()
                     .baseUrl(workerUrl)
+                    .clientConnector(new ReactorClientHttpConnector(mtls.customize(HttpClient.create())))
                     .codecs(c -> c.defaultCodecs().maxInMemorySize((int) props.getMaxUploadBytes() + 4096))
                     .build();
         return new PoisonWorkerClient(web,
