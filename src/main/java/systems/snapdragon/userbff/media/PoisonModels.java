@@ -92,6 +92,13 @@ public final class PoisonModels {
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Health(String backend, List<String> modes, Integer etaSeconds) {
+        // Copy on the way IN: the accessor below can only hand out a safe view if the
+        // field itself is not still the caller's (mutable) list. Null is preserved
+        // rather than normalised so the record's equals/hashCode shape is unchanged.
+        public Health {
+            modes = modes == null ? null : List.copyOf(modes);
+        }
+
         // Return a defensive copy so callers cannot mutate the internal list.
         @Override
         public List<String> modes() {
@@ -107,6 +114,13 @@ public final class PoisonModels {
      */
     public record PoisonRequest(String mode, String filename, String contentType,
                                 List<String> thumbnailSizes, byte[] imageBase64NotUsed) {
+        // Copy on the way IN — without this the caller retains a live reference to the
+        // image bytes / size list and can mutate this record's state after construction.
+        public PoisonRequest {
+            thumbnailSizes = thumbnailSizes == null ? null : List.copyOf(thumbnailSizes);
+            imageBase64NotUsed = imageBase64NotUsed == null ? null : imageBase64NotUsed.clone();
+        }
+
         // Return defensive copies so callers cannot mutate the internal mutable fields.
         @Override
         public List<String> thumbnailSizes() {
@@ -128,6 +142,13 @@ public final class PoisonModels {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PoisonResult(boolean ok, String backend, byte[] poisonedOriginal,
                                List<SizedBytes> thumbnails, String detail) {
+        // Copy on the way IN — the poisoned bytes must not stay aliased to the buffer
+        // the worker-response decoder handed us.
+        public PoisonResult {
+            poisonedOriginal = poisonedOriginal == null ? null : poisonedOriginal.clone();
+            thumbnails = thumbnails == null ? null : List.copyOf(thumbnails);
+        }
+
         // Return defensive copies so callers cannot mutate the internal mutable fields.
         @Override
         public byte[] poisonedOriginal() {
@@ -143,6 +164,11 @@ public final class PoisonModels {
     /** One poisoned derivative for a served size. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record SizedBytes(String size, byte[] bytes) {
+        // Copy on the way IN so the derivative's bytes cannot be mutated post-construction.
+        public SizedBytes {
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
         // Return a defensive copy so callers cannot mutate the internal byte array.
         @Override
         public byte[] bytes() {

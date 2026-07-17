@@ -14,6 +14,7 @@ import systems.snapdragon.commons.web.ApiException;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -111,6 +112,21 @@ public class MediaPoisonService {
      *                   none|failed})
      */
     public record UploadOutcome(Map<String, Object> homeserver, MediaPoisonDecision decision) {
+        /**
+         * Copy on the way IN. The accessor below wraps the field in an unmodifiable VIEW,
+         * which is not a copy: while the field stays aliased to the homeserver-response map,
+         * whoever still holds that map can mutate it and the "unmodifiable" view changes
+         * underneath the caller. Copying here is what actually makes the view safe.
+         *
+         * <p>A LinkedHashMap copy (not {@code Map.copyOf}) because this carries a decoded
+         * JSON body: {@code Map.copyOf} rejects null values, and a homeserver may legitimately
+         * return a null field. Insertion order is preserved for stable logging.
+         */
+        public UploadOutcome {
+            homeserver = homeserver == null ? null
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(homeserver));
+        }
+
         // Return an unmodifiable view so callers cannot mutate the internal map.
         @Override
         public Map<String, Object> homeserver() {

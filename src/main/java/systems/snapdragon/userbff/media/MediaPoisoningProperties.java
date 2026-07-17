@@ -70,7 +70,16 @@ public class MediaPoisoningProperties {
     public String getFallbackMode() { return fallbackMode; }
     public void setFallbackMode(String fallbackMode) { this.fallbackMode = fallbackMode; }
     public List<String> getThumbnailSizes() { return thumbnailSizes == null ? List.of() : List.copyOf(thumbnailSizes); }
-    public void setThumbnailSizes(List<String> thumbnailSizes) { this.thumbnailSizes = thumbnailSizes; }
+    /**
+     * Copy on the way IN. {@link #getThumbnailSizes()} already copies on the way out, but
+     * that left the field aliased to the binder-supplied list; this is a singleton
+     * {@code @ConfigurationProperties} bean, so a retained reference could mutate the
+     * pinned size set for the whole application at runtime. Null is preserved — the getter
+     * maps it to an empty list.
+     */
+    public void setThumbnailSizes(List<String> thumbnailSizes) {
+        this.thumbnailSizes = thumbnailSizes == null ? null : List.copyOf(thumbnailSizes);
+    }
     public long getTimeoutMs() { return timeoutMs; }
     public void setTimeoutMs(long timeoutMs) { this.timeoutMs = timeoutMs; }
     public long getHealthTimeoutMs() { return healthTimeoutMs; }

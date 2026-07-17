@@ -72,7 +72,19 @@ public class SsoAuthController {
     public record LoginResult(boolean registrationComplete, String status, boolean mfaRequired) {}
 
     /** MFA-challenge body — a second factor is required; NO session was minted. */
-    public record MfaChallenge(boolean mfaRequired, List<String> mfaType) {}
+    public record MfaChallenge(boolean mfaRequired, List<String> mfaType) {
+        // Copy on the way IN and OUT so this response body cannot be mutated by (or
+        // through) the caller after construction. Null is preserved; the accessor maps
+        // it to an empty list.
+        public MfaChallenge {
+            mfaType = mfaType == null ? null : List.copyOf(mfaType);
+        }
+
+        @Override
+        public List<String> mfaType() {
+            return mfaType == null ? List.of() : List.copyOf(mfaType);
+        }
+    }
 
     /** Bad-credential body — a stable error code + Casdoor's (non-secret) message. */
     public record LoginError(String error, String message) {}

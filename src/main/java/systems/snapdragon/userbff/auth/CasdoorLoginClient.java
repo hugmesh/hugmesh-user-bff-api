@@ -47,6 +47,19 @@ public class CasdoorLoginClient {
     public record CasdoorLoginResult(Kind kind, String code, List<String> mfaTypes, String message) {
         public enum Kind { CODE, MFA_REQUIRED, ERROR }
 
+        // Copy on the way IN. The static factories below already pass an immutable list,
+        // but the canonical constructor is public — so an arbitrary caller can hand in a
+        // mutable one. Null is preserved; the accessor maps it to an empty list.
+        public CasdoorLoginResult {
+            mfaTypes = mfaTypes == null ? null : List.copyOf(mfaTypes);
+        }
+
+        /** Return a defensive copy so callers cannot mutate the internal list. */
+        @Override
+        public List<String> mfaTypes() {
+            return mfaTypes == null ? List.of() : List.copyOf(mfaTypes);
+        }
+
         static CasdoorLoginResult code(String code) {
             return new CasdoorLoginResult(Kind.CODE, code, List.of(), null);
         }

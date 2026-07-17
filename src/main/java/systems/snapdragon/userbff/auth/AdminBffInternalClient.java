@@ -90,6 +90,17 @@ public class AdminBffInternalClient {
                               String localpart, String mastodonLocalpart, String issuer) {
 
         /**
+         * Copy {@code roles} on the way IN. The {@link #roles()} accessor already copies on
+         * the way OUT, but that alone leaves the FIELD aliased to the caller's list — a
+         * caller that keeps its reference can still mutate this view's roles after it is
+         * built, which for a ROLE carrier is an authorization-relevant leak. Null is
+         * preserved (the accessor maps it to an empty list) so the wire shape is unchanged.
+         */
+        public AccountView {
+            roles = roles == null ? null : List.copyOf(roles);
+        }
+
+        /**
          * Back-compat constructor for callers/tests that predate the brand/issuer field
          * (admin-bff changeset 301): {@code issuer} defaults blank ("no brand known" — the
          * pre-301 shape, which makes the consumer fall back to {@code
