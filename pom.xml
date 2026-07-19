@@ -72,7 +72,14 @@
          the original 2.0.0 pin): 2.3.3 is the release that picks up auth-core's
          ReservedNames canonical-revision sync (character-studio / v1 / ai + 4 frontend
          webroot filenames), which this BFF's ProfileService/UsernameSkeleton username
-         guard consumes directly. -->
+         guard consumes directly.
+         PENDING NEXT BUMP: the canonical reserved-prefix set is now at revision 9
+         (hmdm/attest from rev 7/8 + character-forge / games-character-forge /
+         games-shadows-of-the-net from the Character Forge track); no released
+         auth-core version carries those labels yet. Until auth-core adds them and
+         this pin is bumped, those five labels are enforced only by the DB backstop
+         (changeset 020's ck_user_profile_vanity_username_reserved), not as a clean
+         service-layer 400. -->
     <dependency>
       <groupId>systems.snapdragon</groupId>
       <artifactId>snapdragon-auth-core</artifactId>
