@@ -38,8 +38,11 @@ import java.util.Map;
  *       once the caller has explicitly set them.</li>
  *   <li>PUT {@code /bff/user/preferences} — upsert ONE durable preference
  *       ({@code {"key":..., "value":...}}), returning the resolved view. The key +
- *       value are validated (the AI-poison default must be a valid cloak mode; an
- *       appearance key must be one of its known TS-union values).</li>
+ *       value are validated (the AI-poison default must be a user-facing
+ *       {@link MediaPoisonMode} token {@code off|low|medium|high} — the BFF-owned
+ *       contract exported in the OpenAPI {@code MediaPoisonMode} schema; an
+ *       appearance key must be one of its known TS-union values). An
+ *       out-of-vocabulary value is a clean 400 and the stored value is untouched.</li>
  * </ul>
  *
  * <p>The read-only {@code GET /bff/user/media/capability} {@code defaultMode} (the
@@ -48,8 +51,9 @@ import java.util.Map;
  */
 @Tag(name = "User preferences", description = "Durable per-user UI preferences "
         + "(owner = JWT subject, domain-scoped). Carries media.poison.default (the "
-        + "per-user AI-poison default the compose toggle persists) and the "
-        + "mastodon.appearance.* keys (the mastodon-ui appearance panel).")
+        + "per-user AI-cloak default; value vocabulary = the MediaPoisonMode schema, "
+        + "off|low|medium|high, BFF-owned) and the mastodon.appearance.* keys (the "
+        + "mastodon-ui appearance panel).")
 @RestController
 @RequestMapping("/bff/user/preferences")
 @PreAuthorize("hasRole('USER')")
@@ -64,7 +68,9 @@ public class UserPreferencesController {
         this.principalDomain = principalDomain;
     }
 
-    /** PUT body: upsert one durable preference (key + value), both bounded/validated. */
+    /** PUT body: upsert one durable preference (key + value), both bounded/validated.
+     *  For {@code media.poison.default} the value must be a {@link MediaPoisonMode}
+     *  token ({@code off|low|medium|high}); anything else is a 400. */
     public record PreferenceUpsert(
             @NotBlank
             @Size(max = 128)

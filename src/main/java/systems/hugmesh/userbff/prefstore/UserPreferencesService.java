@@ -2,7 +2,6 @@ package systems.hugmesh.userbff.prefstore;
 
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-import systems.hugmesh.userbff.media.MediaPoisonDecision;
 import systems.hugmesh.userbff.media.MediaPoisoningProperties;
 import systems.hugmesh.commons.security.DomainRegistry;
 import systems.hugmesh.commons.web.ApiException;
@@ -34,8 +33,11 @@ import java.util.Set;
 @Service
 public class UserPreferencesService {
 
-    /** The per-user durable AI-poison default the compose toggle persists. Unset =>
-     *  inherit the server {@link MediaPoisoningProperties#getDefaultMode()}. */
+    /** The per-user durable AI-poison default the preferences panel persists. Unset =>
+     *  inherit the server {@link MediaPoisoningProperties#getDefaultMode()} (an ENGINE
+     *  token, translated to the user-facing {@link MediaPoisonMode} vocabulary on the
+     *  defaults merge). Wire vocabulary: {@code off|low|medium|high} — the BFF-owned
+     *  contract the paired hugmesh-user-ui panel speaks. */
     public static final String MEDIA_POISON_DEFAULT = "media.poison.default";
 
     // ── mastodon-ui appearance preferences (PreferencesService.AppearancePreferences) ──
@@ -97,6 +99,11 @@ public class UserPreferencesService {
             Map<String, String> out = new LinkedHashMap<>(defaults());
             // the user's explicit, durable choices override the server defaults.
             out.putAll(stored);
+            // The resolved view ALWAYS speaks the user-facing contract vocabulary:
+            // a legacy engine token ('glaze'|...) still sitting in a durable row is
+            // canonicalised to 'off|low|medium|high' on the way out.
+            out.computeIfPresent(MEDIA_POISON_DEFAULT,
+                    (k, v) -> canonicalPoisonToken(v));
             return out;
         });
     }
@@ -110,9 +117,10 @@ public class UserPreferencesService {
      * Upsert ONE durable preference for the owner in their domain, then return the
      * resolved view. The key is validated against the known-preference vocabulary and
      * the value against that preference's allowed values (the AI-poison default must
-     * be a valid cloak mode; an appearance key must be one of its TS union values) so
-     * a client can never persist a key/value the UI can't honour. {@code domain} null
-     * = SUPERADMIN cross-domain bypass.
+     * be a user-facing {@link MediaPoisonMode} token {@code off|low|medium|high}; an
+     * appearance key must be one of its TS union values) so a client can never persist
+     * a key/value the UI can't honour. {@code domain} null = SUPERADMIN cross-domain
+     * bypass.
      */
     public Mono<Map<String, String>> put(String owner, String key, String value, String domain) {
         requireOwner(owner);
@@ -126,12 +134,37 @@ public class UserPreferencesService {
 
     /** The server-default view (no user rows) — every known preference THAT HAS a
      *  server-known default, at that default. The AI-poison default MIRRORS the
-     *  server media poisoning policy. Appearance keys have no server default here (see
-     *  class doc) so they are absent until the user explicitly sets them. */
+     *  server media poisoning policy ({@code MediaPoisoningProperties.defaultMode},
+     *  an ENGINE token like {@code glaze}) translated to the user-facing
+     *  {@link MediaPoisonMode} contract token ({@code medium}). Appearance keys have
+     *  no server default here (see class doc) so they are absent until the user
+     *  explicitly sets them. */
     Map<String, String> defaults() {
         Map<String, String> d = new LinkedHashMap<>();
-        d.put(MEDIA_POISON_DEFAULT, mediaProps.getDefaultMode());
+        d.put(MEDIA_POISON_DEFAULT, canonicalPoisonToken(mediaProps.getDefaultMode()));
         return d;
+    }
+
+    /**
+     * Canonicalise any {@code media.poison.default} representation to the USER-FACING
+     * contract token: an already-canonical {@code off|low|medium|high} passes through;
+     * a legacy/server ENGINE token ({@code glaze|nightshade|light|none}) is translated;
+     * anything else (unreachable through the validated write path — a hand-edited row
+     * or a misconfigured server default) falls back to {@code medium}, mirroring the
+     * production {@code glaze} policy default, so the view never leaks an
+     * out-of-vocabulary value.
+     */
+    static String canonicalPoisonToken(String raw) {
+        String token = raw == null ? "" : raw.trim().toLowerCase();
+        MediaPoisonMode canonical = MediaPoisonMode.fromWire(token);
+        if (canonical != null) {
+            return canonical.value();
+        }
+        MediaPoisonMode fromEngine = MediaPoisonMode.fromEngineToken(token);
+        if (fromEngine != null) {
+            return fromEngine.value();
+        }
+        return MediaPoisonMode.MEDIUM.value();
     }
 
     /** True iff {@code key} is a preference this BFF recognises (fail-closed on
@@ -141,18 +174,20 @@ public class UserPreferencesService {
     }
 
     /** Validate + canonicalise a value for the given known key. The AI-poison default
-     *  must be one of the cloak modes ({@code glaze|nightshade|light|none}); an
-     *  appearance key must be one of its TS union values (booleans as
+     *  must be one of the USER-FACING {@link MediaPoisonMode} tokens
+     *  ({@code off|low|medium|high} — STRICT: the engine tokens are not accepted on
+     *  the wire); an appearance key must be one of its TS union values (booleans as
      *  {@code "true"|"false"}); reject anything else as a clean 400 so a bad value
      *  never reaches the durable row. */
     private static String normalizeValue(String key, String rawValue) {
         String v = rawValue == null ? "" : rawValue.trim();
         if (MEDIA_POISON_DEFAULT.equals(key)) {
-            String mode = v.toLowerCase();
-            if (!MediaPoisonDecision.validMode(mode)) {
-                throw ApiException.badRequest("media.poison.default must be glaze|nightshade|light|none");
+            MediaPoisonMode mode = MediaPoisonMode.fromWire(v.toLowerCase());
+            if (mode == null) {
+                throw ApiException.badRequest(
+                        "media.poison.default must be " + MediaPoisonMode.VOCABULARY);
             }
-            return mode;
+            return mode.value();
         }
         if (APPEARANCE_KEYS.contains(key)) {
             return normalizeAppearanceValue(key, v);
