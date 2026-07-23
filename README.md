@@ -37,7 +37,7 @@ flowchart LR
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
     subgraph BFF["hugmesh-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
-        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE) ·<br/>character/parts · character/stickers"]
+        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE) ·<br/>character/parts · character/stickers · mesh-devices"]
         Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
@@ -46,6 +46,7 @@ flowchart LR
     Fed["snapdragon-federation-api<br/>(cards + moderation, forwarded JWT)"]
     HS["homeservers via mTLS proxy<br/>tuwunel / Akkoma<br/>(gated stub-seams)"]:::gated
     Actions["hugmesh-actions reconciler<br/>(only writer of user_notifications)"]:::planned
+    MeshBridge["mesh↔Matrix bridge<br/>(node id → localpart mapping,<br/>LoRa status write-back)"]:::planned
 
     LoginUI -.->|opaque bff_ session| UI
     UI -->|opaque bff_ session| GW
@@ -58,6 +59,7 @@ flowchart LR
     Surfaces -->|gated, never hard-fail| HS
     Surfaces -->|password / email| Casdoor
     Actions -->|ROLE_SERVICE deliver| Internal
+    MeshBridge -->|ROLE_SERVICE mapping read / status write| Internal
     Internal --> DB
 
     classDef planned stroke-dasharray:4,stroke:#888;
@@ -66,7 +68,9 @@ flowchart LR
 
 In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed grey nodes are 🔭
 planned or built/landing elsewhere (`login-ui`, `hugmesh-user-ui`, the
-`hugmesh-actions` reconciler); the amber-dashed nodes are ✅-shipped-but-**gated**
+`hugmesh-actions` reconciler, and the mesh↔Matrix bridge — the `mesh-devices` internal
+mapping/status-writeback receiver is ✅ shipped here, but no bridge exists yet to call
+it); the amber-dashed nodes are ✅-shipped-but-**gated**
 stub-seams — the homeserver leg (off by default) and the admin-bff `/bff/internal`
 leg (the client + `BffSessionAuthenticationWebFilter` + `CanonicalIdentityResolver` are
 all real, always-registered code, but every call fail-closed-stubs unless
@@ -619,6 +623,34 @@ live on `main`.
   pattern (`fetch(url, { headers: { Authorization: ... } })` + a `ReadableStream`
   reader) is the required approach for any authenticated SSE endpoint.
 
+### Mesh devices — `MeshDeviceController` (`/bff/user/mesh-devices`) ✅ shipped
+Owner-scoped Meshtastic **LoRa radio claims** — a user registers a radio's node id under
+their own identity so the platform's **mesh↔Matrix bridge** can attribute that radio's
+messages to them. Own R2DBC `mesh_device` table (019; `node_id` canonical `!`+lowercase-hex,
+globally UNIQUE — one owner per radio, across every user and brand, active or revoked).
+`ROLE_USER` floor + `@PreAuthorize("hasRole('USER')")`; domain-scoped.
+
+- `GET /bff/user/mesh-devices` — my claimed devices (newest first), including revoked rows
+  (with state + reason) and the bridge-reported LoRa status fields.
+- `POST /bff/user/mesh-devices` — claim a node id (accepts `a1b2c3d4` / `!A1B2C3D4`,
+  normalized to canonical `!`+lowercase before storage; optional `label`). A node id already
+  registered by anyone, any domain, active or revoked, is a **409**.
+- `PUT /bff/user/mesh-devices/{id}/visibility` — who may see the device's LoRa status
+  (`private|friends|channels`); frozen (**409**) on a revoked row.
+- `DELETE /bff/user/mesh-devices/{id}` — release my claim (a foreign/unknown id is a
+  **404**, never a 403 — no cross-owner existence leak); releasing a revoked row is allowed
+  and frees the node id.
+
+**Internal bridge receiver — `InternalMeshDeviceController`
+(`/bff/user/internal/mesh-devices`)** — **SERVICE-PRINCIPAL ONLY** (same `ROLE_SERVICE`-
+exclusive `/bff/user/internal/**` gate as the notifications/character-moderation
+receivers). `GET /bff/user/internal/mesh-devices` returns the full ACTIVE node-id →
+Matrix-localpart mapping across every owner/domain (localpart resolved per-owner via
+`AdminBffInternalClient#getAccount`, fail-soft — an owner with no persisted localpart yet
+is omitted, never a fabricated candidate); `POST /bff/user/internal/mesh-devices/status`
+is the batch LoRa telemetry write-back (`{updated, ignored}`, fail-soft per element —
+unknown/revoked node ids are counted `ignored`, never an error).
+
 ## Where data lives (the routing rule)
 
 | Concern | Destination |
@@ -990,6 +1022,12 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   `user_notifications` in normal operation yet — the `hugmesh-actions` reconciler
   (separate repo, later PR) is the only writer. EXTERNAL channels (Matrix DM / Akkoma
   feed / phpBB / email) are roadmap (see below).
+- **Mesh-device claims have no bridge to call them yet.** `MeshDeviceController`
+  (claim/list/visibility/release) and the SERVICE-only `InternalMeshDeviceController`
+  (mapping read + status write-back) are fully live and tested, but the mesh↔Matrix
+  bridge that would actually consume the mapping and report LoRa status is a separate,
+  not-yet-built component — until it exists, a claimed device just sits in the
+  `mesh_device` table with no live status.
 - **Owner-enforcement coverage.** Enforced in EVERY service method (owner = JWT
   subject; body userId ignored) and tested at both the service layer
   (spoofed-body, owner+id-scoped delete) and the repository/SQL layer (owner
@@ -1008,11 +1046,11 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or landing) ·
 🔭 planned (design-complete, no code here). Every claim below is grounded in code/tests
 actually present in this worktree as of the commit this section was last refreshed
-against (`f0a73b9`, #124) — see `git log --oneline -40` for the full recent history.
+against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent history.
 
 - ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.7 / Spring Cloud
-  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–018, incl. DB-generated UUID
-  primary keys), Spring Native hints, springdoc OpenAPI.
+  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–019, incl. DB-generated UUID
+  primary keys + the mesh-device registry), Spring Native hints, springdoc OpenAPI.
 - ✅ **Casdoor JWT resource server + owner-enforcement** across every `/bff/user/**`
   surface; the canonical `CasdoorAuthorities` converter; `ROLE_SERVICE`-exclusive
   `/bff/user/internal/**`.
@@ -1022,7 +1060,7 @@ against (`f0a73b9`, #124) — see `git log --oneline -40` for the full recent hi
   avatar upload (dark)), home-guide, durable preferences, cards proxy, self-block +
   instance-block recommendation, self-silence (atomic activate), connected-clients
   audit, active login-session management, AI-cloak media proxy (dark), account-status
-  polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark), and the VN character-studio drawn-parts + expression-sticker surfaces (sanitized-SVG / magic-byte-sniffed PNG, both moderation-queued with a SERVICE-only internal resolve receiver).
+  polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark), the VN character-studio drawn-parts + expression-sticker surfaces (sanitized-SVG / magic-byte-sniffed PNG, both moderation-queued with a SERVICE-only internal resolve receiver), and mesh-device claims (owner-scoped Meshtastic LoRa node registry + a SERVICE-only internal mapping/status-writeback receiver for the not-yet-built mesh↔Matrix bridge).
 - ✅ **Homeserver proxy (D6) live by default** (`app.hs-token.enabled=true`); still
   fail-closed (503) until the custody key + service-account password are provisioned.
 - ✅ **Native-login session bridge + canonical identity resolution — on `main`, ALWAYS
@@ -1063,13 +1101,16 @@ against (`f0a73b9`, #124) — see `git log --oneline -40` for the full recent hi
   `ConnectedClientsController`'s live homeserver read/revoke has no bearer to forward
   for a native-login caller — the durable gateway revocation key is the real
   enforcement there, and this is a documented, not silently broken, gap.
-- **Multi-issuer `bff_` sessions resolve no `DOMAIN_` scope.** `AccountView` carries no
-  brand/domain field, so `BffSessionAuthenticationWebFilter` can only recover the
-  correct issuer-derived domain in single-issuer mode (today's only configured mode);
-  a genuinely multi-brand deployment would need a brand-aware field added to the
-  admin-bff introspection contract before a `bff_`-session caller can be scoped
-  cross-brand — until then it fails closed (denies domain-scoped rows) rather than
-  guessing.
+- ~~**Multi-issuer `bff_` sessions resolve no `DOMAIN_` scope.**~~ **CLOSED by #128**
+  (consumes `snapdragon-admin-bff-api`#230, the producer half). `AccountView`
+  now carries a nullable `issuer` (folded in on `resolveSession`), and
+  `BffSessionAuthenticationWebFilter` prefers the account's own issuer when THIS
+  deployment also trusts it, so a `bff_`-session caller on a genuinely multi-issuer
+  cluster resolves its real brand instead of `DOMAIN_default`/`__deny__`. Every
+  unverifiable case (blank/untrusted issuer, empty registry) still degrades to the
+  exact pre-#128 fallback — no scope is ever widened, only correctly recovered where it
+  used to fail closed. Live multi-brand smoke (a real two-Casdoor cluster) is still
+  unverified per #128's own PR notes.
 - **Residual uncertainty flagged by PR #124 itself** (not yet independently verified
   against a live Casdoor deployment): whether a real Casdoor **access** token carries
   the same `email`/`preferred_username` claims the **id_token** carried when admin-bff
