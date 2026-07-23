@@ -95,17 +95,21 @@ public class UserPreferencesService {
      */
     public Mono<Map<String, String>> get(String owner, String domain) {
         requireOwner(owner);
-        return repo.findAll(owner, domain).map(stored -> {
-            Map<String, String> out = new LinkedHashMap<>(defaults());
-            // the user's explicit, durable choices override the server defaults.
-            out.putAll(stored);
-            // The resolved view ALWAYS speaks the user-facing contract vocabulary:
-            // a legacy engine token ('glaze'|...) still sitting in a durable row is
-            // canonicalised to 'off|low|medium|high' on the way out.
-            out.computeIfPresent(MEDIA_POISON_DEFAULT,
-                    (k, v) -> canonicalPoisonToken(v));
-            return out;
-        });
+        return repo.findAll(owner, domain).map(this::resolveOver);
+    }
+
+    /**
+     * Merge the caller's DURABLE rows over the server defaults and canonicalise the
+     * result: the user's explicit choices win, and the resolved view ALWAYS speaks the
+     * user-facing contract vocabulary — a legacy engine token ({@code glaze}|…) still
+     * sitting in a durable row is translated to {@code off|low|medium|high} on the way
+     * out (see {@link #canonicalPoisonToken}).
+     */
+    private Map<String, String> resolveOver(Map<String, String> stored) {
+        Map<String, String> out = new LinkedHashMap<>(defaults());
+        out.putAll(stored);
+        out.computeIfPresent(MEDIA_POISON_DEFAULT, (k, v) -> canonicalPoisonToken(v));
+        return out;
     }
 
     /** Back-compat overload — operates on the platform {@code default} domain. */

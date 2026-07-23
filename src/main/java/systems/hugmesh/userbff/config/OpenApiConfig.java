@@ -77,16 +77,23 @@ public class OpenApiConfig {
             if (openApi.getComponents() == null) {
                 openApi.setComponents(new Components());
             }
-            openApi.getComponents().addSchemas("MediaPoisonMode",
-                    new StringSchema()
-                            ._enum(List.of("off", "low", "medium", "high"))
-                            .description("User-facing AI-cloak intensity for the "
-                                    + "media.poison.default preference (BFF-owned "
-                                    + "vocabulary; the source of truth for UI "
-                                    + "clients): off = no cloaking, low = subtle, "
-                                    + "medium = recommended default, high = "
-                                    + "aggressive. Maps server-side onto the engine "
-                                    + "cloak modes none|light|glaze|nightshade."));
+            openApi.getComponents().addSchemas("MediaPoisonMode", mediaPoisonModeSchema());
         };
+    }
+
+    /** The exported {@code MediaPoisonMode} schema — the user-facing AI-cloak vocabulary
+     *  {@code off|low|medium|high} (kept in lockstep with the BFF-owned
+     *  {@code systems.hugmesh.userbff.prefstore.MediaPoisonMode} enum). */
+    private static StringSchema mediaPoisonModeSchema() {
+        StringSchema schema = new StringSchema();
+        schema._enum(List.of("off", "low", "medium", "high"));
+        schema.setDescription("User-facing AI-cloak intensity for the "
+                + "media.poison.default preference (BFF-owned "
+                + "vocabulary; the source of truth for UI "
+                + "clients): off = no cloaking, low = subtle, "
+                + "medium = recommended default, high = "
+                + "aggressive. Maps server-side onto the engine "
+                + "cloak modes none|light|glaze|nightshade.");
+        return schema;
     }
 }
