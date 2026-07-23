@@ -1,0 +1,45 @@
+package systems.hugmesh.userbff.config;
+
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.servers.Server;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
+
+/**
+ * Minimal OpenAPI document metadata for the user BFF spec served by
+ * springdoc-openapi-starter-webflux-ui at {@code /v3/api-docs}.
+ *
+ * <p>Sets a stable {@code info.title} (the service name) + {@code info.version} so
+ * the generated artefacts downstream are sensibly named: the platform
+ * ng-openapi-gen typed client for the paired hugmesh-user-ui and the docs
+ * pipeline key off these fields. A programmatic {@link OpenAPI} bean is used
+ * (rather than the {@code @OpenAPIDefinition} annotation) so the metadata is plain
+ * bean wiring — no annotation reflection scan, which keeps the GraalVM native
+ * build hint surface minimal.
+ *
+ * <p>A single relative {@code ""} server is pinned so the spec is DETERMINISTIC: under
+ * Spring Boot 4 / springdoc-3.1, the auto-derived "Generated server url" otherwise
+ * resolves to the live (random) port when the spec is dumped from a RANDOM_PORT test,
+ * which would make the committed openapi.json non-byte-stable across runs. The relative
+ * server keeps every path resolving against whatever host the UI/docs pipeline reads the
+ * committed spec from.
+ */
+@Configuration(proxyBeanMethods = false)
+public class OpenApiConfig {
+
+    @Bean
+    OpenAPI userBffOpenApi() {
+        return new OpenAPI()
+                .servers(List.of(new Server().url("")))
+                .info(new Info()
+                        .title("hugmesh-user-bff-api")
+                        .version("0.2.0")
+                        .description("User BFF API (/bff/user/**) — owner-scoped profile, "
+                                + "home-guide preferences, federation-bundle cards, "
+                                + "self-blocking, and instance-block recommendation. "
+                                + "Every endpoint is keyed to the caller's Casdoor JWT subject."));
+    }
+}

@@ -45,7 +45,7 @@
         follows 005.
     -->
 
-    <changeSet id="006-1-self-silence" author="snapdragon">
+    <changeSet id="006-1-self-silence" author="hugmesh">
         <createTable tableName="self_silence">
             <column name="user_id" type="varchar(255)">
                 <constraints primaryKey="true" nullable="false"/>
@@ -65,7 +65,7 @@
     </changeSet>
 
     <!-- Production Postgres: a PARTIAL index over only the active (uncleared) rows. -->
-    <changeSet id="006-2-self-silence-active-index-pg" author="snapdragon" dbms="postgresql">
+    <changeSet id="006-2-self-silence-active-index-pg" author="hugmesh" dbms="postgresql">
         <sql>
             CREATE INDEX idx_self_silence_active
                 ON self_silence (expires_at)
@@ -78,7 +78,7 @@
 
     <!-- H2 slice DB (no partial-index predicate support): a plain composite index the
          same expiry scan (cleared_at IS NULL AND expires_at <= now) can use. -->
-    <changeSet id="006-2-self-silence-active-index-h2" author="snapdragon" dbms="h2">
+    <changeSet id="006-2-self-silence-active-index-h2" author="hugmesh" dbms="h2">
         <createIndex tableName="self_silence" indexName="idx_self_silence_active">
             <column name="cleared_at"/>
             <column name="expires_at"/>

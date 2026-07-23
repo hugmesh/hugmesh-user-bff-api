@@ -12,7 +12,7 @@
          row's id can be returned. A self-block additionally pushes the external
          mute/block to Matrix(tuwunel)/Mastodon(akkoma) — that external call is
          STUBBED (documented). -->
-    <changeSet id="003-user-block" author="snapdragon">
+    <changeSet id="003-user-block" author="hugmesh">
         <createTable tableName="user_block">
             <column name="id" type="varchar(64)">
                 <constraints primaryKey="true" nullable="false"/>

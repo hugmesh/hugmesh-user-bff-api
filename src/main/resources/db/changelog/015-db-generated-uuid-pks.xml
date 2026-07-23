@@ -52,7 +52,7 @@
          mod-bff / admin-bff exemplars. Gated to PostgreSQL: the test store for the
          migrated slices IS Postgres, and the production runtime is Postgres; the H2
          non-migrated slices MARK_RAN it (H2 has no pgcrypto). -->
-    <changeSet id="015-pgcrypto-extension" author="snapdragon">
+    <changeSet id="015-pgcrypto-extension" author="hugmesh">
         <preConditions onFail="MARK_RAN" onError="MARK_RAN">
             <dbms type="postgresql"/>
         </preConditions>
@@ -64,7 +64,7 @@
     <!-- user_block.id (varchar(64), changelog 003): DB-generate via
          (gen_random_uuid())::text instead of UserBlockRepository minting
          UUID.randomUUID().toString(). INSERT omits id; RETURNING id reads it back. -->
-    <changeSet id="015-gen-uuid-user_block" author="snapdragon">
+    <changeSet id="015-gen-uuid-user_block" author="hugmesh">
         <comment>DB-generate user_block.id ((gen_random_uuid())::text) instead of the
                  app minting it; INSERT omits id, RETURNING id reads it back.</comment>
         <addDefaultValue tableName="user_block" columnName="id"
@@ -74,7 +74,7 @@
 
     <!-- connected_client_audit.id (varchar(64), changelog 009): DB-generate via
          (gen_random_uuid())::text instead of ConnectedClientAuditRepository minting it. -->
-    <changeSet id="015-gen-uuid-connected_client_audit" author="snapdragon">
+    <changeSet id="015-gen-uuid-connected_client_audit" author="hugmesh">
         <comment>DB-generate connected_client_audit.id ((gen_random_uuid())::text) instead
                  of the app minting it; INSERT omits id, RETURNING id reads it back.</comment>
         <addDefaultValue tableName="connected_client_audit" columnName="id"
@@ -84,7 +84,7 @@
 
     <!-- media_poison_decision.id (varchar(64), changelog 007): DB-generate via
          (gen_random_uuid())::text instead of MediaPoisonDecisionRepository minting it. -->
-    <changeSet id="015-gen-uuid-media_poison_decision" author="snapdragon">
+    <changeSet id="015-gen-uuid-media_poison_decision" author="hugmesh">
         <comment>DB-generate media_poison_decision.id ((gen_random_uuid())::text) instead of
                  the app minting it; INSERT omits id, RETURNING id reads it back.</comment>
         <addDefaultValue tableName="media_poison_decision" columnName="id"
@@ -97,7 +97,7 @@
          UUID.randomUUID()). The production insertIfAbsent path supplies a DETERMINISTIC
          id explicitly (idempotency pre-check) — the DEFAULT only fires when id is OMITTED,
          so the deterministic path is unaffected. -->
-    <changeSet id="015-gen-uuid-user_notifications" author="snapdragon">
+    <changeSet id="015-gen-uuid-user_notifications" author="hugmesh">
         <comment>DB-generate user_notifications.id ((gen_random_uuid())::text) for the
                  id-omitted INSERT. The deterministic insertIfAbsent path supplies id
                  explicitly and is unaffected by the DEFAULT.</comment>
@@ -110,7 +110,7 @@
          (gen_random_uuid())::text for the insert-if-absent leg of the custody upsert
          (was UUID.randomUUID().toString()). The update-first leg keyed on
          (owner_subject, platform) is unchanged. -->
-    <changeSet id="015-gen-uuid-hs_service_token" author="snapdragon">
+    <changeSet id="015-gen-uuid-hs_service_token" author="hugmesh">
         <comment>DB-generate hs_service_token.id ((gen_random_uuid())::text) for the
                  insert-if-absent leg; the update-first leg keyed on
                  (owner_subject, platform) is unchanged.</comment>

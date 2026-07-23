@@ -1,4 +1,4 @@
-# user-bff — the Backend-For-Frontend the snapdragon-user-ui talks to for the
+# user-bff — the Backend-For-Frontend the hugmesh-user-ui talks to for the
 # self-service user surfaces (/bff/user/**): profile, preferences, and block list.
 # It owns the user_profile / user_preference / user_block tables in its OWN
 # dedicated Postgres (user-bff-db) and calls federation-api (as a JWT-bearing

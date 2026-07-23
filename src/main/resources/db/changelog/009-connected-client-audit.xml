@@ -36,7 +36,7 @@
         constraint has an explicit rollback. Changeset id 009 follows 008.
     -->
 
-    <changeSet id="009-1-connected-client-audit" author="snapdragon">
+    <changeSet id="009-1-connected-client-audit" author="hugmesh">
         <createTable tableName="connected_client_audit">
             <column name="id" type="varchar(64)">
                 <constraints primaryKey="true" nullable="false"/>
@@ -61,7 +61,7 @@
         </createTable>
     </changeSet>
 
-    <changeSet id="009-2-connected-client-audit-platform-check" author="snapdragon">
+    <changeSet id="009-2-connected-client-audit-platform-check" author="hugmesh">
         <sql>
             ALTER TABLE connected_client_audit
                 ADD CONSTRAINT ck_connected_client_platform
@@ -72,7 +72,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="009-3-connected-client-audit-kind-check" author="snapdragon">
+    <changeSet id="009-3-connected-client-audit-kind-check" author="hugmesh">
         <sql>
             ALTER TABLE connected_client_audit
                 ADD CONSTRAINT ck_connected_client_kind
@@ -84,7 +84,7 @@
     </changeSet>
 
     <!-- The owner+active scan (list a user's not-yet-revoked clients) is the hot path. -->
-    <changeSet id="009-4-connected-client-audit-owner-index" author="snapdragon">
+    <changeSet id="009-4-connected-client-audit-owner-index" author="hugmesh">
         <createIndex tableName="connected_client_audit" indexName="idx_connected_client_owner">
             <column name="owner"/>
         </createIndex>

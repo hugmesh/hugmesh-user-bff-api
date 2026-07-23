@@ -1,4 +1,4 @@
-# Security — snapdragon-user-bff-api
+# Security — hugmesh-user-bff-api
 
 ## Authentication layers
 
@@ -19,7 +19,7 @@ This BFF is defended in depth by two independent layers:
 
 ## How the mTLS layer is wired
 
-The cluster CA is the offline root from `snapdragon-generator/scripts/gen-keystores.sh`.
+The cluster CA is the offline root from `hugmesh-generator/scripts/gen-keystores.sh`.
 In-cluster, Vault PKI imports that CA and issues a short-lived leaf cert per app;
 External Secrets Operator (ESO) syncs it into the `snapdragon-user-bff-api-mtls`
 `kubernetes.io/tls` Secret (`tls.crt` / `tls.key` / `ca.crt`). A keystore
@@ -58,9 +58,9 @@ existing tests run unchanged. `client-auth` maps to Netty's `ClientAuth`:
 `none → NONE`, `want → OPTIONAL`, `need → REQUIRE`. WebFlux/Netty reads these
 properties directly; no custom `SslContext`/`HttpServer` bean is needed.
 
-## Deployment requirement (owned by snapdragon-generator)
+## Deployment requirement (owned by hugmesh-generator)
 
-The deployment manifest for this BFF lives in `snapdragon-generator`
+The deployment manifest for this BFF lives in `hugmesh-generator`
 (`specs/cluster/manifests/user-bff-api/deployment.yaml`), not in this repo. To
 turn enforcement on, that deployment must (a) add the keystore initContainer +
 `pki` (from `snapdragon-user-bff-api-mtls`) and `stores` (tmpfs) volumes —

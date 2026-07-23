@@ -6,56 +6,56 @@
 
   <!-- The org metapom — consolidates the Spring Boot 4.0.7 / Java 25 reactive BFF
        baseline (WebFlux + Casdoor OAuth2 resource server + R2DBC/Liquibase +
-       SpringDoc), the shared <dependencies>, dependencyManagement (snapdragon-commons,
+       SpringDoc), the shared <dependencies>, dependencyManagement (hugmesh-commons,
        AWS SDK BOM, resilience4j, springdoc), pluginManagement (compiler / surefire
        bytebuddy flag / spring-boot / native) and the GitLab Maven publishing wiring.
-       snapdragon-parent is itself a child of spring-boot-starter-parent:4.0.7, so the
+       hugmesh-parent is itself a child of spring-boot-starter-parent:4.0.7, so the
        Spring Boot dependency + plugin management is inherited TRANSITIVELY. -->
   <parent>
-    <groupId>systems.snapdragon</groupId>
-    <artifactId>snapdragon-parent</artifactId>
-    <version>2.7.0</version>
+    <groupId>systems.hugmesh</groupId>
+    <artifactId>hugmesh-parent</artifactId>
+    <version>2.8.0</version>
     <relativePath/>
   </parent>
 
-  <groupId>systems.snapdragon</groupId>
+  <groupId>systems.hugmesh</groupId>
   <!-- NO -api suffix in the artifactId (mirrors admin-bff): -api is only in the
        repo/service/image name. -->
   <artifactId>user-bff</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <properties>
-    <!-- java.version (25), encoding, the snapdragon-commons version and the springdoc
-         version are all inherited from snapdragon-parent. ONLY the repo-specific pins
+    <!-- java.version (25), encoding, the hugmesh-commons version and the springdoc
+         version are all inherited from hugmesh-parent. ONLY the repo-specific pins
          (icu4j / commons-text) stay below on the dependencies themselves. -->
   </properties>
   <dependencies>
-    <!-- The shared, canonical Snapdragon security/tenancy/config/web building blocks
+    <!-- The shared, canonical HugMesh security/tenancy/config/web building blocks
          (Casdoor JWT authorities, issuer->domain DomainRegistry, Roles helpers, the
          config-gated multi-issuer TenancyResourceServerConfig, the static-utility
          tenancy.DomainScope, the BFF web.ApiException). Version is MANAGED by
-         snapdragon-parent's dependencyManagement, so NO <version> here. This replaces
+         hugmesh-parent's dependencyManagement, so NO <version> here. This replaces
          this repo's deleted local copies of security.{Roles,DomainRegistry,DomainScope,
          CasdoorAuthorities}, config.TenancyResourceServerConfig and web.ApiException. -->
     <dependency>
-      <groupId>systems.snapdragon</groupId>
-      <artifactId>snapdragon-commons</artifactId>
+      <groupId>systems.hugmesh</groupId>
+      <artifactId>hugmesh-commons</artifactId>
     </dependency>
 
-    <!-- snapdragon-commons TEST-JAR — provides the shared Testcontainers Postgres
-         base (systems.snapdragon.commons.testsupport.PostgresTestSupport) that
+    <!-- hugmesh-commons TEST-JAR — provides the shared Testcontainers Postgres
+         base (systems.hugmesh.commons.testsupport.PostgresTestSupport) that
          full-context @SpringBootTest tests extend under Spring Boot 4. Carries an
-         EXPLICIT <version>2.0.0</version>: snapdragon-parent's dependencyManagement
-         entry for snapdragon-commons has NO <classifier>, so it manages only the
+         EXPLICIT <version>2.1.0</version>: hugmesh-parent's dependencyManagement
+         entry for hugmesh-commons has NO <classifier>, so it manages only the
          MAIN classifier — a tests-classifier dependency does NOT inherit a version
-         from it and must pin one here. 2.0.0 is the REAL published commons artifact
-         coordinate (commons' own project <version> on main is 2.0.0; 2.7.0 is the
+         from it and must pin one here. 2.1.0 is the REAL published commons artifact
+         coordinate (commons' own project <version> on main is 2.1.0; 2.8.0 is the
          PARENT version and was never published as a commons jar — it 404s on a
-         clean-CI build). 2.0.0 carries current content under commons' overwrite
-         publish model and is byte-identical to the relabeled 2.7.0. -->
+         clean-CI build). 2.1.0 carries current content under commons' overwrite
+         publish model and is byte-identical to the relabeled 2.8.0. -->
     <dependency>
-      <groupId>systems.snapdragon</groupId>
-      <artifactId>snapdragon-commons</artifactId>
-      <version>2.0.0</version>
+      <groupId>systems.hugmesh</groupId>
+      <artifactId>hugmesh-commons</artifactId>
+      <version>2.1.0</version>
       <classifier>tests</classifier>
       <scope>test</scope>
     </dependency>
@@ -66,17 +66,18 @@
          SessionCookieService / SessionCookieWebFilter, the X-Internal-Token guard
          (InternalTokenWebFilter), the InternalSurfaceBootGuard and the canonical
          reserved.ReservedNames (this repo's local profile.ReservedNames dup is deleted
-         in favour of it). Unlike snapdragon-commons, auth-core is NOT parent-managed —
-         so this dependency carries an EXPLICIT <version>. PINNED to 2.3.3 (crossing
-         2.3.1's ensureAccount roles + 2.3.2's bff_ cookie custody bridge on the way from
-         the original 2.0.0 pin): 2.3.3 is the release that picks up auth-core's
-         ReservedNames canonical-revision sync (character-studio / v1 / ai + 4 frontend
-         webroot filenames), which this BFF's ProfileService/UsernameSkeleton username
-         guard consumes directly. -->
+         in favour of it). Unlike hugmesh-commons, auth-core is NOT parent-managed —
+         so this dependency carries an EXPLICIT <version>. PINNED to 2.4.0 (bumped from
+         the pre-rebrand 2.3.3 pin as part of the HugMesh rename: 2.4.0 is the
+         hugmesh-auth-core coordinate now published for real under the renamed
+         groupId/artifactId): this still carries auth-core's ReservedNames
+         canonical-revision sync (character-studio / v1 / ai + 4 frontend webroot
+         filenames), which this BFF's ProfileService/UsernameSkeleton username guard
+         consumes directly. -->
     <dependency>
-      <groupId>systems.snapdragon</groupId>
-      <artifactId>snapdragon-auth-core</artifactId>
-      <version>2.3.3</version>
+      <groupId>systems.hugmesh</groupId>
+      <artifactId>hugmesh-auth-core</artifactId>
+      <version>2.4.0</version>
     </dependency>
 
     <!-- ============================================================================
@@ -84,7 +85,7 @@
          oauth2-resource-server / validation), the data-access stack (data-r2dbc /
          r2dbc-postgresql / liquibase-core / spring-jdbc / postgresql), springdoc, and
          the whole test stack (spring-boot-starter-test / reactor-test /
-         spring-security-test / r2dbc-h2 / h2) are INHERITED from snapdragon-parent's
+         spring-security-test / r2dbc-h2 / h2) are INHERITED from hugmesh-parent's
          common <dependencies>. They were removed here to de-duplicate. ONLY the
          repo-specific dependencies below remain.
          ============================================================================ -->
@@ -112,7 +113,7 @@
   </dependencies>
   <build><plugins>
     <!-- The spring-boot, native and surefire (bytebuddy-experimental argLine)
-         plugins are configured in snapdragon-parent's pluginManagement; declaring
+         plugins are configured in hugmesh-parent's pluginManagement; declaring
          them here (no config) binds the managed config. The native plugin is bound
          so `./mvnw -Pnative native:compile` works; spring-boot repackages the app. -->
     <plugin>

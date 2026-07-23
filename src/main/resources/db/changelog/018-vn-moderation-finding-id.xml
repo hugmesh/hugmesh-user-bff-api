@@ -34,7 +34,7 @@
     -->
 
     <!-- ── vn_character_part.finding_id ─────────────────────────────────────── -->
-    <changeSet id="018-1-vn-character-part-finding-id" author="snapdragon">
+    <changeSet id="018-1-vn-character-part-finding-id" author="hugmesh">
         <addColumn tableName="vn_character_part">
             <column name="finding_id" type="bigint"/>
         </addColumn>
@@ -43,7 +43,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="018-2-vn-character-part-finding-id-index" author="snapdragon">
+    <changeSet id="018-2-vn-character-part-finding-id-index" author="hugmesh">
         <createIndex tableName="vn_character_part" indexName="idx_vn_character_part_finding_id">
             <column name="finding_id"/>
         </createIndex>
@@ -53,7 +53,7 @@
     </changeSet>
 
     <!-- ── vn_sticker_pack.finding_id ───────────────────────────────────────── -->
-    <changeSet id="018-3-vn-sticker-pack-finding-id" author="snapdragon">
+    <changeSet id="018-3-vn-sticker-pack-finding-id" author="hugmesh">
         <addColumn tableName="vn_sticker_pack">
             <column name="finding_id" type="bigint"/>
         </addColumn>
@@ -62,7 +62,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="018-4-vn-sticker-pack-finding-id-index" author="snapdragon">
+    <changeSet id="018-4-vn-sticker-pack-finding-id-index" author="hugmesh">
         <createIndex tableName="vn_sticker_pack" indexName="idx_vn_sticker_pack_finding_id">
             <column name="finding_id"/>
         </createIndex>

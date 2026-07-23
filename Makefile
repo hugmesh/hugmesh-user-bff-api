@@ -1,4 +1,4 @@
-# Snapdragon user-bff-api — developer make targets.
+# HugMesh user-bff-api — developer make targets.
 #
 # `make pentest` runs the SAME OWASP checks the GitLab CI pentest stage runs, so a
 # developer can self-scan locally before pushing (mirrors .gitlab-ci.yml: the
@@ -13,7 +13,7 @@ SCA_FAIL_CVSS ?= 9
 # JDK image used for the dockerized SCA run (matches the CI security job image).
 JDK_IMAGE     ?= eclipse-temurin:21-jdk-noble
 # Where to find the shared DAST harness. Override if you vendor/clone it elsewhere.
-PENTEST_HARNESS_DIR ?= ../snapdragon-generator/tests/pentest
+PENTEST_HARNESS_DIR ?= ../hugmesh-generator/tests/pentest
 
 .PHONY: pentest pentest-sca pentest-dast
 
@@ -56,7 +56,7 @@ pentest-dast:
 	else \
 		echo "[pentest-dast] harness not found at $(PENTEST_HARNESS_DIR)/run-pentest.sh"; \
 		echo "[pentest-dast] clone it, e.g.:"; \
-		echo "    git clone https://github.com/Snapdragon-Systems/snapdragon-generator /tmp/sg"; \
+		echo "    git clone https://github.com/Snapdragon-Systems/hugmesh-generator /tmp/sg"; \
 		echo "    PENTEST_HARNESS_DIR=/tmp/sg/tests/pentest make pentest-dast"; \
 		echo "[pentest-dast] skipping (non-fatal)."; \
 	fi

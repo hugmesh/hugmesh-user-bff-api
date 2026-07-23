@@ -43,7 +43,7 @@
         registered LAST in the master with a SINGLE <include>.
     -->
 
-    <changeSet id="017-1-vn-sticker-pack" author="snapdragon">
+    <changeSet id="017-1-vn-sticker-pack" author="hugmesh">
         <createTable tableName="vn_sticker_pack">
             <column name="id" type="varchar(64)" defaultValueComputed="(gen_random_uuid())::text">
                 <constraints primaryKey="true" nullable="false"/>
@@ -70,7 +70,7 @@
     </changeSet>
 
     <!-- Owner + domain list index for the "my stickers, newest first" read. -->
-    <changeSet id="017-2-vn-sticker-pack-index" author="snapdragon">
+    <changeSet id="017-2-vn-sticker-pack-index" author="hugmesh">
         <createIndex tableName="vn_sticker_pack" indexName="idx_vn_sticker_pack_owner_domain">
             <column name="owner_subject"/>
             <column name="domain"/>
@@ -82,7 +82,7 @@
 
     <!-- DB parity for the API-enforced status vocabulary (plain ANSI col IN (...),
          runs identically on production Postgres AND the H2 PostgreSQL-compat slice). -->
-    <changeSet id="017-3-vn-sticker-pack-status-check" author="snapdragon">
+    <changeSet id="017-3-vn-sticker-pack-status-check" author="hugmesh">
         <sql>
             ALTER TABLE vn_sticker_pack
                 ADD CONSTRAINT ck_vn_sticker_pack_status
@@ -96,7 +96,7 @@
     <!-- DB parity for the API-enforced canonical expression vocabulary (StickerExpression).
          The label set MUST stay identical to StickerExpression.ALL (the API gate) — the
          two paired vocabularies are kept in lock-step by convention. -->
-    <changeSet id="017-4-vn-sticker-pack-expression-check" author="snapdragon">
+    <changeSet id="017-4-vn-sticker-pack-expression-check" author="hugmesh">
         <sql>
             ALTER TABLE vn_sticker_pack
                 ADD CONSTRAINT ck_vn_sticker_pack_expression

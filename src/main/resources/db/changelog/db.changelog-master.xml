@@ -41,7 +41,7 @@
               (notification_preference). Both owner-keyed (user_subject) + domain-
               scoped; prefs MIRROR 011 (domain-first composite PK). account-restriction
               is FORCED-ON (un-silenceable) — API-coerced + a DB CHECK backstop. SHIPS
-              DARK: nothing writes user_notifications yet (the snapdragon-actions
+              DARK: nothing writes user_notifications yet (the hugmesh-actions
               reconciler in a later PR is the only writer); this is the read/prefs side.
         013 — D6 hs_service_token: the SERVER-SIDE CUSTODY STORE for homeserver-NATIVE
               Matrix/Mastodon access tokens this BFF mints + holds per user. One row

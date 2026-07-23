@@ -6,7 +6,7 @@
 # neither `dev` nor `test`, so the `filterChain` (prod) bean is selected.
 #
 # The DB is a REAL Postgres container wired by the shared
-# systems.snapdragon.commons.testsupport.PostgresTestSupport base (the test extends
+# systems.hugmesh.commons.testsupport.PostgresTestSupport base (the test extends
 # it): spring.r2dbc.url / spring.liquibase.url + credentials come from the base via
 # @DynamicPropertySource, so the production R2dbcAutoConfiguration +
 # LiquibaseAutoConfiguration run and Liquibase migrates the DB. The real multi-issuer

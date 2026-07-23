@@ -28,7 +28,7 @@
         id 008 follows the current max (006 on main).
     -->
 
-    <changeSet id="008-user-profile-screen-reader-name" author="snapdragon">
+    <changeSet id="008-user-profile-screen-reader-name" author="hugmesh">
         <addColumn tableName="user_profile">
             <!-- ASCII-only spoken/aria-label name; NULL when not yet set (the read
                  side defaults from display_name when that is ASCII). -->

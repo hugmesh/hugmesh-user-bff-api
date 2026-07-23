@@ -36,7 +36,7 @@
         Postgres AND the H2 PostgreSQL-compat slice DB. Changeset id 011 follows 010.
     -->
 
-    <changeSet id="011-1-user-preferences-store" author="snapdragon">
+    <changeSet id="011-1-user-preferences-store" author="hugmesh">
         <createTable tableName="user_preferences_store">
             <column name="user_id" type="varchar(255)">
                 <constraints nullable="false"/>
@@ -61,7 +61,7 @@
 
     <!-- The owner+domain list scan (GET /bff/user/preferences returns ALL of a
          caller's prefs in their brand) is the hot read path. -->
-    <changeSet id="011-2-user-preferences-store-index" author="snapdragon">
+    <changeSet id="011-2-user-preferences-store-index" author="hugmesh">
         <createIndex tableName="user_preferences_store"
                      indexName="idx_user_prefs_store_owner_domain">
             <column name="user_id"/>

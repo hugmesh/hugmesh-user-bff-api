@@ -65,7 +65,7 @@
         registered LAST in the master with a SINGLE <include>.
     -->
 
-    <changeSet id="019-1-mesh-device" author="snapdragon">
+    <changeSet id="019-1-mesh-device" author="hugmesh">
         <createTable tableName="mesh_device">
             <column name="id" type="varchar(64)" defaultValueComputed="(gen_random_uuid())::text">
                 <constraints primaryKey="true" nullable="false"/>
@@ -107,7 +107,7 @@
     </changeSet>
 
     <!-- Owner + domain list index for the "my devices, newest first" read. -->
-    <changeSet id="019-2-mesh-device-index" author="snapdragon">
+    <changeSet id="019-2-mesh-device-index" author="hugmesh">
         <createIndex tableName="mesh_device" indexName="idx_mesh_device_owner_domain">
             <column name="owner_subject"/>
             <column name="domain"/>
@@ -123,7 +123,7 @@
          changeset (MARK_RAN elsewhere): production Postgres AND the Testcontainers-
          Postgres slices get the CHECK; the residual H2 slices — which never touch
          mesh_device — skip it. -->
-    <changeSet id="019-3-mesh-device-node-id-check" author="snapdragon">
+    <changeSet id="019-3-mesh-device-node-id-check" author="hugmesh">
         <preConditions onFail="MARK_RAN" onError="MARK_RAN">
             <dbms type="postgresql"/>
         </preConditions>
@@ -139,7 +139,7 @@
 
     <!-- DB parity for the API-enforced visibility vocabulary (plain ANSI col IN (...),
          runs identically on production Postgres AND the H2 PostgreSQL-compat slice). -->
-    <changeSet id="019-4-mesh-device-visibility-check" author="snapdragon">
+    <changeSet id="019-4-mesh-device-visibility-check" author="hugmesh">
         <sql>
             ALTER TABLE mesh_device
                 ADD CONSTRAINT ck_mesh_device_visibility
@@ -151,7 +151,7 @@
     </changeSet>
 
     <!-- DB parity for the moderation-state vocabulary (same ANSI idiom). -->
-    <changeSet id="019-5-mesh-device-state-check" author="snapdragon">
+    <changeSet id="019-5-mesh-device-state-check" author="hugmesh">
         <sql>
             ALTER TABLE mesh_device
                 ADD CONSTRAINT ck_mesh_device_state
@@ -166,7 +166,7 @@
          convention). NULL passes a CHECK by definition (not-yet-reported rows). Plain
          ANSI BETWEEN — Postgres + H2 identical. The service CLAMPS bridge telemetry into
          this range before the UPDATE; this is the backstop. -->
-    <changeSet id="019-6-mesh-device-battery-check" author="snapdragon">
+    <changeSet id="019-6-mesh-device-battery-check" author="hugmesh">
         <sql>
             ALTER TABLE mesh_device
                 ADD CONSTRAINT ck_mesh_device_battery_pct

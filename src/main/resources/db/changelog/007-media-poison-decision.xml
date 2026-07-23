@@ -48,7 +48,7 @@
         follows 006.
     -->
 
-    <changeSet id="007-1-media-poison-decision" author="snapdragon">
+    <changeSet id="007-1-media-poison-decision" author="hugmesh">
         <createTable tableName="media_poison_decision">
             <column name="id" type="varchar(64)">
                 <constraints primaryKey="true" nullable="false"/>
@@ -75,7 +75,7 @@
 
     <!-- Owner + media_ref lookup index for the status/badge + already-cloaked
          repost-guard reads (find my decision for a media_ref). -->
-    <changeSet id="007-2-media-poison-decision-index" author="snapdragon">
+    <changeSet id="007-2-media-poison-decision-index" author="hugmesh">
         <createIndex tableName="media_poison_decision" indexName="idx_media_poison_owner_ref">
             <column name="user_id"/>
             <column name="media_ref"/>
@@ -86,7 +86,7 @@
     </changeSet>
 
     <!-- DB parity for the API-enforced platform vocabulary {matrix|mastodon}. -->
-    <changeSet id="007-3-media-poison-platform-check" author="snapdragon">
+    <changeSet id="007-3-media-poison-platform-check" author="hugmesh">
         <sql>
             ALTER TABLE media_poison_decision
                 ADD CONSTRAINT ck_media_poison_platform
@@ -98,7 +98,7 @@
     </changeSet>
 
     <!-- DB parity for the API-enforced mode vocabulary {glaze|nightshade|light|none}. -->
-    <changeSet id="007-4-media-poison-mode-check" author="snapdragon">
+    <changeSet id="007-4-media-poison-mode-check" author="hugmesh">
         <sql>
             ALTER TABLE media_poison_decision
                 ADD CONSTRAINT ck_media_poison_mode
@@ -110,7 +110,7 @@
     </changeSet>
 
     <!-- DB parity for the honest status vocabulary. -->
-    <changeSet id="007-5-media-poison-status-check" author="snapdragon">
+    <changeSet id="007-5-media-poison-status-check" author="hugmesh">
         <sql>
             ALTER TABLE media_poison_decision
                 ADD CONSTRAINT ck_media_poison_status

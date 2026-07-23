@@ -12,7 +12,7 @@
          pref_key) keeps it owner-keyed AND one row per (user, key). pref_value is a
          portable text column ('true'/'false' for the guide flags; free text for any
          future preference). -->
-    <changeSet id="002-user-preference" author="snapdragon">
+    <changeSet id="002-user-preference" author="hugmesh">
         <createTable tableName="user_preference">
             <column name="user_id" type="varchar(255)">
                 <constraints nullable="false"/>

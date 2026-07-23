@@ -8,7 +8,7 @@
     <!--
         vn_character_part — a USER-DRAWN character PART (an SVG) for the VN/character-
         studio drawable-parts feature. The stored `svg` is the SERVER-SANITIZED subset
-        (systems.snapdragon.userbff.svg.SvgSanitizerService allowlist-filters the dirty
+        (systems.hugmesh.userbff.svg.SvgSanitizerService allowlist-filters the dirty
         client SVG BEFORE it ever lands here), so the column never holds raw user XML —
         the security boundary runs in the service, the DB is the durable store.
 
@@ -38,7 +38,7 @@
         registered LAST in the master with a SINGLE <include>.
     -->
 
-    <changeSet id="016-1-vn-character-part" author="snapdragon">
+    <changeSet id="016-1-vn-character-part" author="hugmesh">
         <createTable tableName="vn_character_part">
             <column name="id" type="varchar(64)" defaultValueComputed="(gen_random_uuid())::text">
                 <constraints primaryKey="true" nullable="false"/>
@@ -64,7 +64,7 @@
     </changeSet>
 
     <!-- Owner + domain list index for the "my parts, newest first" read. -->
-    <changeSet id="016-2-vn-character-part-index" author="snapdragon">
+    <changeSet id="016-2-vn-character-part-index" author="hugmesh">
         <createIndex tableName="vn_character_part" indexName="idx_vn_character_part_owner_domain">
             <column name="owner_subject"/>
             <column name="domain"/>
@@ -76,7 +76,7 @@
 
     <!-- DB parity for the API-enforced status vocabulary (plain ANSI col IN (...),
          runs identically on production Postgres AND the H2 PostgreSQL-compat slice). -->
-    <changeSet id="016-3-vn-character-part-status-check" author="snapdragon">
+    <changeSet id="016-3-vn-character-part-status-check" author="hugmesh">
         <sql>
             ALTER TABLE vn_character_part
                 ADD CONSTRAINT ck_vn_character_part_status

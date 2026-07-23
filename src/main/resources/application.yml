@@ -1,6 +1,6 @@
 spring:
   application:
-    name: snapdragon-user-bff-api
+    name: hugmesh-user-bff-api
   security:
     oauth2:
       resourceserver:
@@ -8,7 +8,7 @@ spring:
           issuer-uri: "${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}"
           # Explicit JWKS so the resource server does NOT do OIDC discovery against issuer-uri
           # (unreachable in-container when issuer-uri is the browser-facing localhost:8000, which
-          # 500s every authenticated call). Mirrors snapdragon-actions + the gateway; compose sets
+          # 500s every authenticated call). Mirrors hugmesh-actions + the gateway; compose sets
           # CASDOOR_JWKS_URI=http://casdoor:8000/.well-known/jwks. iss is still validated via issuer-uri.
           jwk-set-uri: "${CASDOOR_JWKS_URI:${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}/.well-known/jwks}"
 
@@ -43,12 +43,12 @@ federation:
 # (keystore.p12) and trusts the cluster CA (truststore.p12). It REUSES the same
 # SSL_* env the server-side stores use — one mounted /stores layout serves both
 # directions. DEFAULT OFF: local/dev/CI (plain http, no stores) is unaffected; the
-# in-cluster deployment sets SNAPDRAGON_MTLS_CLIENT_ENABLED=true alongside the
+# in-cluster deployment sets HUGMESH_MTLS_CLIENT_ENABLED=true alongside the
 # server-side SSL_CLIENT_AUTH=need.
-snapdragon:
+hugmesh:
   mtls:
     client:
-      enabled: "${SNAPDRAGON_MTLS_CLIENT_ENABLED:false}"
+      enabled: "${HUGMESH_MTLS_CLIENT_ENABLED:false}"
       key-store: "${SSL_KEY_STORE:/stores/keystore.p12}"
       key-store-type: "${SSL_KEY_STORE_TYPE:PKCS12}"
       key-store-password: "${SSL_KEY_STORE_PASSWORD:}"
@@ -68,7 +68,7 @@ casdoor:
     client-id: "${CASDOOR_ACCOUNT_CLIENT_ID:user-bff}"
     client-secret: "${CASDOOR_ACCOUNT_CLIENT_SECRET:}"
 
-# External self-block push targets. Base URLs grounded in the snapdragon-generator
+# External self-block push targets. Base URLs grounded in the hugmesh-generator
 # manifests (tuwunel = Matrix :8008, akkoma = Mastodon-API :4000). STUBBED by
 # default (enabled=false) — the durable user_block row is the source of truth; the
 # external push needs per-user token brokering before going live (see README).
@@ -250,7 +250,7 @@ app:
   # proxy 503s even if enabled=true (fail-closed, no plaintext fallback).
   #
   # matrix-url/mastodon-url: the per-pod mTLS proxy sidecars the mint + proxy forward
-  # through (ssl_verify_client on; the BFF presents the SNAPDRAGON_MTLS_CLIENT_* PKI
+  # through (ssl_verify_client on; the BFF presents the HUGMESH_MTLS_CLIENT_* PKI
   # identity). svc-password: the homeserver service-account password the broker mints
   # with — ESO/Vault-sourced at deploy, never a real literal in git.
   #
@@ -307,7 +307,7 @@ app:
     # The REAL homeserver upload + served-byte re-fetch goes through the EXISTING
     # mTLS proxies (akkoma-proxy:4443 / tuwunel-proxy:4443, ssl_verify_client on) —
     # NEVER by mounting the RWO media PVCs. The BFF presents its cluster-CA client
-    # identity (the same SNAPDRAGON_MTLS_CLIENT_* stores as federation) and forwards
+    # identity (the same HUGMESH_MTLS_CLIENT_* stores as federation) and forwards
     # the caller bearer only as far as the BFF. Default-OFF per platform so
     # local/dev/CI (no proxy/stores) wires null clients ⇒ forward-through.
     proxy:
@@ -346,7 +346,7 @@ spring.webflux.multipart:
   max-parts: 16
 
 # SpringDoc OpenAPI. The spec at /v3/api-docs is the source the platform
-# ng-openapi-gen typed client (the paired snapdragon-user-ui) + the docs pipeline
+# ng-openapi-gen typed client (the paired hugmesh-user-ui) + the docs pipeline
 # consume. Spec + UI are gated by SecurityConfig: permitAll under dev/test (so
 # `gen:fetch` can curl the spec without a token) and ROLE_ADMIN otherwise (prod).
 springdoc:
@@ -359,7 +359,7 @@ springdoc:
     path: /swagger-ui.html
   # Restrict the component scan to this BFF's own controllers so the spec stays the
   # user-BFF surface only (no stray springframework/actuator paths leak in).
-  packages-to-scan: systems.snapdragon.userbff
+  packages-to-scan: systems.hugmesh.userbff
 
 management:
   endpoints:

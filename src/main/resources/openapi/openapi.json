@@ -1,9 +1,9 @@
 {
   "openapi" : "3.0.1",
   "info" : {
-    "title" : "snapdragon-user-bff-api",
+    "title" : "hugmesh-user-bff-api",
     "description" : "User BFF API (/bff/user/**) — owner-scoped profile, home-guide preferences, federation-bundle cards, self-blocking, and instance-block recommendation. Every endpoint is keyed to the caller's Casdoor JWT subject.",
-    "version" : "0.1.0"
+    "version" : "0.2.0"
   },
   "servers" : [ {
     "url" : ""

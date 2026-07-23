@@ -1,7 +1,7 @@
-# snapdragon-user-bff-api
+# hugmesh-user-bff-api
 
 Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with the
-(later) `snapdragon-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
+(later) `hugmesh-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
 resource-server + springdoc + Spring Native, scaffolded from the
 `snapdragon-admin-bff-api` template (same stack, same conventions). Java 25 LTS,
 Spring Boot 4.0.7 / Spring Cloud 2025.1.2.
@@ -32,11 +32,11 @@ mod BFF. It talks to:
 ```mermaid
 flowchart LR
     LoginUI["login-ui<br/>(native username/password form → POST /bff/login)"]:::planned
-    UI["snapdragon-user-ui<br/>(later; ng-openapi-gen)"]:::planned
-    GW["snapdragon gateway<br/>(Casdoor-JWT RS + bff_→JWT swap + route-access gate)"]
+    UI["hugmesh-user-ui<br/>(later; ng-openapi-gen)"]:::planned
+    GW["hugmesh gateway<br/>(Casdoor-JWT RS + bff_→JWT swap + route-access gate)"]
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
-    subgraph BFF["snapdragon-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
+    subgraph BFF["hugmesh-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
         Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE) ·<br/>character/parts · character/stickers"]
         Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
@@ -45,7 +45,7 @@ flowchart LR
     AdminBff["snapdragon-admin-bff-api /bff/internal<br/>(account/session DATA + identity resolve,<br/>mTLS + X-Internal-Token)"]:::gated
     Fed["snapdragon-federation-api<br/>(cards + moderation, forwarded JWT)"]
     HS["homeservers via mTLS proxy<br/>tuwunel / Akkoma<br/>(gated stub-seams)"]:::gated
-    Actions["snapdragon-actions reconciler<br/>(only writer of user_notifications)"]:::planned
+    Actions["hugmesh-actions reconciler<br/>(only writer of user_notifications)"]:::planned
 
     LoginUI -.->|opaque bff_ session| UI
     UI -->|opaque bff_ session| GW
@@ -65,8 +65,8 @@ flowchart LR
 ```
 
 In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed grey nodes are 🔭
-planned or built/landing elsewhere (`login-ui`, `snapdragon-user-ui`, the
-`snapdragon-actions` reconciler); the amber-dashed nodes are ✅-shipped-but-**gated**
+planned or built/landing elsewhere (`login-ui`, `hugmesh-user-ui`, the
+`hugmesh-actions` reconciler); the amber-dashed nodes are ✅-shipped-but-**gated**
 stub-seams — the homeserver leg (off by default) and the admin-bff `/bff/internal`
 leg (the client + `BffSessionAuthenticationWebFilter` + `CanonicalIdentityResolver` are
 all real, always-registered code, but every call fail-closed-stubs unless
@@ -122,7 +122,7 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
   source of truth, enforced by the gateway's `GatewayRouteAccessFilter`:
   ADMIN / GAME-MASTER bypass within their own domain, SUPERADMIN cross-domain.
 - **Login / session / account logic is RELOCATING from admin-bff to this user-bff;**
-  the shared core is extracted to **`snapdragon-auth-core`** (account / session / MFA /
+  the shared core is extracted to **`hugmesh-auth-core`** (account / session / MFA /
   Casdoor-admin infra). The account/session **DATA stays in `admin-bff-db`** — this
   BFF reaches it via admin-bff `/bff/internal` over **mTLS + `X-Internal-Token`**.
 - **Cloudflare** fronts prod.
@@ -136,7 +136,7 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
 > completion path (`OidcLoginCompletionService`) native login uses, the `bff_` session
 > custody (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
 > admin-bff `/bff/internal` account/session client (`AdminBffInternalClient`), and
-> the `snapdragon-auth-core` adoption. 🚧 What genuinely remains is the **live
+> the `hugmesh-auth-core` adoption. 🚧 What genuinely remains is the **live
 > flag-flip** (gating off `app.bff.oidc.enabled` / `app.bff.custody-key` /
 > `app.internal.token`, wiring `app.bff.oidc.login-base` to the in-cluster Casdoor,
 > pinning the admin-bff #112 contract + the cross-repo egress NetworkPolicy) and
@@ -579,7 +579,7 @@ external channels that build on top.
 **Internal deliver — `InternalNotificationController`
 (`/bff/user/internal/notifications`)** — **SERVICE-PRINCIPAL ONLY.**
 - `POST /bff/user/internal/notifications` — the ONLY production writer of
-  `user_notifications`; the `snapdragon-actions` reconciler calls it.
+  `user_notifications`; the `hugmesh-actions` reconciler calls it.
 - The target `(domain, userSubject)` comes from the **request body** (the service acts
   on behalf of the SYSTEM for a named user — NOT owner==caller), which is exactly why
   it must be unreachable by any human JWT. `SecurityConfig` gates the
@@ -594,7 +594,7 @@ external channels that build on top.
   (`sourceTable`+`sourceId`), so a retry is INSERT-IF-ABSENT (a duplicate returns
   `delivered=true, deduped=true`, never a second row).
 
-> **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is still dark in normal operation — nothing writes `user_notifications` yet outside tests, so the SSE stream emits only when the `snapdragon-actions` reconciler (separate repo, later PR) starts calling the internal deliver endpoint. The SSE wiring itself is ✅ shipped.
+> **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is still dark in normal operation — nothing writes `user_notifications` yet outside tests, so the SSE stream emits only when the `hugmesh-actions` reconciler (separate repo, later PR) starts calling the internal deliver endpoint. The SSE wiring itself is ✅ shipped.
 
 ### Real-time SSE stream ✅ shipped
 `GET /bff/user/notifications/events` — a **server-sent event stream** (`text/event-stream`)
@@ -612,7 +612,7 @@ live on `main`.
 - **`InternalNotificationDeliveryService`** — after writing the `user_notifications` DB
   row, publishes the notification event onto the caller's `SseNotificationBus` sink so
   all active SSE connections for that user receive it immediately.
-- **Host-shell consumption:** the `snapdragon-user-ui` host shell consumes this stream
+- **Host-shell consumption:** the `hugmesh-user-ui` host shell consumes this stream
   via **bearer-fetch SSE** (native `fetch()` + `ReadableStream` line-by-line parsing),
   **NOT** the browser's native `EventSource` API — `EventSource` cannot send an
   `Authorization` header, so it cannot carry the `bff_` session token. The bearer-fetch
@@ -646,7 +646,7 @@ live on `main`.
   *Honest deferrals*). Gated by `casdoor.account.enabled`.
 - `MatrixBlockClient` / `MastodonBlockClient` (behind the `ExternalBlockClient` /
   `ExternalBlockConfig` abstraction seam) — reactive WebClients for the
-  external self-block push. Base URLs grounded in the snapdragon-generator
+  external self-block push. Base URLs grounded in the hugmesh-generator
   manifests: tuwunel `:8008` (`MATRIX_URL`), Akkoma `:4000` (`MASTODON_URL`).
   Gated by `block.matrix.enabled` / `block.mastodon.enabled`.
 - `MatrixMediaClient` (wired by `MatrixMediaConfig`) — reactive WebClient that
@@ -703,20 +703,22 @@ and authorization at the edge is data-driven by `gateway_route_access` /
 `GatewayRouteAccessFilter` in the gateway. Inside this BFF the post-validation JWT is
 the only authority source.
 
-### Shared org artifacts (`snapdragon-parent` + `snapdragon-commons` + `snapdragon-auth-core`)
+### Shared org artifacts (`hugmesh-parent` + `hugmesh-commons` + `hugmesh-auth-core`)
 
 This service adopts the org's shared Maven artifacts. Three de-duplication moves:
 
-1. **Parent POM →** `systems.snapdragon:snapdragon-parent:2.7.0` (itself a child of
+1. **Parent POM →** `systems.hugmesh:hugmesh-parent:2.8.0` (itself a child of
    `spring-boot-starter-parent:4.0.7`, so the whole Spring Boot dependency/plugin
    management is inherited transitively). The parent consolidates the reactive-BFF
    `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
    R2DBC + Liquibase + JDBC, springdoc, the full test stack) and the
-   `dependencyManagement` for `snapdragon-commons` + springdoc + the surefire/native
+   `dependencyManagement` for `hugmesh-commons` + springdoc + the surefire/native
    plugin config. Only the **repo-specific** deps stay in this POM: `icu4j` and
    `commons-text` (the Unicode confusable / typo-squat guard).
 
-2. **Shared security/tenancy/web →** `systems.snapdragon:snapdragon-commons:2.7.0`.
+2. **Shared security/tenancy/web →** `systems.hugmesh:hugmesh-commons:2.1.0` (test-jar
+   classifier pin; the main classifier is inherited from `hugmesh-parent`'s
+   `dependencyManagement`).
    The local copies of `security.{Roles,DomainRegistry,CasdoorAuthorities,DomainScope}`,
    `config.TenancyResourceServerConfig` and `web.ApiException` were **deleted** and
    replaced by:
@@ -745,21 +747,21 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
    **Two consumer-wiring steps** (the canonical recipe for the fan-out):
    - `config.CommonsSecurityConfig` `@Import`s the commons `DomainRegistry` +
      `TenancyResourceServerConfig` beans, because the `@SpringBootApplication`
-     component-scan over `systems.snapdragon.userbff` does **not** cover the
-     `systems.snapdragon.commons.*` packages. (`@Import` preserves
+     component-scan over `systems.hugmesh.userbff` does **not** cover the
+     `systems.hugmesh.commons.*` packages. (`@Import` preserves
      `TenancyResourceServerConfig`'s `@ConditionalOnExpression` gate.)
    - the multi-issuer security-slice tests reach the package-private
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
-     test accessor at `src/test/java/systems/snapdragon/commons/config/TenancyResolvers.java`.
+     test accessor at `src/test/java/systems/hugmesh/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.snapdragon:snapdragon-auth-core:2.3.3`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.hugmesh:hugmesh-auth-core:2.4.0`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
    the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
-   infra) is extracted to `snapdragon-auth-core` (depends on `snapdragon-commons`,
+   infra) is extracted to `hugmesh-auth-core` (depends on `hugmesh-commons`,
    consumed by **user-bff + admin-bff only**) rather than copied. This adoption is
-   in-flight alongside the SSO relocation above. The pin has moved twice since the
-   initial 2.0.0 adoption (2.3.1 `ensureAccount` roles, 2.3.2 the `bff_` cookie custody
-   bridge) up to today's 2.3.3, which picks up auth-core's `ReservedNames`
+   in-flight alongside the SSO relocation above. The pin was bumped to 2.4.0 as part
+   of the HugMesh rename (the published `hugmesh-auth-core` coordinate under the
+   renamed groupId/artifactId), carrying forward the same `ReservedNames`
    canonical-revision sync that `ProfileService`/`UsernameSkeleton` consume directly.
 
    The committed [`openapi.json`](src/main/resources/openapi/openapi.json) is
@@ -767,7 +769,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
 
 #### Resolving the private org artifacts
 
-`snapdragon-parent` / `snapdragon-commons` / `snapdragon-auth-core` are **not** on
+`hugmesh-parent` / `hugmesh-commons` / `hugmesh-auth-core` are **not** on
 Maven Central — they live in the org GitLab Maven Package Registry. Two resolution
 paths, **no secrets in git**:
 
@@ -790,7 +792,7 @@ identity) + truststore (the cluster CA) and flips on **server-side** client-auth
 (`server.ssl.enabled=true`, `client-auth=need`, TLSv1.3 floor): a caller that was
 not deployed+signed by our Vault/ESO PKI process holds no chaining cert and its TLS
 handshake is rejected before it can read or call the API at all. The **client-side**
-half (`snapdragon.mtls.client.enabled`, `FederationHttpClientSsl`) presents this
+half (`hugmesh.mtls.client.enabled`, `FederationHttpClientSsl`) presents this
 BFF's client identity on its OUTBOUND federation-api calls (and is the same mechanism
 used for the admin-bff `/bff/internal` account/session leg — mTLS + `X-Internal-Token`)
 when the upstream flips its server-side client-auth to `need`. Both reuse one mounted
@@ -806,7 +808,7 @@ authoritative cross-domain boundary (per-domain namespace + mTLS isolation; 1
 admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
 - The JWT→authority mapping uses a shared `CasdoorAuthorities` converter (logic
-  shared with the gateway via `snapdragon-commons`) so the BFF and gateway emit
+  shared with the gateway via `hugmesh-commons`) so the BFF and gateway emit
   **byte-identical** authorities. It stamps exactly one issuer-derived `DOMAIN_<x>`
   authority (resolved through a `DomainRegistry` issuer→domain map; unknown issuer →
   `default`), and **strips any `permissions` entry carrying a reserved `ROLE_`/
@@ -837,7 +839,7 @@ admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
 > 🔭 **Roadmap (provisioning, not in this repo):** turning `domain_registry` rows into
 > a per-brand ArgoCD `ApplicationSet` (namespaces / CA / Casdoor org / gateway / BFF /
-> UI) is a later snapdragon-generator PR; multi-issuer **live** wiring beyond
+> UI) is a later hugmesh-generator PR; multi-issuer **live** wiring beyond
 > single-issuer `DOMAIN_default` clusters lands with that provisioning. The code in this
 > BFF is ready for it today.
 
@@ -903,7 +905,7 @@ Actions is billing-blocked). The pipeline runs **`test`** (`mvn verify` on
 fail-on-CVSS≥9) → **`dast`** (a ZAP API scan against the OpenAPI spec when
 `DAST_TARGET_URL` is set, advisory otherwise) → **`build`** (the container image) →
 **`pentest`**. The `pentest` stage `include:`s the centralized OWASP harness from
-`snapdragon-generator` (`/tests/pentest/ci/pentest-stage.gitlab-ci.yml`), so the
+`hugmesh-generator` (`/tests/pentest/ci/pentest-stage.gitlab-ci.yml`), so the
 `pentest:sca` / `pentest:dast` jobs `extends:` the shared `.pentest-*` jobs that run
 the full harness (Dependency-Check SCA + authenticated ZAP baseline + custom probes +
 **nuclei**) from one source of truth. The legacy inline `dependency-check` /
@@ -976,7 +978,7 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   `DOMAIN_default` and behaviour is unchanged (back-compat); the multi-issuer decoder
   + per-query domain predicate are live (see *Multi-tenancy / domain-scoping* above).
   Only the per-brand provisioning (ApplicationSet) and multi-issuer *live wiring* are
-  roadmap (in `snapdragon-generator`), not this BFF's code.
+  roadmap (in `hugmesh-generator`), not this BFF's code.
 - **Character-studio moderation resolve is a receiver waiting for its caller.** The
   save/list/serve (parts) and save/list (stickers) endpoints are fully live; the
   `InternalCharacterModerationController` SERVICE-only resolve receiver is wired and
@@ -985,7 +987,7 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   then a saved part/sticker stays `PENDING` indefinitely.
 - **Notifications floor ships DARK.** The read/mark-read inbox + per-category prefs +
   the SERVICE-only deliver endpoint are wired and tested, but nothing writes
-  `user_notifications` in normal operation yet — the `snapdragon-actions` reconciler
+  `user_notifications` in normal operation yet — the `hugmesh-actions` reconciler
   (separate repo, later PR) is the only writer. EXTERNAL channels (Matrix DM / Akkoma
   feed / phpBB / email) are roadmap (see below).
 - **Owner-enforcement coverage.** Enforced in EVERY service method (owner = JWT
@@ -998,7 +1000,7 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   federation-api.
 - **Native image** is best-effort hint-wise; an authoritative `-Pnative
   native:compile` on a GraalVM host is the real check (not run in this CI).
-- **Paired `snapdragon-user-ui`** is built later, NOT here; this BFF's
+- **Paired `hugmesh-user-ui`** is built later, NOT here; this BFF's
   `/v3/api-docs` spec is the contract its ng-openapi-gen typed client will consume.
 
 ## Status
@@ -1034,8 +1036,8 @@ against (`f0a73b9`, #124) — see `git log --oneline -40` for the full recent hi
   `preferred_username -> discord:<handle>` guess could resolve another user's account) —
   see *Native-login session bridge* and *Canonical homeserver-identity resolution* above,
   and PRs #115/#116/#117/#118/#120/#123/#124.
-- ✅ **Org artifact adoption:** `snapdragon-parent:2.7.0` + `snapdragon-commons` (shared
-  security/tenancy/web) + `snapdragon-auth-core:2.3.3`; GitLab-only CI with the shared
+- ✅ **Org artifact adoption:** `hugmesh-parent:2.8.0` + `hugmesh-commons` (shared
+  security/tenancy/web) + `hugmesh-auth-core:2.4.0`; GitLab-only CI with the shared
   OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI.
@@ -1096,7 +1098,7 @@ adapters — Matrix DM + Akkoma local feed + phpBB forum + email — each user-s
 via the per-category preferences this BFF already owns (`account-restriction` stays
 forced-on). The per-category prefs + minimal prefs tables here are the user-facing
 control surface; the actual external delivery is reconciler-driven (the
-`snapdragon-actions` reconciler / `mod-bff` `notify_channels` directive in other repos).
+`hugmesh-actions` reconciler / `mod-bff` `notify_channels` directive in other repos).
 User-facing notification silencing/preferences that land in THIS BFF will be documented
 as shipped only once merged to `main`.
 
@@ -1105,13 +1107,13 @@ Platform MFA (WebAuthn + TOTP + recovery) is design-complete (a 9-PR plan): per-
 defaults (superadmin/admin required, mod relaxable, user optional) enforced via
 `amr`/`acr` → `MFA_SATISFIED` + `gateway_route_access.mfa_required` (fail-closed) +
 generalized step-up. With the auth relocation, the MFA challenge/step-up stamping into
-the opaque `bff_` session lands in THIS BFF (the shared infra in `snapdragon-auth-core`),
+the opaque `bff_` session lands in THIS BFF (the shared infra in `hugmesh-auth-core`),
 while the gateway keeps enforcing `amr`→`MFA_SATISFIED` for the JWT world. None is
 present today; surfaces will be marked 🚧/✅ as they land.
 
 ### Generator supply-chain hardening 🚧 in-flight + CI pen-test jobs 🚧 defined here
 Stage3 GPG/sha + headscale/tailscale checksum verification + de-defaulted baked creds
-are in-flight in `snapdragon-generator`. For this repo the pen-test standard's job set
+are in-flight in `hugmesh-generator`. For this repo the pen-test standard's job set
 is defined in `.gitlab-ci.yml`: **k6 load testing** as the opt-in `pentest:load` job
 (extends the shared `.pentest-load`, `PENTEST_LOAD == "1"` schedule/manual gate), with
 nuclei via the shared `.pentest-*` jobs — but the shared harness

@@ -49,7 +49,7 @@
         browser-token path stays the live fallback.
     -->
 
-    <changeSet id="013-1-hs-service-token" author="snapdragon">
+    <changeSet id="013-1-hs-service-token" author="hugmesh">
         <createTable tableName="hs_service_token">
             <column name="id" type="varchar(36)">
                 <constraints primaryKey="true" nullable="false"/>
@@ -81,7 +81,7 @@
 
     <!-- DB parity for the platform vocabulary (same pattern as 005/007/012): plain
          ANSI `col IN (...)` runs identically on Postgres AND the H2 slice DB. -->
-    <changeSet id="013-2-hs-service-token-platform-check" author="snapdragon">
+    <changeSet id="013-2-hs-service-token-platform-check" author="hugmesh">
         <sql>
             ALTER TABLE hs_service_token
                 ADD CONSTRAINT ck_hs_service_token_platform
