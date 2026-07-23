@@ -40,7 +40,10 @@ import static org.mockito.Mockito.when;
  *       verdict fields;</li>
  *   <li>a federation outage does NOT fail the save (fail-soft) — the sticker still returns;</li>
  *   <li>a non-canonical expression is a 422 — nothing moderated/uploaded/stored;</li>
- *   <li>the owner is required (blank/null → IllegalArgumentException, nothing moderated).</li>
+ *   <li>the owner is required (blank/null → IllegalArgumentException, nothing moderated);</li>
+ *   <li>the {@code serveBody} access matrix (changelog 020 pixels): ACTIVE serves to the
+ *       owner / same-domain users / an unscoped SUPERADMIN, PENDING is owner-only,
+ *       REJECTED never serves, a legacy row without pixels never serves.</li>
  * </ul>
  */
 class StickerServiceTest {
@@ -65,7 +68,7 @@ class StickerServiceTest {
     void save_allowed_uploadsStoresPending_capturesFindingId() {
         byte[] png = {(byte) 0x89, 'P', 'N', 'G'};
         when(media.upload(eq("alice"), eq(png), eq("image/png"))).thenReturn(Mono.just("mxc://home/h1"));
-        when(repo.save(eq("alice"), eq("default"), eq("happy"), eq("mxc://home/h1"), eq("PENDING")))
+        when(repo.save(eq("alice"), eq("default"), eq("happy"), eq("mxc://home/h1"), eq("PENDING"), eq(png), eq("image/png")))
                 .thenReturn(Mono.just(storedSticker("happy", "mxc://home/h1")));
         // federation returns the created finding with an id; the service writes it back.
         when(federation.fileFinding(any())).thenReturn(Mono.just(Map.of("id", 7L, "status", "held")));
@@ -79,7 +82,7 @@ class StickerServiceTest {
 
         // the mxc:// + expression are persisted PENDING for the owner.
         verify(media).upload(eq("alice"), eq(png), eq("image/png"));
-        verify(repo).save(eq("alice"), eq("default"), eq("happy"), eq("mxc://home/h1"), eq("PENDING"));
+        verify(repo).save(eq("alice"), eq("default"), eq("happy"), eq("mxc://home/h1"), eq("PENDING"), eq(png), eq("image/png"));
 
         // ...a held finding is filed: surface=character-sticker, disposition=flagged,
         // verdict fields absent (the bytes passed the auto-classifier; a human reviews) and
@@ -111,7 +114,7 @@ class StickerServiceTest {
 
         // A blocked sticker never reaches the homeserver and is never persisted.
         verify(media, never()).upload(anyString(), any(), anyString());
-        verify(repo, never()).save(anyString(), any(), anyString(), anyString(), anyString());
+        verify(repo, never()).save(anyString(), any(), anyString(), anyString(), anyString(), any(), any());
         // ...but it IS filed as a held finding, disposition=rejected, with the verdict fields.
         ArgumentCaptor<FindingRequest> req = ArgumentCaptor.forClass(FindingRequest.class);
         verify(federation).fileFinding(req.capture());
@@ -147,7 +150,7 @@ class StickerServiceTest {
     void save_findingFileFails_onAllowedSticker_stillStored_failSoft() {
         byte[] png = {(byte) 0x89, 'P', 'N', 'G'};
         when(media.upload(eq("alice"), any(), eq("image/png"))).thenReturn(Mono.just("mxc://home/h2"));
-        when(repo.save(eq("alice"), eq("default"), eq("wink"), eq("mxc://home/h2"), eq("PENDING")))
+        when(repo.save(eq("alice"), eq("default"), eq("wink"), eq("mxc://home/h2"), eq("PENDING"), eq(png), eq("image/png")))
                 .thenReturn(Mono.just(storedSticker("wink", "mxc://home/h2")));
         // federation is unreachable — the finding-file errors, but the save must still succeed.
         when(federation.fileFinding(any()))
@@ -160,7 +163,7 @@ class StickerServiceTest {
                 })
                 .verifyComplete();
         // the sticker WAS stored despite the federation outage.
-        verify(repo).save(eq("alice"), eq("default"), eq("wink"), eq("mxc://home/h2"), eq("PENDING"));
+        verify(repo).save(eq("alice"), eq("default"), eq("wink"), eq("mxc://home/h2"), eq("PENDING"), eq(png), eq("image/png"));
     }
 
     @Test
@@ -185,7 +188,7 @@ class StickerServiceTest {
                 .verify();
         verify(moderation, never()).moderate(any());
         verify(media, never()).upload(anyString(), any(), anyString());
-        verify(repo, never()).save(anyString(), any(), anyString(), anyString(), anyString());
+        verify(repo, never()).save(anyString(), any(), anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -215,5 +218,76 @@ class StickerServiceTest {
         when(repo.findOwned("st-1", "alice")).thenReturn(Mono.just(storedSticker("happy", "mxc://h/1")));
         assertThat(service.getOwned("st-1", "alice").block()).isNotNull();
         verify(repo).findOwned("st-1", "alice");
+    }
+
+    // ── serveBody: the moderation + audience access matrix (empty ⇒ controller 404) ──
+
+    private static final byte[] PIXELS = {(byte) 0x89, 'P', 'N', 'G', 42};
+
+    private static VnStickerEntity rowWithBody(String owner, String domain, String status,
+                                               byte[] body) {
+        return new VnStickerEntity("st-1", owner, domain, "happy", "mxc://home/h1",
+                status, null, Instant.now(), body, "image/png");
+    }
+
+    private void repoReturns(VnStickerEntity row) {
+        when(repo.findAnyByIdWithBody("st-1")).thenReturn(Mono.just(row));
+    }
+
+    @Test
+    void serveBody_active_servesToAnotherUserInTheSameDomain_withStoredBytesAndType() {
+        repoReturns(rowWithBody("alice", "brandx", "ACTIVE", PIXELS));
+        StickerService.StickerBody out = service.serveBody("st-1", "bob", "brandx").block();
+        assertThat(out).isNotNull();
+        assertThat(out.bytes()).isEqualTo(PIXELS);
+        assertThat(out.contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void serveBody_active_crossDomainNonOwner_isEmpty_brandIsolation() {
+        repoReturns(rowWithBody("alice", "brandx", "ACTIVE", PIXELS));
+        assertThat(service.serveBody("st-1", "bob", "brandy").blockOptional()).isEmpty();
+    }
+
+    @Test
+    void serveBody_active_ownerAcrossDomains_serves_thePackIsPerUser() {
+        repoReturns(rowWithBody("alice", "brandx", "ACTIVE", PIXELS));
+        assertThat(service.serveBody("st-1", "alice", "brandy").block()).isNotNull();
+    }
+
+    @Test
+    void serveBody_active_unscopedCaller_serves_superadminBypass() {
+        repoReturns(rowWithBody("alice", "brandx", "ACTIVE", PIXELS));
+        assertThat(service.serveBody("st-1", "root", null).block()).isNotNull();
+    }
+
+    @Test
+    void serveBody_pending_servesOnlyToItsOwner_composerPreview() {
+        repoReturns(rowWithBody("alice", "brandx", "PENDING", PIXELS));
+        assertThat(service.serveBody("st-1", "alice", "brandx").block()).isNotNull();
+        // another user in the SAME domain cannot see an unreviewed sticker...
+        assertThat(service.serveBody("st-1", "bob", "brandx").blockOptional()).isEmpty();
+        // ...and neither can an unscoped (SUPERADMIN) read — PENDING is owner-only.
+        assertThat(service.serveBody("st-1", "root", null).blockOptional()).isEmpty();
+    }
+
+    @Test
+    void serveBody_rejected_neverServes_evenToTheOwner_moderationConsequence() {
+        repoReturns(rowWithBody("alice", "brandx", "REJECTED", PIXELS));
+        assertThat(service.serveBody("st-1", "alice", "brandx").blockOptional()).isEmpty();
+        assertThat(service.serveBody("st-1", "bob", "brandx").blockOptional()).isEmpty();
+        assertThat(service.serveBody("st-1", "root", null).blockOptional()).isEmpty();
+    }
+
+    @Test
+    void serveBody_legacyRowWithoutPixels_isEmpty() {
+        repoReturns(rowWithBody("alice", "brandx", "ACTIVE", null));
+        assertThat(service.serveBody("st-1", "alice", "brandx").blockOptional()).isEmpty();
+    }
+
+    @Test
+    void serveBody_unknownId_isEmpty() {
+        when(repo.findAnyByIdWithBody("nope")).thenReturn(Mono.empty());
+        assertThat(service.serveBody("nope", "alice", "brandx").blockOptional()).isEmpty();
     }
 }

@@ -1,6 +1,7 @@
 package systems.hugmesh.userbff.character;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
 
@@ -37,4 +38,25 @@ public record VnSticker(
         String status,
         Long findingId,
         Instant createdAt) {
+
+    /**
+     * The sticker's embed/serve SLUG — the DB-generated UUID {@code id}, surfaced under
+     * the field name the forum-ui sticker layer keys on (its picker normalizer drops any
+     * list item without a {@code slug}, and its token grammar {@code :snap-sticker:<slug>:}
+     * + body URL {@code /bff/user/character/stickers/{slug}/body} both validate the
+     * charset {@code [a-z0-9_-]{1,64}} — which a lowercase-hex-and-hyphens UUID always
+     * fits). Serialized alongside {@code id} (same value) so existing consumers keep
+     * their field.
+     */
+    @JsonProperty("slug")
+    public String slug() {
+        return id;
+    }
+
+    /** Human label for picker/editor grids (forum-ui falls back to the raw slug — a bare
+     *  UUID — without one): the canonical expression name ({@code happy}, {@code smug}, …). */
+    @JsonProperty("label")
+    public String label() {
+        return expression;
+    }
 }

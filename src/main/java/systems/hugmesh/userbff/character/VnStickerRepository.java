@@ -38,13 +38,17 @@ public class VnStickerRepository {
      * calling here). The owner is the JWT subject the service passes — never a request
      * field. The {@code expression} is a canonical {@link StickerExpression} label;
      * {@code status} is the caller-supplied lifecycle literal ({@code PENDING} on save).
+     * {@code body} + {@code contentType} (changelog 020) are the moderated pixels + the
+     * magic-byte-SNIFFED MIME type — the BFF body-serve source (may be {@code null} for
+     * legacy callers; such a row simply never body-serves).
      */
     public Mono<VnSticker> save(String ownerSubject, String domain, String expression,
-                                String mxcUrl, String status) {
+                                String mxcUrl, String status, byte[] body, String contentType) {
         String dom = DomainScope.isUnscoped(domain) ? DomainRegistry.DEFAULT_DOMAIN : domain;
         // The id is DB-generated (changelog 017 column DEFAULT): the INSERT omits it and
         // RETURNING id hands back the generated UUID string, which drives the read-back.
-        return repo.insertRowReturningId(ownerSubject, dom, expression, mxcUrl, status)
+        return repo.insertRowReturningId(ownerSubject, dom, expression, mxcUrl, status,
+                        body, contentType)
                 .flatMap(repo::findById)
                 .map(VnStickerRepository::toWire);
     }
@@ -112,5 +116,17 @@ public class VnStickerRepository {
      */
     public Mono<VnSticker> findAnyById(String id) {
         return repo.findById(id).map(VnStickerRepository::toWire);
+    }
+
+    /**
+     * FULL row (incl. the stored {@code body} pixels + sniffed {@code contentType}) by id
+     * ACROSS owners — the body-serve read. Cross-owner ON PURPOSE: an {@code ACTIVE}
+     * sticker embedded in a forum post must render for every reader, so the ACCESS
+     * decision (owner-only while {@code PENDING}, domain-gated when {@code ACTIVE},
+     * never when {@code REJECTED}) lives in {@link StickerService#serveBody} — this
+     * method only fetches. Empty when the id is unknown.
+     */
+    public Mono<VnStickerEntity> findAnyByIdWithBody(String id) {
+        return repo.findById(id);
     }
 }

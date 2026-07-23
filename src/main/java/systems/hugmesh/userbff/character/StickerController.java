@@ -5,13 +5,16 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -21,6 +24,9 @@ import reactor.core.publisher.Mono;
 import systems.hugmesh.commons.web.ApiException;
 import systems.hugmesh.userbff.media.ImageSniffer;
 import systems.hugmesh.userbff.security.PrincipalDomain;
+
+import java.time.Duration;
+import java.util.regex.Pattern;
 
 /**
  * Owner-scoped endpoints for VN-CHARACTER EXPRESSION STICKERS (Phase B1). A sticker is a
@@ -40,16 +46,23 @@ import systems.hugmesh.userbff.security.PrincipalDomain;
  *   <li>POST {@code /bff/user/character/stickers} — save a sticker: a multipart
  *       {@code file} (the rendered PNG) + {@code expression} (a canonical label). The
  *       bytes are sniffed (a non-raster / SVG is a 400), capped (oversize is a 400),
- *       moderated (a blocked sticker is a 422), uploaded, stored {@code status=PENDING},
- *       and queued for moderation. Returns the stored sticker;</li>
- *   <li>GET {@code /bff/user/character/stickers} — list MY stickers (newest first).</li>
+ *       moderated (a blocked sticker is a 422), uploaded, stored {@code status=PENDING}
+ *       WITH the pixels (changelog 020), and queued for moderation. Returns the stored
+ *       sticker;</li>
+ *   <li>GET {@code /bff/user/character/stickers} — list MY stickers (newest first);</li>
+ *   <li>GET {@code /bff/user/character/stickers/{slug}/body} — serve a sticker's stored
+ *       pixels (the forum-ui sticker-token/picker/VN-sprite image source; slug = the row
+ *       UUID id, which the list returns as {@code slug}). NOT owner-scoped on purpose —
+ *       an {@code ACTIVE} sticker embedded in a post must render for every reader; the
+ *       moderation/audience gates live in {@link StickerService#serveBody} (PENDING =
+ *       owner-only preview, REJECTED never serves) and every miss is a uniform 404.</li>
  * </ul>
  *
- * <p>There is deliberately NO BFF serve endpoint for the sticker image: a sticker's
- * pixels live on the homeserver media repo (the {@code mxc://} the row carries) and are
- * fetched direct-to-homeserver by the Matrix client — NOT proxied through the BFF (the
- * avatar invariant). So this controller has no SVG-serve / hardened-CSP path (that is the
- * #82 user-DRAWN-SVG-part path, a different feature).
+ * <p>The Matrix side is unchanged: the pixels are ALSO uploaded to the homeserver media
+ * repo (the {@code mxc://} the row carries, stub-gated) and the MSC2545 pack still
+ * advertises {@code mxc://} refs fetched direct-to-homeserver by Matrix clients. The
+ * BFF-stored body (020, mirroring the 016 SVG-part precedent) is the web-side serve
+ * channel that makes sticker {@code <img>}s real for forum-ui.
  */
 @Tag(name = "Character-stickers", description = "The caller's OWN VN-character expression "
         + "stickers (owner = JWT subject). Each is a rendered PNG, edge-AI moderated before "
@@ -64,6 +77,11 @@ public class StickerController {
      *  ~512KB is the practical ceiling, 1MB leaves headroom). Larger uploads are rejected
      *  with 400 before the bytes are read into memory in full. */
     private static final long MAX_STICKER_BYTES = 1L * 1024 * 1024;
+
+    /** The serve-slug shape — the server mirror of forum-ui's {@code STICKER_SLUG_RE}
+     *  ({@code stickers.ts}): 1..64 of {@code [a-z0-9_-]}. A DB-generated UUID id
+     *  (lowercase hex + hyphens, 36 chars) always fits. */
+    private static final Pattern SLUG_SHAPE = Pattern.compile("[a-z0-9_-]{1,64}");
 
     private final StickerService service;
     private final PrincipalDomain principalDomain;
@@ -104,6 +122,45 @@ public class StickerController {
     @GetMapping
     public Flux<VnSticker> listMine(@AuthenticationPrincipal Jwt jwt) {
         return service.listMine(jwt.getSubject(), principalDomain.forScope(jwt));
+    }
+
+    @Operation(summary = "Serve a sticker's stored image bytes by slug (= the sticker id the "
+            + "list returns). ACTIVE stickers serve to any user in the sticker's domain (they "
+            + "render inside other users' forum posts); a PENDING sticker serves ONLY to its "
+            + "owner (composer preview); a REJECTED sticker never serves. Any miss — unknown/"
+            + "malformed slug, foreign PENDING, REJECTED, no stored pixels — is a uniform 404.")
+    @GetMapping("/{slug}/body")
+    public Mono<ResponseEntity<byte[]>> serveBody(@AuthenticationPrincipal Jwt jwt,
+                                                  @PathVariable String slug) {
+        // Charset gate FIRST (the server mirror of forum-ui's STICKER_SLUG_RE): a slug
+        // that cannot possibly be a row id is the same uniform 404 as an unknown one —
+        // no separate 400 that would leak which misses were well-formed.
+        if (slug == null || !SLUG_SHAPE.matcher(slug).matches()) {
+            return Mono.error(ApiException.notFound("sticker not found"));
+        }
+        return service.serveBody(slug, jwt.getSubject(), principalDomain.forScope(jwt))
+                .map(StickerController::asImageResponse)
+                .switchIfEmpty(Mono.error(ApiException.notFound("sticker not found")));
+    }
+
+    /**
+     * Wrap the stored pixels in an image response with hardened headers: the SNIFFED
+     * MIME type recorded at save (never a client-declared one; {@code image/png} floor
+     * for a legacy row with no recorded type), {@code nosniff}, and a locked-down CSP —
+     * the same defensive posture as the SVG-part serve, cheap insurance even though the
+     * bytes were magic-byte-verified raster at upload. Cacheable privately for 5 minutes:
+     * a sticker row's pixels are immutable per id, but its moderation status is not, so
+     * the TTL bounds how long a just-rejected sticker can keep rendering from cache.
+     */
+    private static ResponseEntity<byte[]> asImageResponse(StickerService.StickerBody body) {
+        String type = body.contentType() == null || body.contentType().isBlank()
+                ? MediaType.IMAGE_PNG_VALUE : body.contentType();
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(type))
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Security-Policy", "default-src 'none'")
+                .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+                .body(body.bytes());
     }
 
     /**

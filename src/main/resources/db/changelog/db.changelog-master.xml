@@ -126,4 +126,5 @@
     <include file="db/changelog/017-vn-sticker-pack.xml"/>
     <include file="db/changelog/018-vn-moderation-finding-id.xml"/>
     <include file="db/changelog/019-mesh-device.xml"/>
+    <include file="db/changelog/020-vn-sticker-body.xml"/>
 </databaseChangeLog>

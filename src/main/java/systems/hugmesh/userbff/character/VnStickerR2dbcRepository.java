@@ -44,11 +44,13 @@ public interface VnStickerR2dbcRepository
     // The id is OMITTED so Postgres fills it from its (gen_random_uuid())::text column
     // DEFAULT (changelog 017); RETURNING id reads the generated UUID string back. A plain
     // (non-@Modifying) @Query returning Mono<String>. status is a caller-supplied literal
-    // ('PENDING' on save) so the row lands in the moderation queue.
+    // ('PENDING' on save) so the row lands in the moderation queue. body + content_type
+    // (changelog 020) are the moderated pixels + SNIFFED MIME type the BFF body-serve
+    // route reads back.
     String INSERT_RETURNING_ID =
             "INSERT INTO vn_sticker_pack "
-            + "(owner_subject, domain, expression, mxc_url, status, created_at) "
-            + "VALUES (:ownerSubject, :domain, :expression, :mxcUrl, :status, now()) "
+            + "(owner_subject, domain, expression, mxc_url, status, body, content_type, created_at) "
+            + "VALUES (:ownerSubject, :domain, :expression, :mxcUrl, :status, :body, :contentType, now()) "
             + "RETURNING id";
 
     /** Plain INSERT ... RETURNING id — yields the DB-generated UUID string. */
@@ -57,7 +59,9 @@ public interface VnStickerR2dbcRepository
                                       @Param("domain") String domain,
                                       @Param("expression") String expression,
                                       @Param("mxcUrl") String mxcUrl,
-                                      @Param("status") String status);
+                                      @Param("status") String status,
+                                      @Param("body") byte[] body,
+                                      @Param("contentType") String contentType);
 
     // ---- CAPTURE-AT-FILE: stamp the federation finding id back onto the row ----
 
