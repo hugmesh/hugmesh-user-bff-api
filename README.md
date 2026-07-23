@@ -3,14 +3,14 @@
 Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with the
 (later) `hugmesh-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
 resource-server + springdoc + Spring Native, scaffolded from the
-`snapdragon-admin-bff-api` template (same stack, same conventions). Java 25 LTS,
+`hugmesh-admin-bff-api` template (same stack, same conventions). Java 25 LTS,
 Spring Boot 4.0.7 / Spring Cloud 2025.1.2.
 
 ## Where it sits
 
 A **backend-namespace BFF** — deployed into `snapdragon-backend`, reached only
 *behind the gateway*, never public. It is the per-role backend-for-frontend for
-ordinary users, the `ROLE_USER` peer of `snapdragon-admin-bff-api` (admin) and the
+ordinary users, the `ROLE_USER` peer of `hugmesh-admin-bff-api` (admin) and the
 mod BFF. It talks to:
 
 - **Casdoor** (the IdP) as an OAuth2 resource server — validates the JWT, and is
@@ -19,9 +19,9 @@ mod BFF. It talks to:
   native username/password form that POSTs to `/bff/login`, and this BFF runs the
   PKCE flow against the internal Casdoor **server-side** (code→token exchange) and
   holds per-session JWT custody/refresh (see *Auth model / SSO relocation*).
-- **snapdragon-federation-api** — for the caller's federation **cards** (bundles)
+- **hugmesh-federation-api** — for the caller's federation **cards** (bundles)
   and the instance-block **recommendation** chain (caller JWT forwarded per request).
-- **snapdragon-admin-bff-api** `/bff/internal` (over mTLS + `X-Internal-Token`) — the
+- **hugmesh-admin-bff-api** `/bff/internal` (over mTLS + `X-Internal-Token`) — the
   account/session **data** for the relocated login/session/account surfaces stays in
   `admin-bff-db`; this BFF reaches it server-to-server (see *Auth model*).
 - the **homeservers** (tuwunel / Matrix, Akkoma / Mastodon) **through the gateway
@@ -42,8 +42,8 @@ flowchart LR
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
 
-    AdminBff["snapdragon-admin-bff-api /bff/internal<br/>(account/session DATA + identity resolve,<br/>mTLS + X-Internal-Token)"]:::gated
-    Fed["snapdragon-federation-api<br/>(cards + moderation, forwarded JWT)"]
+    AdminBff["hugmesh-admin-bff-api /bff/internal<br/>(account/session DATA + identity resolve,<br/>mTLS + X-Internal-Token)"]:::gated
+    Fed["hugmesh-federation-api<br/>(cards + moderation, forwarded JWT)"]
     HS["homeservers via mTLS proxy<br/>tuwunel / Akkoma<br/>(gated stub-seams)"]:::gated
     Actions["hugmesh-actions reconciler<br/>(only writer of user_notifications)"]:::planned
     MeshBridge["mesh↔Matrix bridge<br/>(node id → localpart mapping,<br/>LoRa status write-back)"]:::planned
@@ -236,7 +236,7 @@ skeleton is a recomputable defence-in-depth cache, never a DB identity — the e
 UNIQUE + the 004 `vanity_username` CHECK remain the DB backstop.
 
 **Vanity PUBLISH sync (cross-service, `FederationApiClient`)** — ✅ SHIPPED. Every
-username-threaded `ProfileService.save` now calls snapdragon-federation-api's
+username-threaded `ProfileService.save` now calls hugmesh-federation-api's
 owner-scoped `PUT`/`DELETE /api/federation/vanity/{username}` (see that repo's
 README) to keep the `federation_modules` fragment in lockstep with the local
 `visibility`/`vanitySubdomainEnabled` flags:
@@ -297,7 +297,7 @@ default) is unchanged — this endpoint layers the per-*user* durable override o
 
 ### Cards — `CardsController` (`/bff/user/cards`)
 CRUD over the caller's OWN federation bundles (`user_modules` in
-`snapdragon-federation-api`), via the reactive `FederationApiClient`. The caller's
+`hugmesh-federation-api`), via the reactive `FederationApiClient`. The caller's
 JWT is **forwarded per request** so federation-api scopes `/bundles/mine` (and
 records bundle ownership on PUT) to the same subject — owner-enforcement holds
 end-to-end with no broader service credential.
@@ -657,9 +657,9 @@ unknown/revoked node ids are counted `ignored`, never an error).
 | --- | --- |
 | Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs, VN-character parts + expression stickers | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`, `vn_character_part`, `vn_sticker_pack`) |
 | Mesh-device claims (Meshtastic LoRa node id → owner, + status visibility, bridge-reported LoRa status, moderation state) | **own R2DBC table** (`mesh_device`, 019 — `node_id` globally UNIQUE, one owner per radio). Exported to the mesh↔Matrix bridge (active rows only, node id → Matrix localpart via the admin-bff account read) and status-updated by it through the SERVICE-only `/bff/user/internal/mesh-devices` surface |
-| Account / session data for the relocated login/session surfaces | **`snapdragon-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
+| Account / session data for the relocated login/session surfaces | **`hugmesh-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
-| Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **snapdragon-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
+| Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **hugmesh-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
 | External mute/block push, self-silence directory hide, connected-client list/revoke, media upload | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients via the gateway mTLS proxy (STUBBED/gated) |
 | Homeserver-token revocation keys | **gateway revocation list** (`RevocationWriter`, gated stub-seam until the gateway write endpoint ships) |
 
@@ -719,7 +719,7 @@ unknown/revoked node ids are counted `ignored`, never an error).
 
 `SecurityConfig` is a Casdoor OAuth2 resource server (`issuer-uri` from
 `CASDOOR_ISSUER_URI`). The JWT→authority converter is the **verbatim** Casdoor
-converter shared with `snapdragon-admin-bff-api` / the gateway: `ROLE_USER` floor on
+converter shared with `hugmesh-admin-bff-api` / the gateway: `ROLE_USER` floor on
 every authenticated principal; `roles` (string or `{name}`) → `ROLE_<UPPER>`;
 `permissions` verbatim; `isAdmin` → `ROLE_ADMIN`. `@EnableReactiveMethodSecurity`
 + `@PreAuthorize` on the controllers re-checks at the method (the `ROLE_USER` floor,
@@ -1102,7 +1102,7 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   for a native-login caller — the durable gateway revocation key is the real
   enforcement there, and this is a documented, not silently broken, gap.
 - ~~**Multi-issuer `bff_` sessions resolve no `DOMAIN_` scope.**~~ **CLOSED by #128**
-  (consumes `snapdragon-admin-bff-api`#230, the producer half). `AccountView`
+  (consumes `hugmesh-admin-bff-api`#230, the producer half). `AccountView`
   now carries a nullable `issuer` (folded in on `resolveSession`), and
   `BffSessionAuthenticationWebFilter` prefers the account's own issuer when THIS
   deployment also trusts it, so a `bff_`-session caller on a genuinely multi-issuer
