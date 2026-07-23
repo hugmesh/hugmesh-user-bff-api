@@ -199,4 +199,72 @@ class FederationApiClientTest {
                 })
                 .verify();
     }
+
+    // ── CARDS honest status pass-through (the "404-or-500" e2e workaround killer) ──
+    //
+    // federation-api's owner-scoped 404 (a foreign/unknown slug) used to surface from
+    // the BFF as an untranslated 500 (raw WebClientResponseException → the generic
+    // handler); two user-ui feature files documented it as "one of 404 or 500". These
+    // pin the fix: every cards leg maps the upstream status onto an ApiException with
+    // the SAME code, so ApiExceptionHandler serves the semantically-correct response.
+
+    @Test
+    void readBody_upstream404_mapsToApiException404_notAGeneric500() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.NOT_FOUND, "{\"error\":\"no such bundle\"}"))
+                .build());
+
+        StepVerifier.create(client.readBody("someone-elses-card"))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(e.getMessage()).contains("read card body");
+                })
+                .verify();
+    }
+
+    @Test
+    void delete_upstream404_mapsToApiException404_crossOwnerDenyStaysA404() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.NOT_FOUND, "{\"error\":\"not your bundle\"}"))
+                .build());
+
+        StepVerifier.create(client.delete("someone-elses-card"))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(e.getMessage()).contains("delete card");
+                })
+                .verify();
+    }
+
+    @Test
+    void put_upstream400_mapsToApiException400_publishNeverFakesSuccess() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.BAD_REQUEST, "{\"error\":\"bad manifest\"}"))
+                .build());
+
+        StepVerifier.create(client.put("my-card", "index.html", "internal", null, new byte[]{1}))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getMessage()).contains("publish card");
+                })
+                .verify();
+    }
+
+    @Test
+    void listMine_upstream503_mapsToApiException503() {
+        FederationApiClient client = new FederationApiClient(WebClient.builder()
+                .exchangeFunction(erroring(HttpStatus.SERVICE_UNAVAILABLE, "down"))
+                .build());
+
+        StepVerifier.create(client.listMine())
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ApiException.class);
+                    assertThat(((ApiException) e).status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(e.getMessage()).contains("list cards");
+                })
+                .verify();
+    }
 }
