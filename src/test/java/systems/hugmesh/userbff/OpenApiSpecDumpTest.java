@@ -17,6 +17,8 @@ import systems.hugmesh.commons.testsupport.PostgresTestSupport;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -96,6 +98,22 @@ class OpenApiSpecDumpTest extends PostgresTestSupport {
                 .toIterable()
                 .as("the user BFF surface must be present in the dumped spec")
                 .anyMatch(p -> p.startsWith("/bff/user"));
+
+        // The BFF-owned MediaPoisonMode contract enum MUST survive into the spec —
+        // it is the exported vocabulary UI clients pin their unions to. It is
+        // registered via an OpenApiCustomizer precisely because a Components set on
+        // the base OpenAPI bean is silently REPLACED by springdoc's scanned models
+        // (observed: the schema vanished from the dump); this assertion turns any
+        // regression of that export into a hard test failure instead of quiet drift.
+        JsonNode poisonSchema = tree.path("components").path("schemas").path("MediaPoisonMode");
+        assertThat(poisonSchema.isMissingNode())
+                .as("components.schemas.MediaPoisonMode must be exported in the spec")
+                .isFalse();
+        List<String> poisonEnum = new ArrayList<>();
+        poisonSchema.path("enum").forEach(n -> poisonEnum.add(n.asText()));
+        assertThat(poisonEnum)
+                .as("MediaPoisonMode enum must be exactly the user-facing vocabulary")
+                .containsExactly("off", "low", "medium", "high");
 
         boolean checkOnly = Boolean.getBoolean("openapi.spec.check");
         if (checkOnly) {
