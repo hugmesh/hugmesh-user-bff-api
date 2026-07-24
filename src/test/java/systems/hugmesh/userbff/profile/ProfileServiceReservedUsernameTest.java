@@ -3,6 +3,7 @@ package systems.hugmesh.userbff.profile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.r2dbc.test.autoconfigure.DataR2dbcTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -65,6 +66,31 @@ class ProfileServiceReservedUsernameTest {
                 .isInstanceOfSatisfying(ApiException.class,
                         ex -> assertThat(ex.status()).isEqualTo(HttpStatus.BAD_REQUEST));
         assertThat(repo.find("sub-2").blockOptional()).isEmpty();
+    }
+
+    /**
+     * The canonical revision 7-9 labels — {@code hmdm}/{@code attest} (Headwind MDM +
+     * AttestationServer superadmin-gateway route prefixes) and the Character Forge
+     * track's {@code character-forge}/{@code games-character-forge}/
+     * {@code games-shadows-of-the-net} — are enforced AT RUNTIME by the pinned
+     * auth-core (2.4.1). Named explicitly here (not only via the RESERVED
+     * {@code @MethodSource} iteration above) so a pin downgrade to a pre-revision-9
+     * auth-core fails THIS test with the missing label's name instead of silently
+     * shrinking the parameterised set. Before 2.4.1 these five were enforced only by
+     * the 021 DB CHECK backstop; the service layer now rejects them as a clean 400.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hmdm", "attest", "character-forge",
+            "games-character-forge", "games-shadows-of-the-net"})
+    void canonicalRev7To9Label_enablingVanityOrPublic_isRejected400AtServiceLayer(String reserved) {
+        assertThat(ReservedNames.RESERVED).contains(reserved);
+        assertThat(ReservedNames.isReserved(reserved)).isTrue();
+
+        UserProfile body = new UserProfile("sub-r9", null, null, null, "X", "public", true);
+        assertThatThrownBy(() -> profiles.save("sub-r9", reserved, body).block())
+                .isInstanceOfSatisfying(ApiException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(repo.find("sub-r9").blockOptional()).isEmpty();
     }
 
     @Test

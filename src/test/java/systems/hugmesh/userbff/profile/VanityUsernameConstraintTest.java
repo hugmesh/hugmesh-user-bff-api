@@ -53,10 +53,11 @@ class VanityUsernameConstraintTest {
      * ({@code hmdm}/{@code attest}), and a sample of the previously-drifted
      * revision 3-6 labels ({@code character-studio}/{@code wiki}/{@code tube}/
      * {@code superadmin}/{@code v1}/{@code ai}/{@code index.html}) are all
-     * rejected by the re-added CHECK — case-insensitively. NOTE: for the
-     * revision 7-9 labels this DB backstop is currently the ONLY enforcement in
-     * this BFF (the pinned auth-core ReservedNames predates them), which is
-     * exactly the fail-closed defence-in-depth the constraint exists for.
+     * rejected by the re-added CHECK — case-insensitively. NOTE: with the
+     * auth-core pin at 2.4.1 (canonical revision 9) the revision 7-9 labels are
+     * ALSO rejected as a service-layer 400 (see
+     * {@code ProfileServiceReservedUsernameTest}); this DB backstop remains the
+     * fail-closed defence-in-depth beneath that guard.
      */
     @ParameterizedTest
     @ValueSource(strings = {
