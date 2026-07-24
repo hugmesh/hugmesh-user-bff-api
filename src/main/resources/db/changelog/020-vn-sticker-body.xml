@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        vn_sticker_pack.body + .content_type — the DURABLE STICKER PIXELS, so the BFF can
+        serve a sticker image itself: GET /bff/user/character/stickers/{slug}/body (the
+        route the forum-ui sticker tokens / picker / VN sprites already link — until this
+        column the BFF discarded the bytes after the (stub-gated) homeserver upload, so
+        every sticker <img> 404'd against the real backend).
+
+        This mirrors the 016 vn_character_part precedent (the sanitized SVG body lives in
+        the row and is served by the BFF with hardened headers): the sticker's moderated
+        PNG bytes are stored AT SAVE TIME alongside the homeserver mxc_url (which remains
+        the Matrix-side ref the MSC2545 pack advertises — the two serve channels are
+        complementary, not competing).
+
+        Columns (both NULLABLE — pre-020 rows carry only the mxc:// ref and simply have
+        no BFF-serveable body; the serve route 404s for them, which is the same outcome
+        those rows always had):
+          • body         — the raw sticker image bytes (magic-byte-sniffed raster, ≤1MB
+                           API-capped at the upload join; BYTEA runs identically on
+                           production Postgres AND the H2 PostgreSQL-compat slice).
+          • content_type — the SNIFFED image MIME type recorded at save (never the
+                           client-declared header), echoed as the serve Content-Type.
+
+        Numbered 020 — the band ABOVE the current max (019) in db.changelog-master.xml;
+        registered LAST in the master with a SINGLE <include>.
+    -->
+
+    <changeSet id="020-1-vn-sticker-body" author="hugmesh">
+        <addColumn tableName="vn_sticker_pack">
+            <column name="body" type="bytea"/>
+            <column name="content_type" type="varchar(255)"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="vn_sticker_pack" columnName="body"/>
+            <dropColumn tableName="vn_sticker_pack" columnName="content_type"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

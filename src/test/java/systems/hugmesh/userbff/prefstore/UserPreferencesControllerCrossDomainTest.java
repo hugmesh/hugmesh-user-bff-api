@@ -91,7 +91,7 @@ class UserPreferencesControllerCrossDomainTest {
     void put_anonymous_isUnauthorized_serviceNeverCalled() {
         client.put().uri("/bff/user/preferences")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("key", "media.poison.default", "value", "balanced"))
+                .bodyValue(Map.of("key", "media.poison.default", "value", "high"))
                 .exchange()
                 .expectStatus().isUnauthorized();
         verify(service, never()).put(anyString(), anyString(), anyString(), any());
@@ -142,19 +142,19 @@ class UserPreferencesControllerCrossDomainTest {
 
     @Test
     void put_brandX_ownerAndDomainFromToken_notBody() {
-        when(service.put(eq("alice"), eq("media.poison.default"), eq("balanced"), eq("brandx")))
-                .thenReturn(Mono.just(Map.of("media.poison.default", "balanced")));
+        when(service.put(eq("alice"), eq("media.poison.default"), eq("high"), eq("brandx")))
+                .thenReturn(Mono.just(Map.of("media.poison.default", "high")));
 
         client.mutateWith(mockJwt()
                         .jwt(j -> j.subject("alice").issuer(BRANDX))
                         .authorities(authorities("ROLE_USER", "DOMAIN_brandx")))
                 .put().uri("/bff/user/preferences")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("key", "media.poison.default", "value", "balanced"))
+                .bodyValue(Map.of("key", "media.poison.default", "value", "high"))
                 .exchange()
                 .expectStatus().isOk();
 
-        verify(service).put("alice", "media.poison.default", "balanced", "brandx");
+        verify(service).put("alice", "media.poison.default", "high", "brandx");
         verify(service, never()).put(anyString(), anyString(), anyString(), eq("brandy"));
     }
 

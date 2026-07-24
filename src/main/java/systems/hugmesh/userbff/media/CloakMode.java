@@ -6,10 +6,13 @@ import com.fasterxml.jackson.annotation.JsonValue;
 /**
  * The closed set of AI-cloak {@code mode} kinds the media-proxy honours — the REQUESTED
  * perturbation strength a user picks when uploading an image. This is a genuinely CLOSED
- * vocabulary: it is pinned by the 007 {@code media_poison_decision.mode} DB CHECK, the
- * legacy {@link MediaPoisonDecision#validMode(String)} guard, and the user-preference
- * {@code media.poison.default} validation — all of which accept exactly
- * {@code glaze | nightshade | light | none}.
+ * vocabulary: it is pinned by the 007 {@code media_poison_decision.mode} DB CHECK and the
+ * legacy {@link MediaPoisonDecision#validMode(String)} guard — both of which accept
+ * exactly {@code glaze | nightshade | light | none}. NOTE: the durable user preference
+ * {@code media.poison.default} speaks the USER-FACING
+ * {@code systems.hugmesh.userbff.prefstore.MediaPoisonMode} vocabulary
+ * ({@code off|low|medium|high}) which maps 1:1 onto this engine set — this enum stays
+ * the ENGINE/pipeline vocabulary only.
  *
  * <h2>Wire form is BYTE-IDENTICAL to the prior {@code String}</h2>
  * Each constant carries the EXACT lowercase token the system has always stored /

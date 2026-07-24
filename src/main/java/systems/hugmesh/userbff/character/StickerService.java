@@ -115,7 +115,8 @@ public class StickerService {
                                 "character sticker blocked by content policy")));
             }
             return matrixMedia.upload(owner, bytes, contentType)
-                    .flatMap(mxc -> repo.save(owner, domain, expression, mxc, STATUS_PENDING))
+                    .flatMap(mxc -> repo.save(owner, domain, expression, mxc, STATUS_PENDING,
+                            bytes, contentType))
                     .flatMap(sticker -> captureFinding(owner, sticker).thenReturn(sticker));
         });
     }
@@ -131,6 +132,57 @@ public class StickerService {
      */
     public Mono<VnSticker> getOwned(String id, String owner) {
         return repo.findOwned(id, owner);
+    }
+
+    /** The served sticker image: the stored moderated pixels + the sniffed MIME type. */
+    public record StickerBody(byte[] bytes, String contentType) {
+    }
+
+    /**
+     * The BODY-SERVE read for {@code GET /bff/user/character/stickers/{slug}/body} — the
+     * pixels behind every forum-ui sticker {@code <img>} / picker thumbnail / VN sprite.
+     * The slug IS the row's DB-generated UUID id (it fits the forum token charset
+     * {@code [a-z0-9_-]{1,64}} by construction, and it is the only stable per-sticker key
+     * the list endpoint already returns).
+     *
+     * <p>Empty (⇒ controller 404, uniformly — existence is never leaked) unless ALL hold:
+     * <ul>
+     *   <li><b>Moderation gate:</b> {@code ACTIVE} serves; {@code PENDING} serves ONLY to
+     *       its owner (so the author's composer preview works immediately after upload,
+     *       before a moderator has reviewed it); {@code REJECTED} NEVER serves — to
+     *       anyone, including the owner (the moderation-reject consequence).</li>
+     *   <li><b>Audience gate (ACTIVE):</b> the caller shares the sticker's brand domain,
+     *       OR is its owner (a Matrix pack is per-USER across brands — see
+     *       {@link VnStickerRepository#listActiveForOwner}), OR is domain-unscoped
+     *       (SUPERADMIN cross-domain bypass, {@code callerDomain == null}).</li>
+     *   <li><b>Pixels exist:</b> a pre-020 legacy row (null/empty {@code body}) has
+     *       nothing to serve.</li>
+     * </ul>
+     *
+     * @param slug         the sticker slug (= the row UUID id; charset-validated by the
+     *                     controller before this is called).
+     * @param caller       the caller's JWT subject.
+     * @param callerDomain the caller's validated-issuer brand ({@code null} = SUPERADMIN
+     *                     cross-domain bypass).
+     */
+    public Mono<StickerBody> serveBody(String slug, String caller, String callerDomain) {
+        return repo.findAnyByIdWithBody(slug)
+                .filter(row -> servesTo(row, caller, callerDomain))
+                .filter(row -> row.body() != null && row.body().length > 0)
+                .map(row -> new StickerBody(row.body(), row.contentType()));
+    }
+
+    /** The serve access decision (see {@link #serveBody}): PENDING → owner only;
+     *  ACTIVE → owner, same-domain, or unscoped caller; anything else (REJECTED) → no. */
+    private static boolean servesTo(VnStickerEntity row, String caller, String callerDomain) {
+        boolean isOwner = row.ownerSubject() != null && row.ownerSubject().equals(caller);
+        if (STATUS_PENDING.equals(row.status())) {
+            return isOwner;
+        }
+        if (CharacterModerationService.STATUS_ACTIVE.equals(row.status())) {
+            return isOwner || callerDomain == null || callerDomain.equals(row.domain());
+        }
+        return false;
     }
 
     /**

@@ -75,33 +75,33 @@ class UserPreferencesControllerTest {
         @Test
         void get_authenticatedUser_returnsResolvedView() {
             when(service.get(eq("alice"), any()))
-                    .thenReturn(Mono.just(Map.of("media.poison.default", "glaze")));
+                    .thenReturn(Mono.just(Map.of("media.poison.default", "medium")));
 
             client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                     .get().uri("/bff/user/preferences")
                     .exchange()
                     .expectStatus().isOk()
                     .expectBody()
-                    .jsonPath("$['media.poison.default']").isEqualTo("glaze");
+                    .jsonPath("$['media.poison.default']").isEqualTo("medium");
 
             verify(service).get(eq("alice"), any());
         }
 
         @Test
         void put_authenticatedUser_upsertsAndReturnsResolvedView() {
-            when(service.put(eq("alice"), eq("media.poison.default"), eq("nightshade"), any()))
-                    .thenReturn(Mono.just(Map.of("media.poison.default", "nightshade")));
+            when(service.put(eq("alice"), eq("media.poison.default"), eq("high"), any()))
+                    .thenReturn(Mono.just(Map.of("media.poison.default", "high")));
 
             client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                     .put().uri("/bff/user/preferences")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(Map.of("key", "media.poison.default", "value", "nightshade"))
+                    .bodyValue(Map.of("key", "media.poison.default", "value", "high"))
                     .exchange()
                     .expectStatus().isOk()
                     .expectBody()
-                    .jsonPath("$['media.poison.default']").isEqualTo("nightshade");
+                    .jsonPath("$['media.poison.default']").isEqualTo("high");
 
-            verify(service).put(eq("alice"), eq("media.poison.default"), eq("nightshade"), any());
+            verify(service).put(eq("alice"), eq("media.poison.default"), eq("high"), any());
         }
 
         @Test
@@ -109,7 +109,7 @@ class UserPreferencesControllerTest {
             client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                     .put().uri("/bff/user/preferences")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(Map.of("key", "", "value", "glaze"))
+                    .bodyValue(Map.of("key", "", "value", "high"))
                     .exchange()
                     .expectStatus().isBadRequest();
 
@@ -121,7 +121,7 @@ class UserPreferencesControllerTest {
             client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
                     .put().uri("/bff/user/preferences")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(Map.of("key", "bad key!", "value", "glaze"))
+                    .bodyValue(Map.of("key", "bad key!", "value", "high"))
                     .exchange()
                     .expectStatus().isBadRequest();
 
@@ -156,7 +156,7 @@ class UserPreferencesControllerTest {
         void put_anonymous_isUnauthorized_serviceNotReached() {
             client.put().uri("/bff/user/preferences")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(Map.of("key", "media.poison.default", "value", "glaze"))
+                    .bodyValue(Map.of("key", "media.poison.default", "value", "high"))
                     .exchange()
                     .expectStatus().isUnauthorized();
             verify(service, never()).put(any(), any(), any(), any());

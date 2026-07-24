@@ -26,20 +26,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <ul>
  *   <li><b>USER-SITUATIONAL</b> — a single user: an unset user inherits the server
- *       {@code MediaPoisoningProperties.defaultMode} for {@code media.poison.default};
- *       once set, the durable choice wins; an unknown key or a bad cloak-mode value is
- *       a clean 400; a blank owner is rejected.</li>
+ *       {@code MediaPoisoningProperties.defaultMode} for {@code media.poison.default}
+ *       (an ENGINE token, translated to the user-facing {@link MediaPoisonMode}
+ *       contract token); once set, the durable choice wins; an unknown key, an
+ *       out-of-vocabulary value, OR a raw engine token on the wire is a clean 400;
+ *       a blank owner is rejected.</li>
  *   <li><b>CROSS-USER</b> — owner A's get/put never sees or mutates owner B's durable
  *       value; a brand-X put cannot change a brand-Y value at the same owner+key;
  *       SUPERADMIN (null domain) resolves across brands.</li>
  *   <li><b>CONCURRENT</b> — concurrent puts of the same key by one owner converge to a
  *       single durable value (last-writer-wins, no duplicate, no lost-update crash).</li>
+ *   <li><b>LEGACY</b> — a durable row still holding a pre-contract ENGINE token is
+ *       canonicalised to the user-facing vocabulary on read.</li>
  * </ul>
  *
  * <p>NOTE: ONE shared H2 store across the class methods — each method uses a UNIQUE
- * owner id. The server default is pinned to {@code nightshade} in this test config so
- * the "inherits server default" assertion is unambiguous (distinct from the prod
- * {@code glaze} default).
+ * owner id. The server default is pinned to the ENGINE token {@code nightshade} in this
+ * test config so the "inherits server default" assertion is unambiguous (distinct from
+ * the prod {@code glaze} default) AND proves the engine→user-facing translation
+ * ({@code nightshade} resolves as {@code high}).
  */
 @DataR2dbcTest(properties = "app.media.poisoning.default-mode=nightshade")
 @Import({TestDatabaseConfig.class, UserPreferencesStoreRepository.class,
@@ -66,6 +71,7 @@ class UserPreferencesServiceTest {
     }
 
     @Autowired UserPreferencesService service;
+    @Autowired UserPreferencesStoreRepository repo;
 
     private static final String K = UserPreferencesService.MEDIA_POISON_DEFAULT;
 
@@ -73,22 +79,24 @@ class UserPreferencesServiceTest {
     @Nested
     class UserSituational {
         @Test
-        void unsetUser_inheritsServerDefaultMode() {
+        void unsetUser_inheritsServerDefaultMode_translatedToContractToken() {
             Map<String, String> view = service.get("us-1", "brandx").block();
-            assertThat(view).containsEntry(K, "nightshade");      // mirrors MediaPoisoningProperties
+            // mirrors MediaPoisoningProperties (engine 'nightshade'), surfaced as the
+            // user-facing contract token 'high'.
+            assertThat(view).containsEntry(K, "high");
         }
 
         @Test
         void put_thenGet_durableChoiceWins() {
-            Map<String, String> afterPut = service.put("us-2", K, "glaze", "brandx").block();
-            assertThat(afterPut).containsEntry(K, "glaze");
+            Map<String, String> afterPut = service.put("us-2", K, "medium", "brandx").block();
+            assertThat(afterPut).containsEntry(K, "medium");
             // a fresh resolve still reflects the durable override, not the server default.
-            assertThat(service.get("us-2", "brandx").block()).containsEntry(K, "glaze");
+            assertThat(service.get("us-2", "brandx").block()).containsEntry(K, "medium");
         }
 
         @Test
         void put_normalisesCaseToCanonicalMode() {
-            assertThat(service.put("us-3", K, "GLAZE", "brandx").block()).containsEntry(K, "glaze");
+            assertThat(service.put("us-3", K, "HIGH", "brandx").block()).containsEntry(K, "high");
         }
 
         @Test
@@ -99,10 +107,26 @@ class UserPreferencesServiceTest {
         }
 
         @Test
-        void put_invalidCloakMode_isBadRequest() {
+        void put_invalidPoisonMode_isBadRequest_andNamesTheVocabulary() {
             assertThatThrownBy(() -> service.put("us-5", K, "rainbow", "brandx").block())
                     .isInstanceOf(ApiException.class)
+                    .hasMessageContaining("off|low|medium|high")
                     .extracting(e -> ((ApiException) e).status().value()).isEqualTo(400);
+        }
+
+        @Test
+        void put_rawEngineToken_isRejected_theWireVocabularyIsUserFacingOnly() {
+            // STRICT contract: the engine tokens are pipeline-internal — a client
+            // writing 'glaze'/'nightshade'/'light'/'none' gets the same clean 400 as
+            // any other out-of-vocabulary value, and nothing is stored.
+            for (String engineToken : new String[]{"glaze", "nightshade", "light", "none"}) {
+                assertThatThrownBy(() -> service.put("us-7", K, engineToken, "brandx").block())
+                        .as("engine token '%s' must be rejected on the wire", engineToken)
+                        .isInstanceOf(ApiException.class)
+                        .extracting(e -> ((ApiException) e).status().value()).isEqualTo(400);
+            }
+            // value oracle: nothing was stored — the resolved view is still the default.
+            assertThat(service.get("us-7", "brandx").block()).containsEntry(K, "high");
         }
 
         @Test
@@ -113,8 +137,8 @@ class UserPreferencesServiceTest {
         }
 
         @Test
-        void put_noneOptOut_isAllowedAndDurable() {
-            assertThat(service.put("us-6", K, "none", "brandx").block()).containsEntry(K, "none");
+        void put_offOptOut_isAllowedAndDurable() {
+            assertThat(service.put("us-6", K, "off", "brandx").block()).containsEntry(K, "off");
         }
     }
 
@@ -123,24 +147,24 @@ class UserPreferencesServiceTest {
     class CrossUser {
         @Test
         void ownerIsolation_putByADoesNotAffectB() {
-            service.put("cu-a", K, "glaze", "brandx").block();
+            service.put("cu-a", K, "medium", "brandx").block();
             // owner B never set it ⇒ still the server default, untouched by A's put.
-            assertThat(service.get("cu-b", "brandx").block()).containsEntry(K, "nightshade");
+            assertThat(service.get("cu-b", "brandx").block()).containsEntry(K, "high");
         }
 
         @Test
         void brandIsolation_putInBrandXDoesNotChangeBrandY() {
-            service.put("cu-x", K, "glaze", "brandx").block();
-            service.put("cu-x", K, "light", "brandy").block();
-            assertThat(service.get("cu-x", "brandx").block()).containsEntry(K, "glaze");
-            assertThat(service.get("cu-x", "brandy").block()).containsEntry(K, "light");
+            service.put("cu-x", K, "medium", "brandx").block();
+            service.put("cu-x", K, "low", "brandy").block();
+            assertThat(service.get("cu-x", "brandx").block()).containsEntry(K, "medium");
+            assertThat(service.get("cu-x", "brandy").block()).containsEntry(K, "low");
         }
 
         @Test
         void superadminBypass_resolvesAcrossBrands() {
-            service.put("cu-sa", K, "glaze", "brandx").block();
+            service.put("cu-sa", K, "medium", "brandx").block();
             // null domain = SUPERADMIN bypass: the brandx durable value is visible.
-            assertThat(service.get("cu-sa", null).block()).containsEntry(K, "glaze");
+            assertThat(service.get("cu-sa", null).block()).containsEntry(K, "medium");
         }
     }
 
@@ -150,12 +174,37 @@ class UserPreferencesServiceTest {
         @Test
         void concurrentPutsSameKey_convergeToSingleDurableValue() {
             Flux.range(0, 30)
-                    .flatMap(i -> service.put("conc-1", K, i % 2 == 0 ? "glaze" : "light", "brandx"))
+                    .flatMap(i -> service.put("conc-1", K, i % 2 == 0 ? "medium" : "low", "brandx"))
                     .blockLast(Duration.ofSeconds(30));
 
             Map<String, String> view = service.get("conc-1", "brandx").block();
             // exactly one durable value survives (last-writer-wins); no duplicate/crash.
-            assertThat(view.get(K)).isIn("glaze", "light");
+            assertThat(view.get(K)).isIn("medium", "low");
+        }
+    }
+
+    // ── LEGACY (pre-contract engine tokens in durable rows) ───────────────────
+    @Nested
+    class LegacyEngineTokenRows {
+        @Test
+        void storedEngineToken_isCanonicalisedOnRead() {
+            // Simulate a pre-contract durable row (written before the user-facing
+            // vocabulary landed) via the repository — the validated write path can no
+            // longer produce one.
+            repo.upsert("lg-1", K, "glaze", "brandx").block();
+            assertThat(service.get("lg-1", "brandx").block()).containsEntry(K, "medium");
+
+            repo.upsert("lg-2", K, "none", "brandx").block();
+            assertThat(service.get("lg-2", "brandx").block()).containsEntry(K, "off");
+
+            repo.upsert("lg-3", K, "light", "brandx").block();
+            assertThat(service.get("lg-3", "brandx").block()).containsEntry(K, "low");
+        }
+
+        @Test
+        void storedGarbage_fallsBackToMedium_neverLeaksOutOfVocabulary() {
+            repo.upsert("lg-4", K, "definitely-not-a-mode", "brandx").block();
+            assertThat(service.get("lg-4", "brandx").block()).containsEntry(K, "medium");
         }
     }
 

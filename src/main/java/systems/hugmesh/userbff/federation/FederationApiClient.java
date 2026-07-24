@@ -50,20 +50,26 @@ public class FederationApiClient {
         this.http = http;
     }
 
-    /** The caller's OWN bundle cards (federation-api scopes /mine to the JWT subject). */
+    /** The caller's OWN bundle cards (federation-api scopes /mine to the JWT subject).
+     *  Upstream statuses pass through honestly (see {@link #toApiException}). */
     public Flux<UserModuleCard> listMine() {
         return http.get()
                 .uri("/api/federation/bundles/mine")
                 .retrieve()
-                .bodyToFlux(UserModuleCard.class);
+                .bodyToFlux(UserModuleCard.class)
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "list cards"));
     }
 
-    /** Versions of the caller's bundle for a slug. */
+    /** Versions of the caller's bundle for a slug. Upstream statuses pass through
+     *  honestly (see {@link #toApiException}). */
     public Flux<UserModuleCard> listBySlug(String slug) {
         return http.get()
                 .uri(uri -> uri.path("/api/federation/bundles/slug/{slug}").build(slug))
                 .retrieve()
-                .bodyToFlux(UserModuleCard.class);
+                .bodyToFlux(UserModuleCard.class)
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "list card versions"));
     }
 
     /**
@@ -72,12 +78,19 @@ public class FederationApiClient {
      * forwarded JWT makes federation-api return ONLY the caller's own card (a
      * non-owner gets 404 upstream), so the WYSIWYG editor can pre-fill for Edit.
      * Returns the raw entry-file bytes (the card source), not JSON.
+     *
+     * <p><b>Honest status pass-through</b>: federation-api's owner-scoped 404 (a
+     * foreign or unknown slug) maps to an {@link ApiException} carrying the SAME
+     * status — the semantically-correct 404 the cards UI needs, not the untranslated
+     * 500 two e2e feature files used to have to tolerate ("one of 404 or 500").
      */
     public Mono<byte[]> readBody(String slug) {
         return http.get()
                 .uri(uri -> uri.path("/api/federation/bundles/slug/{slug}/body").build(slug))
                 .retrieve()
-                .bodyToMono(byte[].class);
+                .bodyToMono(byte[].class)
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "read card body"));
     }
 
     /**
@@ -85,12 +98,16 @@ public class FederationApiClient {
      * owner-scoped {@code DELETE /bundles/{slug}}. The forwarded JWT makes
      * federation-api delete ONLY the caller's own card (a non-owner gets 404
      * upstream); federation-api removes the storage version + supersedes the row.
+     * Upstream statuses pass through honestly (a cross-owner delete surfaces as the
+     * 404 federation-api returned — see {@link #toApiException}).
      */
     public Mono<Void> delete(String slug) {
         return http.delete()
                 .uri(uri -> uri.path("/api/federation/bundles/{slug}").build(slug))
                 .retrieve()
-                .bodyToMono(Void.class);
+                .bodyToMono(Void.class)
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "delete card"));
     }
 
     /**
@@ -114,7 +131,9 @@ public class FederationApiClient {
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .body(Flux.just(buf), DataBuffer.class)
                 .retrieve()
-                .bodyToMono(UserModuleCard.class);
+                .bodyToMono(UserModuleCard.class)
+                .onErrorMap(WebClientResponseException.class,
+                        ex -> toApiException(ex, "publish card"));
     }
 
     /**
@@ -277,13 +296,15 @@ public class FederationApiClient {
     }
 
     /**
-     * Maps a raw {@link WebClientResponseException} from a vanity publish/unpublish
-     * call to an {@link ApiException} carrying the SAME HTTP status federation-api
-     * returned (falling back to {@code BAD_GATEWAY} for a status Spring cannot
-     * resolve), with the upstream response body appended for diagnostics. This is
-     * the honest-propagation seam: a caller downstream (ProfileService) sees the
-     * real failure reason instead of a generic 500 or — worse — a silently eaten
-     * error that would let a "publish" report success it never achieved.
+     * Maps a raw {@link WebClientResponseException} from a cards or vanity call to an
+     * {@link ApiException} carrying the SAME HTTP status federation-api returned
+     * (falling back to {@code BAD_GATEWAY} for a status Spring cannot resolve), with
+     * the upstream response body appended for diagnostics. This is the
+     * honest-propagation seam: a downstream caller (ProfileService, CardsController)
+     * sees the real failure reason — federation-api's owner-scoped 404 stays a 404 at
+     * the BFF boundary instead of leaking as an untranslated generic 500 (the defect
+     * two user-ui e2e feature files documented as "one of 404 or 500"), and a
+     * "publish" can never report a success it did not achieve.
      */
     private static ApiException toApiException(WebClientResponseException ex, String action) {
         HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());

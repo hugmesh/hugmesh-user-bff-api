@@ -43,8 +43,11 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  * {@code @PreAuthorize("hasRole('USER')")} method gate are exercised; the
  * {@link StickerService} is mocked. Proves: a valid PNG multipart → 200 PENDING (owner =
  * JWT subject, sniffed type forwarded); a non-image / SVG-labeled / oversize part → 400
- * with NO service call; a moderation block surfaces as a 422; list returns my stickers;
- * the USER floor (anonymous → 401, a non-USER principal → 403).
+ * with NO service call; a moderation block surfaces as a 422; list returns my stickers
+ * (incl. the {@code slug}/{@code label} wire fields the forum-ui picker keys on);
+ * the USER floor (anonymous → 401, a non-USER principal → 403); the {@code {slug}/body}
+ * serve leg (stored bytes + sniffed type + hardened headers, uniform 404 on any miss,
+ * malformed slug rejected before the service).
  */
 @WebFluxTest(controllers = StickerController.class)
 @Import(SecurityConfig.class)
@@ -222,5 +225,92 @@ class StickerControllerTest {
     void listMine_anonymous_isUnauthorized() {
         client.get().uri("/bff/user/character/stickers").exchange().expectStatus().isUnauthorized();
         verify(service, never()).listMine(anyString(), any());
+    }
+
+    @Test
+    void listMine_wireShape_carriesSlugAndLabel_theForumPickerContract() {
+        // forum-ui's sticker normalizer DROPS any list item without a `slug` (and shows
+        // `label`/`name` else the raw slug) — pin the two contract fields on the wire.
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(service.listMine(eq("alice"), eq("default")))
+                .thenReturn(Flux.just(sticker("s1", "alice", "happy")));
+
+        client.mutateWith(mockJwt().jwt(j -> j.subject("alice")).authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/user/character/stickers")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].slug").isEqualTo("s1")
+                .jsonPath("$[0].label").isEqualTo("happy");
+    }
+
+    // ── body serve (GET /{slug}/body) ───────────────────────
+
+    private static final byte[] SERVED = {(byte) 0x89, 'P', 'N', 'G', 7, 7};
+
+    @Test
+    void serveBody_known_returnsBytesWithSniffedTypeAndHardenedHeaders() {
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(service.serveBody(eq("st-1"), eq("bob"), eq("default")))
+                .thenReturn(Mono.just(new StickerService.StickerBody(SERVED, "image/png")));
+
+        client.mutateWith(mockJwt().jwt(j -> j.subject("bob")).authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/user/character/stickers/st-1/body")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentType(MediaType.IMAGE_PNG)
+                .expectHeader().valueEquals("X-Content-Type-Options", "nosniff")
+                .expectHeader().valueEquals("Content-Security-Policy", "default-src 'none'")
+                .expectBody(byte[].class).isEqualTo(SERVED);
+
+        // caller identity + domain come from the TOKEN (the service applies the gates).
+        verify(service).serveBody(eq("st-1"), eq("bob"), eq("default"));
+    }
+
+    @Test
+    void serveBody_nullRecordedType_fallsBackToImagePng() {
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(service.serveBody(eq("st-2"), eq("bob"), eq("default")))
+                .thenReturn(Mono.just(new StickerService.StickerBody(SERVED, null)));
+
+        client.mutateWith(mockJwt().jwt(j -> j.subject("bob")).authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/user/character/stickers/st-2/body")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentType(MediaType.IMAGE_PNG);
+    }
+
+    @Test
+    void serveBody_unknownOrDenied_isUniform404() {
+        // the service's empty covers EVERY miss: unknown id, foreign PENDING, REJECTED,
+        // cross-domain, legacy no-pixels row — one indistinguishable 404.
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(service.serveBody(eq("st-9"), eq("bob"), eq("default"))).thenReturn(Mono.empty());
+
+        client.mutateWith(mockJwt().jwt(j -> j.subject("bob")).authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/user/character/stickers/st-9/body")
+                .exchange()
+                .expectStatus().isNotFound();
+    }
+
+    @Test
+    void serveBody_malformedSlug_is404_withoutTouchingTheService() {
+        when(principalDomain.forScope(any())).thenReturn("default");
+
+        // uppercase breaks the [a-z0-9_-]{1,64} shape (the forum STICKER_SLUG_RE mirror).
+        client.mutateWith(mockJwt().jwt(j -> j.subject("bob")).authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/user/character/stickers/NOT-a-Slug/body")
+                .exchange()
+                .expectStatus().isNotFound();
+
+        verify(service, never()).serveBody(anyString(), anyString(), any());
+    }
+
+    @Test
+    void serveBody_anonymous_isUnauthorized() {
+        client.get().uri("/bff/user/character/stickers/st-1/body")
+                .exchange()
+                .expectStatus().isUnauthorized();
+        verify(service, never()).serveBody(anyString(), anyString(), any());
     }
 }
