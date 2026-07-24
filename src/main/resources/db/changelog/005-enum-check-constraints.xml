@@ -33,7 +33,7 @@
         so they never collide with the reserved-usernames branch when it merges.
     -->
 
-    <changeSet id="005-1-user-profile-visibility-check" author="snapdragon">
+    <changeSet id="005-1-user-profile-visibility-check" author="hugmesh">
         <sql>
             ALTER TABLE user_profile
                 ADD CONSTRAINT ck_user_profile_visibility
@@ -44,7 +44,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="005-2-user-block-platform-check" author="snapdragon">
+    <changeSet id="005-2-user-block-platform-check" author="hugmesh">
         <sql>
             ALTER TABLE user_block
                 ADD CONSTRAINT ck_user_block_platform

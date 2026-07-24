@@ -1,9 +1,9 @@
 {
   "openapi" : "3.0.1",
   "info" : {
-    "title" : "snapdragon-user-bff-api",
-    "description" : "User BFF API (/bff/user/**) — owner-scoped profile, home-guide preferences, federation-bundle cards, self-blocking, and instance-block recommendation. Every endpoint is keyed to the caller's Casdoor JWT subject.",
-    "version" : "0.1.0"
+    "title" : "hugmesh-user-bff-api",
+    "description" : "User BFF API (/bff/user/**) — every endpoint is owner-scoped to the caller's Casdoor JWT subject. Surfaces: native login/register/session, own-profile CRUD + avatar upload, Casdoor password/email relays, the durable per-user preference store (media.poison.default + mastodon.appearance.*), per-category notification preferences, the in-app notification inbox + SSE stream, home-guide dismissal, self-blocks + instance-block recommendation, self-silence, login-session list/revoke, connected apps & devices, federation cards, the media AI-cloak proxy, Meshtastic mesh-device claims, VN character parts + expression stickers, account status, and the Matrix/Mastodon reverse proxies.",
+    "version" : "0.2.0"
   },
   "servers" : [ {
     "url" : ""
@@ -26,6 +26,9 @@
   }, {
     "name" : "Profile",
     "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
+  }, {
+    "name" : "User preferences",
+    "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default (the per-user AI-cloak default; value vocabulary = the MediaPoisonMode schema, off|low|medium|high, BFF-owned) and the mastodon.appearance.* keys (the mastodon-ui appearance panel)."
   }, {
     "name" : "Notifications (TEST-SEED, self only)",
     "description" : "TEST/SEED-ONLY. Ships dark behind app.test-seed.enabled (default false). Creates a real in-app notification for the CALLER ONLY via the same delivery service the production ROLE_SERVICE internal-deliver path uses — never a parallel write."
@@ -65,9 +68,6 @@
   }, {
     "name" : "Sessions",
     "description" : "The caller's OWN active login sessions (owner = JWT-derived account). List + revoke."
-  }, {
-    "name" : "User preferences",
-    "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default (the per-user AI-poison default the compose toggle persists) and the mastodon.appearance.* keys (the mastodon-ui appearance panel)."
   }, {
     "name" : "Connected clients",
     "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."
@@ -1739,6 +1739,34 @@
         }
       }
     },
+    "/bff/user/character/stickers/{slug}/body" : {
+      "get" : {
+        "tags" : [ "Character-stickers" ],
+        "summary" : "Serve a sticker's stored image bytes by slug (= the sticker id the list returns). ACTIVE stickers serve to any user in the sticker's domain (they render inside other users' forum posts); a PENDING sticker serves ONLY to its owner (composer preview); a REJECTED sticker never serves. Any miss — unknown/malformed slug, foreign PENDING, REJECTED, no stored pixels — is a uniform 404.",
+        "operationId" : "serveBody",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string",
+                  "format" : "byte"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/character/parts/{id}/svg" : {
       "get" : {
         "tags" : [ "Character-parts" ],
@@ -2717,6 +2745,12 @@
           "createdAt" : {
             "type" : "string",
             "format" : "date-time"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "slug" : {
+            "type" : "string"
           }
         }
       },
@@ -2975,6 +3009,11 @@
             "format" : "date-time"
           }
         }
+      },
+      "MediaPoisonMode" : {
+        "type" : "string",
+        "description" : "User-facing AI-cloak intensity for the media.poison.default preference (BFF-owned vocabulary; the source of truth for UI clients): off = no cloaking, low = subtle, medium = recommended default, high = aggressive. Maps server-side onto the engine cloak modes none|light|glaze|nightshade.",
+        "enum" : [ "off", "low", "medium", "high" ]
       }
     }
   }

@@ -35,7 +35,7 @@
         user_notifications — the in-app FLOOR inbox (always-on; the in-app channel can
         never be silenced — prefs only gate the OTHER channels in later PRs). One row
         per delivered notification, owner+domain scoped. SHIPS DARK: nothing writes
-        this table in PR1 — the snapdragon-actions reconciler in a later PR is the
+        this table in PR1 — the hugmesh-actions reconciler in a later PR is the
         only writer. This PR is the read/prefs/floor side only (intended).
 
           • id           — app-generated UUID (portable INSERT across Postgres + H2),
@@ -52,7 +52,7 @@
         Postgres AND the H2 PostgreSQL-compat slice DB. Changeset id 012 follows 011.
     -->
 
-    <changeSet id="012-1-notification-preference" author="snapdragon">
+    <changeSet id="012-1-notification-preference" author="hugmesh">
         <createTable tableName="notification_preference">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>
@@ -79,7 +79,7 @@
 
     <!-- DB parity for the API-enforced category vocabulary (same pattern as 005/007):
          plain ANSI `col IN (...)` runs identically on Postgres AND the H2 slice DB. -->
-    <changeSet id="012-2-notification-preference-category-check" author="snapdragon">
+    <changeSet id="012-2-notification-preference-category-check" author="hugmesh">
         <sql>
             ALTER TABLE notification_preference
                 ADD CONSTRAINT ck_notification_preference_category
@@ -94,7 +94,7 @@
     <!-- account-restriction is FORCED-ON (un-silenceable): a DB-level backstop so the
          account-restriction preference row can NEVER persist enabled=false even if a
          future code path tried to. The API also coerces it — defence in depth. -->
-    <changeSet id="012-3-notification-preference-account-restriction-forced-on" author="snapdragon">
+    <changeSet id="012-3-notification-preference-account-restriction-forced-on" author="hugmesh">
         <sql>
             ALTER TABLE notification_preference
                 ADD CONSTRAINT ck_notification_preference_account_restriction_forced_on
@@ -105,7 +105,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="012-4-user-notifications" author="snapdragon">
+    <changeSet id="012-4-user-notifications" author="hugmesh">
         <createTable tableName="user_notifications">
             <column name="id" type="varchar(64)">
                 <constraints primaryKey="true" nullable="false"/>
@@ -131,7 +131,7 @@
     </changeSet>
 
     <!-- DB parity for the API-enforced category vocabulary on the inbox too. -->
-    <changeSet id="012-5-user-notifications-category-check" author="snapdragon">
+    <changeSet id="012-5-user-notifications-category-check" author="hugmesh">
         <sql>
             ALTER TABLE user_notifications
                 ADD CONSTRAINT ck_user_notifications_category
@@ -145,7 +145,7 @@
 
     <!-- The owner+domain newest-first inbox scan (GET /bff/user/notifications) is the
          hot read path. -->
-    <changeSet id="012-6-user-notifications-index" author="snapdragon">
+    <changeSet id="012-6-user-notifications-index" author="hugmesh">
         <createIndex tableName="user_notifications" indexName="idx_user_notifications_owner_domain_created">
             <column name="domain"/>
             <column name="user_subject"/>

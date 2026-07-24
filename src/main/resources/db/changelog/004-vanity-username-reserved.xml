@@ -20,9 +20,9 @@
         ProfileController). The CHECK below is the DB-LEVEL backstop for the
         service-layer validation: a non-null vanity_username may not be a reserved
         label. The forbidden list is generated from the canonical
-        systems.snapdragon.authcore.reserved.ReservedNames.RESERVED set — the SAME list
+        systems.hugmesh.authcore.reserved.ReservedNames.RESERVED set — the SAME list
         the federation serving layer + its 016 reserved-slug CHECK use (canonical
-        source: the fe-/be-gateway routes + reserved subdomains + the snapdragon.games
+        source: the fe-/be-gateway routes + reserved subdomains + the hugmesh.games
         route prefixes). lower() makes the constraint case-insensitive, matching the
         util. Keep this list in sync with ReservedNames if that set changes.
 
@@ -31,7 +31,7 @@
         PostgreSQL-compat slice DB (TestDatabaseConfig).
     -->
 
-    <changeSet id="004-1-user-profile-vanity-username" author="snapdragon">
+    <changeSet id="004-1-user-profile-vanity-username" author="hugmesh">
         <addColumn tableName="user_profile">
             <!-- Normalized (lower-cased) Casdoor username, set ONLY when vanity is
                  enabled; NULL when disabled. Matches the firstLabel of the vanity
@@ -40,7 +40,7 @@
         </addColumn>
     </changeSet>
 
-    <changeSet id="004-2-user-profile-vanity-username-reserved-check" author="snapdragon">
+    <changeSet id="004-2-user-profile-vanity-username-reserved-check" author="hugmesh">
         <sql>
             ALTER TABLE user_profile
                 ADD CONSTRAINT ck_user_profile_vanity_username_reserved

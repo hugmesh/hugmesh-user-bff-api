@@ -35,7 +35,7 @@
         an implicit Liquibase rollback (drop column).
     -->
 
-    <changeSet id="010-1-user-profile-domain" author="snapdragon">
+    <changeSet id="010-1-user-profile-domain" author="hugmesh">
         <addColumn tableName="user_profile">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>
@@ -43,7 +43,7 @@
         </addColumn>
     </changeSet>
 
-    <changeSet id="010-2-user-preference-domain" author="snapdragon">
+    <changeSet id="010-2-user-preference-domain" author="hugmesh">
         <addColumn tableName="user_preference">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>
@@ -51,7 +51,7 @@
         </addColumn>
     </changeSet>
 
-    <changeSet id="010-3-user-block-domain" author="snapdragon">
+    <changeSet id="010-3-user-block-domain" author="hugmesh">
         <addColumn tableName="user_block">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>
@@ -68,7 +68,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="010-4-self-silence-domain" author="snapdragon">
+    <changeSet id="010-4-self-silence-domain" author="hugmesh">
         <addColumn tableName="self_silence">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>
@@ -76,7 +76,7 @@
         </addColumn>
     </changeSet>
 
-    <changeSet id="010-5-media-poison-decision-domain" author="snapdragon">
+    <changeSet id="010-5-media-poison-decision-domain" author="hugmesh">
         <addColumn tableName="media_poison_decision">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>
@@ -94,7 +94,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="010-6-connected-client-audit-domain" author="snapdragon">
+    <changeSet id="010-6-connected-client-audit-domain" author="hugmesh">
         <addColumn tableName="connected_client_audit">
             <column name="domain" type="varchar(64)" defaultValue="default">
                 <constraints nullable="false"/>

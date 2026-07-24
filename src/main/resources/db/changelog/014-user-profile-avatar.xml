@@ -31,7 +31,7 @@
         current max (013 on main).
     -->
 
-    <changeSet id="014-user-profile-avatar" author="snapdragon">
+    <changeSet id="014-user-profile-avatar" author="hugmesh">
         <addColumn tableName="user_profile">
             <!-- Matrix media (mxc://) URL of the profile picture; NULL when not set.
                  Server-derived by the avatar endpoint, never from the profile PUT. -->

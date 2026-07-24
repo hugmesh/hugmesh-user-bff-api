@@ -9,7 +9,7 @@
          and the PRIMARY KEY (one row per user). visibility is a small fixed
          vocabulary {public|internal} kept as a portable text column (default
          'internal') so the same DDL runs on Postgres and the H2 test DB. -->
-    <changeSet id="001-user-profile" author="snapdragon">
+    <changeSet id="001-user-profile" author="hugmesh">
         <createTable tableName="user_profile">
             <column name="user_id" type="varchar(255)">
                 <constraints primaryKey="true" nullable="false"/>

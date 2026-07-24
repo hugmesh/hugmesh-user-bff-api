@@ -1,12 +1,12 @@
 # snapdragon-deploy.yaml — per-repo deploy descriptor (Phase 6 catalog).
 #
-# Discovered by the catalog ApplicationSet (snapdragon-generator
+# Discovered by the catalog ApplicationSet (hugmesh-generator
 # specs/cluster/apps/13-service-catalog.yaml): its scmProvider gitea generator
 # scans the in-cluster Forgejo org for repos carrying THIS file + a `deploy/`
 # kustomize dir and generates one ArgoCD Application (source path: deploy/).
 #
 # DUAL-HOME / SHIPS DARK: the central manifest still lives at
-# snapdragon-generator specs/cluster/manifests/user-bff-api/ and remains the
+# hugmesh-generator specs/cluster/manifests/user-bff-api/ and remains the
 # authoritative source today. This file + deploy/ are a Forgejo-cutover PILOT:
 # the live GitHub-rooted ArgoCD ignores it, and the (currently unseeded) Forgejo
 # catalog matches nothing, so it changes nothing running. deploy/ is a verbatim
