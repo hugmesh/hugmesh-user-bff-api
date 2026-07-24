@@ -46,6 +46,49 @@ class VanityUsernameConstraintTest {
                 .verify();
     }
 
+    /**
+     * The 021 canonical-sync additions (reserved-prefixes.yaml revision 9 = 82
+     * labels): the Character Forge track labels ({@code character-forge} +
+     * the games-side wasm slugs), the revision 7/8 MDM/attestation prefixes
+     * ({@code hmdm}/{@code attest}), and a sample of the previously-drifted
+     * revision 3-6 labels ({@code character-studio}/{@code wiki}/{@code tube}/
+     * {@code superadmin}/{@code v1}/{@code ai}/{@code index.html}) are all
+     * rejected by the re-added CHECK — case-insensitively. NOTE: with the
+     * auth-core pin at 2.4.1 (canonical revision 9) the revision 7-9 labels are
+     * ALSO rejected as a service-layer 400 (see
+     * {@code ProfileServiceReservedUsernameTest}); this DB backstop remains the
+     * fail-closed defence-in-depth beneath that guard.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "character-forge", "games-character-forge", "games-shadows-of-the-net",
+            "hmdm", "attest", "CHARACTER-FORGE", "Character-Forge",
+            "character-studio", "wiki", "tube", "superadmin", "v1", "ai", "index.html"})
+    void canonicalSyncReservedVanityUsernameInsert_isRejectedByCheckConstraint(String reserved) {
+        StepVerifier.create(
+                        db.sql("INSERT INTO user_profile (user_id, visibility, "
+                                        + "vanity_subdomain_enabled, vanity_username, updated_at) "
+                                        + "VALUES (:u, 'public', true, :vu, now())")
+                                .bind("u", "sub-" + reserved)
+                                .bind("vu", reserved)
+                                .fetch().rowsUpdated())
+                .expectError() // CHECK violation surfaces as an R2DBC data-integrity error
+                .verify();
+    }
+
+    @Test
+    void characterForgeAdjacentUsername_isAccepted() {
+        // The CHECK is an exact-label match, not a prefix match: an ADJACENT
+        // handle ('characterforge') is NOT captured by the reserved list —
+        // proving 021 did not widen beyond the canonical labels. (Confusable /
+        // skeleton folding is the service layer's job, not this constraint's.)
+        db.sql("INSERT INTO user_profile (user_id, visibility, vanity_subdomain_enabled, "
+                        + "vanity_username, updated_at) "
+                        + "VALUES ('sub-cfadj', 'public', true, 'characterforge', now())")
+                .fetch().rowsUpdated().block();
+        assertThat(countFor("sub-cfadj")).isEqualTo(1L);
+    }
+
     @Test
     void normalVanityUsername_isAccepted() {
         db.sql("INSERT INTO user_profile (user_id, visibility, vanity_subdomain_enabled, "

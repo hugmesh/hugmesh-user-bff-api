@@ -67,17 +67,24 @@
          (InternalTokenWebFilter), the InternalSurfaceBootGuard and the canonical
          reserved.ReservedNames (this repo's local profile.ReservedNames dup is deleted
          in favour of it). Unlike hugmesh-commons, auth-core is NOT parent-managed —
-         so this dependency carries an EXPLICIT <version>. PINNED to 2.4.0 (bumped from
-         the pre-rebrand 2.3.3 pin as part of the HugMesh rename: 2.4.0 is the
-         hugmesh-auth-core coordinate now published for real under the renamed
-         groupId/artifactId): this still carries auth-core's ReservedNames
-         canonical-revision sync (character-studio / v1 / ai + 4 frontend webroot
-         filenames), which this BFF's ProfileService/UsernameSkeleton username guard
-         consumes directly. -->
+         so this dependency carries an EXPLICIT <version>. PINNED to 2.4.1 (2.4.0 was
+         the HugMesh-rename coordinate, bumped from the pre-rebrand 2.3.3 pin; 2.4.1
+         adds the canonical reserved-prefix revision 7-9 sync — hmdm / attest plus the
+         Character Forge track's character-forge / games-character-forge /
+         games-shadows-of-the-net — on top of the revision 4-6 labels 2.3.3 carried):
+         auth-core's ReservedNames is the runtime reserved-username enforcement this
+         BFF's ProfileService/UsernameSkeleton username guard consumes directly, so
+         with this pin those five labels are ALSO rejected as a clean service-layer
+         400, with the 021 DB CHECK (ck_user_profile_vanity_username_reserved) as the
+         defence-in-depth backstop beneath it.
+         RELEASE NOTE: 2.4.1 exists on hugmesh-auth-core branch
+         feat/character-forge-reserved-labels and is NOT yet published to the
+         registry — until it is released, CI resolution of this pin FAILS (local
+         builds work via a locally-installed ./mvnw install of that branch). -->
     <dependency>
       <groupId>systems.hugmesh</groupId>
       <artifactId>hugmesh-auth-core</artifactId>
-      <version>2.4.0</version>
+      <version>2.4.1</version>
     </dependency>
 
     <!-- ============================================================================
