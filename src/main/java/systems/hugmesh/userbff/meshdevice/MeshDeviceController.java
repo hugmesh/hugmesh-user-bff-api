@@ -149,7 +149,7 @@ public class MeshDeviceController {
         @ApiResponse(responseCode = "200", description = "Node id claimed; the persisted device is returned (canonical nodeId, visibility 'private', state 'active')."),
         @ApiResponse(responseCode = "400", description = "Missing/malformed nodeId (not 8 hex digits with an optional '!' prefix) or label over 64 chars."),
         @ApiResponse(responseCode = "401", description = "Missing or invalid Casdoor JWT."),
-        @ApiResponse(responseCode = "403", description = "Principal lacks ROLE_USER."),
+        @ApiResponse(responseCode = "403", description = "Principal lacks ROLE_USER, OR the caller's domain has not been granted+enabled the 'user-mesh-devices' capability (the per-domain claim gate — dark by default, see MeshClaimCapabilityGate)."),
         @ApiResponse(responseCode = "409", description = "Node id already registered on this platform (by anyone, any domain, active or revoked — one owner per radio)."),
         @ApiResponse(responseCode = "500", description = "Database error writing the claim row.")
     })

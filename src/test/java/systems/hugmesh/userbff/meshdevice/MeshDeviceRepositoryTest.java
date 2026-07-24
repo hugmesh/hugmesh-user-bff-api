@@ -61,7 +61,9 @@ class MeshDeviceRepositoryTest extends PostgresTestSupport {
 
     @BeforeEach
     void setUpService() {
-        service = new MeshDeviceService(repo);
+        // Open (disabled) gate: this slice tests the repo/service data path,
+        // not the capability preflight (MeshClaimCapabilityGateTest covers that).
+        service = new MeshDeviceService(repo, MeshClaimCapabilityGate.disabled());
     }
 
     /** Flip a row to REVOKED directly in the store — the mod-bff revocation WRITER is a

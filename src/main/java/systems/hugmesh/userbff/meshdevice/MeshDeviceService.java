@@ -67,9 +67,14 @@ public class MeshDeviceService {
     private static final int VIA_DEVICE_MAX = 64;
 
     private final MeshDeviceRepository repo;
+    /** The per-domain claim gate (capability {@code user-mesh-devices}) — dark by
+     *  default; see {@link MeshClaimCapabilityGate}. Claims ONLY: the gate never
+     *  touches release/visibility/status on rows that already exist. */
+    private final MeshClaimCapabilityGate claimGate;
 
-    public MeshDeviceService(MeshDeviceRepository repo) {
+    public MeshDeviceService(MeshDeviceRepository repo, MeshClaimCapabilityGate claimGate) {
         this.repo = repo;
+        this.claimGate = claimGate;
     }
 
     /**
@@ -85,7 +90,10 @@ public class MeshDeviceService {
         requireOwner(owner);
         String canonical = canonicalNodeId(nodeId);
         String lbl = (label == null || label.isBlank()) ? null : label.trim();
-        return repo.save(owner, domain, canonical, lbl)
+        // Per-domain capability preflight (dark by default; 403 when the domain
+        // hasn't been granted+enabled 'user-mesh-devices' — see MeshClaimCapabilityGate).
+        return claimGate.requireClaimAllowed(domain)
+                .then(repo.save(owner, domain, canonical, lbl))
                 .onErrorMap(DuplicateKeyException.class, e -> ApiException.conflict(
                         "mesh node id " + canonical + " is already registered on this platform"));
     }
