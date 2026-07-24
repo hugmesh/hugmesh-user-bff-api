@@ -932,7 +932,7 @@
             }
           },
           "403" : {
-            "description" : "Principal lacks ROLE_USER.",
+            "description" : "Principal lacks ROLE_USER, OR the caller's domain has not been granted+enabled the 'user-mesh-devices' capability (the per-domain claim gate — dark by default, see MeshClaimCapabilityGate).",
             "content" : {
               "*/*" : {
                 "schema" : {

@@ -137,6 +137,16 @@ app:
   tenancy:
     issuers: "${APP_TENANCY_ISSUERS:}"
 
+  # Per-domain capability gate on mesh-device CLAIMS (admin-bff's two-key
+  # domain_capability read, capability 'user-mesh-devices'). SHIPS DARK:
+  # enabled=false ⇒ claims behave exactly as before the gate existed. The
+  # in-cluster deployment flips this on once admin-bff's capability surface is
+  # live; when enabled the gate is FAIL-CLOSED (admin-bff unreachable ⇒ 403) and
+  # an unscoped (superadmin) caller bypasses it. See MeshClaimCapabilityGate.
+  mesh-device:
+    capability-gate:
+      enabled: "${APP_MESH_DEVICE_CAPABILITY_GATE_ENABLED:false}"
+
   # TEST/SEED-ONLY: POST /bff/user/notifications/test-seed (TestSeedNotificationController)
   # lets an ORDINARY authenticated human persona create a real user_notifications row for
   # THEMSELVES ONLY (never another user), through the SAME InternalNotificationDeliveryService

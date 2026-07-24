@@ -197,6 +197,9 @@ public class AdminBffInternalClient {
      *  drops these for the {@code /bff/me} hydrate path that doesn't need them. */
     public record SessionResolution(AccountView account, String status, boolean mfaSatisfied) {}
 
+    /** Body of admin-bff's {@code GET /bff/internal/domain-capabilities/{domain}/{capability}}. */
+    public record CapabilityView(boolean active) {}
+
     /** Null unless app.bff.oidc.enabled=true — when null every call is a fail-closed
      *  stub (Mono.error), so a disabled surface can never silently authenticate. */
     private final WebClient http;
@@ -224,6 +227,25 @@ public class AdminBffInternalClient {
                 .bodyValue(Map.of("provider", provider, "handle", handle))
                 .retrieve()
                 .bodyToMono(AccountView.class);
+    }
+
+    /**
+     * Whether a per-domain capability is ACTIVE (superadmin-granted AND domain-admin-enabled,
+     * with the global kill-switch honored) — admin-bff's two-key {@code domain_capability}
+     * read ({@code GET /bff/internal/domain-capabilities/{domain}/{capability}}, always 200
+     * {@code {"active": bool}}). Same fail-closed stub semantics as every other call here:
+     * with the surface dark this errors, and the caller (the mesh-device claim gate) maps
+     * ANY error to deny.
+     */
+    public Mono<Boolean> domainCapabilityActive(String domain, String capability) {
+        if (http == null) {
+            return stub("domainCapabilityActive");
+        }
+        return http.get()
+                .uri("/bff/internal/domain-capabilities/{domain}/{capability}", domain, capability)
+                .retrieve()
+                .bodyToMono(CapabilityView.class)
+                .map(CapabilityView::active);
     }
 
     /** Fetch the account view by id (e.g. after resolving a session). */
