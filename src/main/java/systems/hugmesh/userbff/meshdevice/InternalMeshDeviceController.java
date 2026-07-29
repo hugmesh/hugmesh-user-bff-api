@@ -342,9 +342,12 @@ public class InternalMeshDeviceController {
 
     /**
      * One owner subject → {@code (owner, localpart)} entry via admin-bff's account read.
-     * EMPTY (the caller then omits that owner's rows) when admin-bff errors (including
-     * the fail-closed disabled stub and an unknown-account 404) or when the account has
-     * no persisted localpart yet — never a fabricated/un-collision-checked candidate.
+     * EMPTY when admin-bff errors (including the fail-closed disabled stub and an
+     * unknown-account 404) or when the account has no persisted localpart yet — never a
+     * fabricated/un-collision-checked candidate. Shared by BOTH resolvers; what EMPTY
+     * means to each is their own call (the bridge omits the row, the moderation console
+     * keeps it with a null localpart — see {@link #resolveModerationRows}), so the log
+     * lines here state the resolution failure, not a consequence only one caller has.
      */
     private Mono<Map.Entry<String, String>> resolveLocalpart(String ownerSubject) {
         return adminBff.getAccount(ownerSubject)
@@ -352,14 +355,14 @@ public class InternalMeshDeviceController {
                     String localpart = account.localpart();
                     if (localpart == null || localpart.isBlank()) {
                         log.warn("[mesh-devices] owner {} has no persisted Matrix localpart yet — "
-                                + "its device rows are omitted from the bridge mapping", ownerSubject);
+                                + "its device rows are not attributable", ownerSubject);
                         return Mono.<Map.Entry<String, String>>empty();
                     }
                     return Mono.just(Map.entry(ownerSubject, localpart));
                 })
                 .onErrorResume(e -> {
                     log.warn("[mesh-devices] localpart resolution FAILED for owner {} — its device "
-                            + "rows are omitted from the bridge mapping: {}", ownerSubject, e.toString());
+                            + "rows are not attributable: {}", ownerSubject, e.toString());
                     return Mono.empty();
                 });
     }

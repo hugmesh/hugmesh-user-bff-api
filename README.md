@@ -641,22 +641,42 @@ globally UNIQUE — one owner per radio, across every user and brand, active or 
   **404**, never a 403 — no cross-owner existence leak); releasing a revoked row is allowed
   and frees the node id.
 
-**Internal bridge receiver — `InternalMeshDeviceController`
+**Internal bridge + moderation receiver — `InternalMeshDeviceController`
 (`/bff/user/internal/mesh-devices`)** — **SERVICE-PRINCIPAL ONLY** (same `ROLE_SERVICE`-
 exclusive `/bff/user/internal/**` gate as the notifications/character-moderation
-receivers). `GET /bff/user/internal/mesh-devices` returns the full ACTIVE node-id →
-Matrix-localpart mapping across every owner/domain (localpart resolved per-owner via
-`AdminBffInternalClient#getAccount`, fail-soft — an owner with no persisted localpart yet
-is omitted, never a fabricated candidate); `POST /bff/user/internal/mesh-devices/status`
+receivers; note that even `ROLE_MOD`/`ROLE_SUPERADMIN` are denied — the role hierarchy has
+no edge to `ROLE_SERVICE`). `GET /bff/user/internal/mesh-devices` returns the full ACTIVE
+node-id → Matrix-localpart mapping across every owner/domain (localpart resolved per-owner
+via `AdminBffInternalClient#getAccount`, fail-soft — an owner with no persisted localpart
+yet is omitted, never a fabricated candidate); `POST /bff/user/internal/mesh-devices/status`
 is the batch LoRa telemetry write-back (`{updated, ignored}`, fail-soft per element —
 unknown/revoked node ids are counted `ignored`, never an error).
+
+The same controller carries the **moderation** surface that `hugmesh-mod-bff-api` drives
+(`/bff/mod/mesh-devices/**` → here). It is the ONLY writer of the `state` /
+`revoked_by` / `revoked_at` / `revoke_reason` columns 019 shipped:
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /bff/user/internal/mesh-devices/moderation` | Moderator console list ACROSS every owner, newest claim first. `?state=active\|revoked` (omit = both; an unknown value is a **400**, never a silently-empty page), `?domain=` brand scope (omit ONLY for a cross-domain SUPERADMIN view), `?limit=` **server-clamped** — default **100**, hard cap **500**. Rows carry the two fields the user-facing shape withholds — `ownerSubject` (+ `ownerLocalpart`, resolved through the SAME deduped/fail-soft admin-bff path as the bridge mapping) and `revokedBy` — plus `domain`/`state`/`visibility`/`revokeReason`/`revokedAt`/`createdAt`/`lastSeenAt`. Unlike the bridge mapping an **unresolvable owner keeps its row** with a `null` `ownerLocalpart`: a moderator who cannot see an un-attributable radio cannot revoke it. |
+| `POST /bff/user/internal/mesh-devices/{id}/revoke` | Body `{reason, moderator, domain?}`. CAS `active`→`revoked` at the SQL layer, stamping `revoked_by`/`revoked_at` (server `now()`)/`revoke_reason`. Already-revoked is a **409**, unknown or out-of-brand id a **404** (no cross-brand existence leak); a missing/blank/over-255 `reason` or `moderator` is a **400**. |
+| `POST /bff/user/internal/mesh-devices/{id}/restore` | Body `{moderator, domain?}`. CAS `revoked`→`active`, **clearing** the whole `revoked_by`/`revoked_at`/`revoke_reason` trio so the owner stops seeing a stale reason (mod-bff's `mod_action` ledger keeps the durable record). Not-revoked is a **409**, unknown/out-of-brand a **404**. |
+
+Both writes are compare-and-set — the source state is a `WHERE` predicate, so two
+concurrent moderators cannot interleave — and a zero-row result is then *diagnosed* by a
+brand-scoped read to pick 404 vs 409, the same discipline `PUT
+/mesh-devices/{id}/visibility` uses. The `moderator` identity travels in the **body**
+because the caller IS the trusted service principal (there is no human token on this hop);
+mod-bff derives it from the validated moderator JWT and never from its own caller's
+payload. Revoking does not free the radio: the row keeps occupying the globally-unique
+`node_id`, so the device cannot be re-registered while it exists.
 
 ## Where data lives (the routing rule)
 
 | Concern | Destination |
 | --- | --- |
 | Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs, VN-character parts + expression stickers | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`, `vn_character_part`, `vn_sticker_pack`) |
-| Mesh-device claims (Meshtastic LoRa node id → owner, + status visibility, bridge-reported LoRa status, moderation state) | **own R2DBC table** (`mesh_device`, 019 — `node_id` globally UNIQUE, one owner per radio). Exported to the mesh↔Matrix bridge (active rows only, node id → Matrix localpart via the admin-bff account read) and status-updated by it through the SERVICE-only `/bff/user/internal/mesh-devices` surface |
+| Mesh-device claims (Meshtastic LoRa node id → owner, + status visibility, bridge-reported LoRa status, moderation state) | **own R2DBC table** (`mesh_device`, 019 — `node_id` globally UNIQUE, one owner per radio). Exported to the mesh↔Matrix bridge (active rows only, node id → Matrix localpart via the admin-bff account read), status-updated by it, and moderated (revoke/restore CAS) by hugmesh-mod-bff-api — all three through the SERVICE-only `/bff/user/internal/mesh-devices` surface |
 | Account / session data for the relocated login/session surfaces | **`hugmesh-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **hugmesh-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
