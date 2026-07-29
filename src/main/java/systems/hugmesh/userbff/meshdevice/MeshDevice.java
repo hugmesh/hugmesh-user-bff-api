@@ -25,8 +25,8 @@ import java.util.Set;
  * {@code channels}. Owner-changed via {@code PUT /mesh-devices/{id}/visibility}.
  *
  * <p>{@code state} vocabulary (DB-paralleled by the 019 CHECK): {@code active} |
- * {@code revoked} (a moderator pulled the device — the mod-bff writer lands in a LATER
- * wave; this repo ships the schema + semantics). A REVOKED row still shows in the
+ * {@code revoked} (a moderator pulled the device, through mod-bff → the SERVICE-gated
+ * {@code /bff/user/internal/mesh-devices/{id}/revoke}). A REVOKED row still shows in the
  * owner's list — with {@code state}, {@code revokeReason} and {@code revokedAt} so the
  * user sees why — but is EXCLUDED from the internal bridge mapping and its visibility
  * can no longer be changed. {@code revoked_by} (the moderator identity) is deliberately
@@ -65,14 +65,25 @@ public record MeshDevice(
     public static final Set<String> VISIBILITIES = Set.of("private", "friends", "channels");
 
     /** {@code mesh_device.state} lifecycle literals — mirror the 019 CHECK. A fresh
-     *  claim is {@code active} (the 019 column DEFAULT); {@code revoked} is written by
-     *  the mod-bff moderation wave (LATER — this repo ships schema + semantics only). */
+     *  claim is {@code active} (the 019 column DEFAULT); {@code revoked} is written by a
+     *  moderator through the SERVICE-gated internal moderation surface (mod-bff is the
+     *  caller — see {@link InternalMeshDeviceController}). */
     public static final String STATE_ACTIVE = "active";
     public static final String STATE_REVOKED = "revoked";
+
+    /** The {@code mesh_device.state} vocabulary — mirrors the 019 CHECK; the moderation
+     *  list's {@code ?state=} filter validates against it. */
+    public static final Set<String> STATES = Set.of(STATE_ACTIVE, STATE_REVOKED);
 
     /** Whether {@code v} is a member of the visibility vocabulary (the service-leg
      *  re-check, defence-in-depth behind the controller's {@code @Pattern}). */
     public static boolean validVisibility(String v) {
         return v != null && VISIBILITIES.contains(v);
+    }
+
+    /** Whether {@code s} is a member of the state vocabulary (the service-leg re-check
+     *  behind the moderation controller's {@code @Pattern} on {@code ?state=}). */
+    public static boolean validState(String s) {
+        return s != null && STATES.contains(s);
     }
 }

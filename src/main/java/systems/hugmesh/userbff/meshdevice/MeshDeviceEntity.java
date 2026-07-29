@@ -17,7 +17,8 @@ import java.time.Instant;
  * <p>{@code visibility} ({@code private|friends|channels}, DEFAULT {@code private}) is
  * owner-managed; {@code state} ({@code active|revoked}, DEFAULT {@code active}) plus the
  * {@code revokedBy}/{@code revokedAt}/{@code revokeReason} audit trio are the moderation
- * columns (written by mod-bff in a LATER wave); the LoRa status columns
+ * columns (written ONLY by the SERVICE-gated moderation CAS statements — mod-bff is the
+ * caller; a restore CLEARS the trio); the LoRa status columns
  * ({@code lastSeenAt}, {@code batteryPct} 0..101, {@code snr}, {@code hopsAway},
  * {@code viaDevice}) are written only by the bridge's SERVICE-gated batch status update
  * and stay {@code null} until first report. Column names/types match the Liquibase
