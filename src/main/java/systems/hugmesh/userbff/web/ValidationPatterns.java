@@ -57,4 +57,9 @@ public final class ValidationPatterns {
 
     /** mesh_device.visibility — mirrors the 019 CHECK + MeshDevice.validVisibility. */
     public static final String MESH_VISIBILITY = "^(private|friends|channels)$";
+
+    /** mesh_device.state — mirrors the 019 CHECK + MeshDevice.validState. The
+     *  moderation console's {@code ?state=} filter validates against it (an OMITTED
+     *  filter means "both states", so the empty string is deliberately accepted). */
+    public static final String MESH_STATE = "^(active|revoked)?$";
 }

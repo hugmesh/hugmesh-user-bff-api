@@ -18,6 +18,14 @@ import java.time.Instant;
  *
  * <p>A {@code null}/unscoped {@code domain} is the SUPERADMIN cross-domain bypass; an
  * unscoped SAVE stamps {@link DomainRegistry#DEFAULT_DOMAIN}.
+ *
+ * <p>The MODERATION members at the bottom ({@link #listForModeration},
+ * {@link #findForModeration}, {@link #revokeWhereActive}, {@link #restoreWhereRevoked})
+ * are the ONLY methods here that are not owner-scoped — a moderator acts across owners by
+ * definition. They are reachable ONLY from the SERVICE-gated internal surface
+ * ({@link InternalMeshDeviceController}), stay BRAND-scoped whenever the caller supplies a
+ * domain, and both state writes are SQL-layer CAS statements (the source state is a WHERE
+ * predicate) so a transition can never interleave with a concurrent one.
  */
 @Repository
 public class MeshDeviceRepository {
@@ -114,5 +122,84 @@ public class MeshDeviceRepository {
      */
     public Flux<MeshDeviceEntity> listActiveForBridge() {
         return repo.findByStateOrderByCreatedAtAsc(MeshDevice.STATE_ACTIVE);
+    }
+
+    // ── Moderation (SERVICE-gated; cross-owner, optionally brand-scoped) ──
+
+    /** Hard server-side cap on the moderator console page size — a caller-supplied
+     *  {@code ?limit=} is clamped to this ceiling so a console read can never stream the
+     *  whole {@code mesh_device} table into memory (the same unbounded-table posture
+     *  mod-bff's {@code ModActionRepository.MAX_AUDIT_LIMIT} takes). */
+    public static final int MAX_MODERATION_LIMIT = 500;
+
+    /** Console page size when the caller supplies no {@code ?limit=}. */
+    public static final int DEFAULT_MODERATION_LIMIT = 100;
+
+    /**
+     * Clamp a caller-influenced console page size to {@code [1, MAX_MODERATION_LIMIT]}
+     * (a non-positive value falls back to the default). Defense-in-depth: the controller
+     * clamps the query parameter, the service clamps again, and this facade clamps a
+     * THIRD time so no caller — present or future — can reach the SQL {@code LIMIT}
+     * unbounded.
+     */
+    public static int clampModerationLimit(int limit) {
+        if (limit < 1) return DEFAULT_MODERATION_LIMIT;
+        return Math.min(limit, MAX_MODERATION_LIMIT);
+    }
+
+    /**
+     * The MODERATOR console read: rows ACROSS every owner, newest claim first, BOUNDED.
+     * Returns the ROW shape (not the user-facing wire record) because the console needs
+     * exactly the fields that record deliberately omits — {@code owner_subject} (which
+     * the caller resolves to a Matrix localpart) and {@code revoked_by} (the acting
+     * moderator, hidden from the end user but shown to moderators).
+     *
+     * @param state  {@code active}|{@code revoked} to filter, or {@code null} for both
+     * @param domain the moderator's brand, or {@code null} for the SUPERADMIN
+     *               cross-domain view (same unscoped convention as {@link #delete})
+     * @param limit  caller-influenced page size, clamped here to the hard cap
+     */
+    public Flux<MeshDeviceEntity> listForModeration(String state, String domain, int limit) {
+        int capped = clampModerationLimit(limit);
+        boolean unscoped = DomainScope.isUnscoped(domain);
+        if (state == null) {
+            return unscoped ? repo.findForModerationNewest(capped)
+                    : repo.findForModerationByDomainNewest(domain, capped);
+        }
+        return unscoped ? repo.findForModerationByStateNewest(state, capped)
+                : repo.findForModerationByStateAndDomainNewest(state, domain, capped);
+    }
+
+    /**
+     * The moderator's single-row read — the DIAGNOSE leg behind a zero-row CAS (was the
+     * id unknown, or was the row simply in the wrong state?). BRAND-scoped when
+     * {@code domain} is set, so a branded moderator's 409-vs-404 answer can never confirm
+     * that another brand's device exists; {@code null} domain is the SUPERADMIN
+     * cross-domain read. Row shape for the same reason as {@link #listForModeration}.
+     */
+    public Mono<MeshDeviceEntity> findForModeration(String id, String domain) {
+        return DomainScope.isUnscoped(domain)
+                ? repo.findById(id)
+                : repo.findByIdAndDomain(id, domain);
+    }
+
+    /** ACTIVE-guarded moderator REVOKE (CAS {@code active}→{@code revoked}), stamping
+     *  {@code revoked_by}/{@code revoked_at}/{@code revoke_reason}. ZERO rows when the id
+     *  is unknown, out of the moderator's brand, OR already revoked — the service
+     *  diagnoses which (404 vs 409). */
+    public Mono<Integer> revokeWhereActive(String id, String domain, String moderator, String reason) {
+        return DomainScope.isUnscoped(domain)
+                ? repo.revokeWhereActive(id, moderator, reason)
+                : repo.revokeWhereActiveInDomain(id, domain, moderator, reason);
+    }
+
+    /** REVOKED-guarded moderator RESTORE (CAS {@code revoked}→{@code active}), CLEARING
+     *  the {@code revoked_by}/{@code revoked_at}/{@code revoke_reason} trio. ZERO rows
+     *  when the id is unknown, out of the moderator's brand, OR not revoked — the service
+     *  diagnoses which (404 vs 409). */
+    public Mono<Integer> restoreWhereRevoked(String id, String domain) {
+        return DomainScope.isUnscoped(domain)
+                ? repo.restoreWhereRevoked(id)
+                : repo.restoreWhereRevokedInDomain(id, domain);
     }
 }

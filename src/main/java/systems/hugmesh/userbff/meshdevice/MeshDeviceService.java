@@ -34,7 +34,12 @@ import java.util.regex.Pattern;
  *       platform-wide, keyed by node id): fail-soft, ACTIVE-guarded, value-clamped.</li>
  * </ul>
  *
- * <h4>Revocation semantics (schema shipped here; the mod-bff writer is a LATER wave)</h4>
+ * <p>The three MODERATION methods at the bottom ({@link #listForModeration},
+ * {@link #revoke}, {@link #restore}) are likewise ownerless — a moderator acts ACROSS
+ * owners — and are reachable only from the {@code ROLE_SERVICE}-gated internal surface
+ * ({@link InternalMeshDeviceController}), with the caller's brand as their only scope.
+ *
+ * <h4>Revocation semantics</h4>
  *
  * <p>A REVOKED row keeps occupying the globally-unique {@code node_id}, so a re-claim of
  * a pulled radio — by its owner under a new row, or by anyone else — hits the SAME
@@ -42,11 +47,13 @@ import java.util.regex.Pattern;
  * row exists. A revoked row is excluded from the bridge mapping at the SQL layer and its
  * visibility is frozen; it stays visible in the owner's own list (with the reason).
  *
- * <p><b>Documented trade-off for the moderation wave to revisit:</b> the owner MAY
- * delete a revoked row ({@link #release} is deliberately not state-gated), which FREES
- * the node id for a fresh claim. Keep-blocked-after-delete semantics would need a
- * separate tombstone (or a soft-delete flag) that this schema wave does not carry —
- * revisit when mod-bff's revocation writer lands.
+ * <p><b>Documented trade-off, unchanged by the moderation wave:</b> the owner MAY delete
+ * a revoked row ({@link #release} is deliberately not state-gated), which FREES the node
+ * id for a fresh claim. Keep-blocked-after-delete semantics would need a separate
+ * tombstone (or a soft-delete flag) that the 019 schema does not carry, so it is
+ * deliberately NOT bolted on here: the moderation wave adds the WRITER for the state the
+ * schema already models, it does not change the state model. mod-bff's {@code mod_action}
+ * ledger keeps the durable record of every revoke/restore either way.
  */
 @Service
 public class MeshDeviceService {
@@ -65,6 +72,14 @@ public class MeshDeviceService {
     /** {@code via_device} column width (019) — bridge-supplied text is truncated, never
      *  rejected (a status report is telemetry, not user input worth failing on). */
     private static final int VIA_DEVICE_MAX = 64;
+
+    /** {@code revoke_reason} column width (019). UNLIKE {@code via_device} this is
+     *  moderator INPUT shown to the owner, so an over-long value is REJECTED (400) rather
+     *  than silently truncated into a half-sentence the user has to live with. */
+    static final int REVOKE_REASON_MAX = 255;
+
+    /** {@code revoked_by} column width (019) — the acting moderator's identity. */
+    static final int MODERATOR_MAX = 255;
 
     private final MeshDeviceRepository repo;
     /** The per-domain claim gate (capability {@code user-mesh-devices}) — dark by
@@ -174,6 +189,122 @@ public class MeshDeviceService {
                         : viaDevice.trim();
         return repo.applyStatusWhereActive(canonical, seen, battery, snr, hops, via)
                 .map(rows -> rows > 0);
+    }
+
+    // ── Moderation (SERVICE-gated: no owner — a moderator acts across owners) ──
+
+    /**
+     * The MODERATOR console list: mesh-device rows across EVERY owner, newest claim
+     * first, BOUNDED. Unlike every owner-facing method above there is NO owner argument —
+     * that is the whole point of a moderation view — so the ONLY authorisation leg is the
+     * {@code ROLE_SERVICE} gate on the calling surface plus the brand scope below.
+     *
+     * @param state  {@code active}|{@code revoked} to filter, or {@code null} for both;
+     *               a value outside the {@code mesh_device.state} vocabulary is a 400
+     *               (never a silently-empty list that reads as "no devices")
+     * @param domain the moderator's brand, or {@code null} for the cross-domain
+     *               (SUPERADMIN) view — mod-bff resolves which from the VALIDATED
+     *               {@code DOMAIN_<x>} authority, never a user-settable claim
+     * @param limit  caller-influenced page size; {@code null} takes the default and any
+     *               value is clamped to {@link MeshDeviceRepository#MAX_MODERATION_LIMIT}
+     */
+    public Flux<MeshDeviceEntity> listForModeration(String state, String domain, Integer limit) {
+        if (state != null && !MeshDevice.validState(state)) {
+            return Flux.error(ApiException.badRequest("state must be active|revoked"));
+        }
+        int requested = limit == null ? MeshDeviceRepository.DEFAULT_MODERATION_LIMIT : limit;
+        return repo.listForModeration(state, domain,
+                MeshDeviceRepository.clampModerationLimit(requested));
+    }
+
+    /**
+     * REVOKE a device (moderator action): CAS {@code active}→{@code revoked} stamping
+     * {@code revoked_by}/{@code revoked_at}/{@code revoke_reason}. The write is
+     * state-guarded ATOMICALLY at the SQL layer — the SAME discipline
+     * {@link #setVisibility} uses — and a zero-row update is then diagnosed with a
+     * brand-scoped read: an ALREADY-REVOKED row is a 409 (the house idiom for a state
+     * conflict), an unknown id — or one outside the moderator's brand — is a 404 (no
+     * cross-brand existence leak).
+     *
+     * <p>The effects the moderator is buying, all of which the schema already enforces:
+     * the row leaves the bridge mapping immediately (the export is
+     * {@code state='active'}-filtered), its visibility freezes (a 409 to the owner), and
+     * its {@code node_id} stays occupied so the radio cannot be re-claimed by anyone
+     * while the row exists.
+     *
+     * @param moderator the ACTING moderator's identity for the {@code revoked_by} audit
+     *                  stamp — supplied by the SERVICE-principal caller (mod-bff), which
+     *                  derives it from the validated moderator JWT and NEVER from its own
+     *                  caller's body
+     */
+    public Mono<MeshDeviceEntity> revoke(String id, String domain, String moderator, String reason) {
+        String mod = requireModerator(moderator);
+        String why = requireReason(reason);
+        return repo.revokeWhereActive(id, domain, mod, why)
+                .flatMap(rows -> rows > 0
+                        ? repo.findForModeration(id, domain)
+                        : repo.findForModeration(id, domain)
+                                .flatMap(d -> Mono.<MeshDeviceEntity>error(ApiException.conflict(
+                                        "mesh device is already revoked")))
+                                .switchIfEmpty(Mono.error(ApiException.notFound(
+                                        "no such mesh device"))));
+    }
+
+    /**
+     * RESTORE a revoked device (moderator action): CAS {@code revoked}→{@code active},
+     * CLEARING the {@code revoked_by}/{@code revoked_at}/{@code revoke_reason} trio so the
+     * owner stops seeing a stale reason on a device that is live again (the durable "why"
+     * lives in mod-bff's {@code mod_action} ledger — this table only carries the CURRENT
+     * state). Same CAS-then-diagnose discipline as {@link #revoke}: a row that is NOT
+     * revoked is a 409, an unknown/out-of-brand id is a 404.
+     *
+     * <p>{@code moderator} is validated (and logged) but NOT persisted: the row's
+     * moderation trio is cleared by the restore, so there is nowhere honest to keep it —
+     * mod-bff writes the {@code mesh-device.restore} ledger row that records who did it.
+     */
+    public Mono<MeshDeviceEntity> restore(String id, String domain, String moderator) {
+        String mod = requireModerator(moderator);
+        return repo.restoreWhereRevoked(id, domain)
+                .flatMap(rows -> {
+                    if (rows > 0) {
+                        log.info("[mesh-device] device {} RESTORED by moderator {}", id, mod);
+                        return repo.findForModeration(id, domain);
+                    }
+                    return repo.findForModeration(id, domain)
+                            .flatMap(d -> Mono.<MeshDeviceEntity>error(ApiException.conflict(
+                                    "mesh device is not revoked — nothing to restore")))
+                            .switchIfEmpty(Mono.error(ApiException.notFound(
+                                    "no such mesh device")));
+                });
+    }
+
+    /** The acting moderator's identity must be present and fit {@code revoked_by}
+     *  (varchar(255), 019) — a blank/over-long value would either leave the audit stamp
+     *  useless or fail at the DB, so it is a 400 here. */
+    private static String requireModerator(String moderator) {
+        if (moderator == null || moderator.isBlank()) {
+            throw ApiException.badRequest("moderator is required");
+        }
+        String trimmed = moderator.trim();
+        if (trimmed.length() > MODERATOR_MAX) {
+            throw ApiException.badRequest("moderator must be at most " + MODERATOR_MAX + " chars");
+        }
+        return trimmed;
+    }
+
+    /** A revocation ALWAYS carries a reason — it is the text the OWNER is shown in their
+     *  own device list, so an empty one would leave the user with a dead radio and no
+     *  explanation. Capped to the {@code revoke_reason} column width (varchar(255), 019). */
+    private static String requireReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw ApiException.badRequest("reason is required");
+        }
+        String trimmed = reason.trim();
+        if (trimmed.length() > REVOKE_REASON_MAX) {
+            throw ApiException.badRequest(
+                    "reason must be at most " + REVOKE_REASON_MAX + " chars");
+        }
+        return trimmed;
     }
 
     /**

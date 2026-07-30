@@ -40,7 +40,13 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  *       guarded no-op, the node id stays UNCLAIMABLE while the row exists, and an
  *       owner delete frees it (the documented trade-off);</li>
  *   <li>the bridge status write-back only touches ACTIVE rows (unknown node ids are the
- *       fail-soft zero-rows leg).</li>
+ *       fail-soft zero-rows leg);</li>
+ *   <li>the MODERATION surface (the {@code Moderation} nested class): the revoke/restore
+ *       CAS transitions and their 404-vs-409 diagnosis, the brand predicate on the WRITE
+ *       itself (a cross-brand revoke changes nothing AND answers 404), the cleared audit
+ *       trio on a restore, and the bounded/filtered console list. It re-asserts EVERY
+ *       shipped revoked-row invariant against a row revoked by the real WRITER rather
+ *       than by a hand-written UPDATE.</li>
  * </ul>
  *
  * <p>NOTE: {@code @DataR2dbcTest} reuses ONE container store across the methods of this
@@ -66,8 +72,10 @@ class MeshDeviceRepositoryTest extends PostgresTestSupport {
         service = new MeshDeviceService(repo, MeshClaimCapabilityGate.disabled());
     }
 
-    /** Flip a row to REVOKED directly in the store — the mod-bff revocation WRITER is a
-     *  later wave, so tests stage revoked rows the way that writer eventually will. */
+    /** Flip a row to REVOKED directly in the store. The moderation WRITER now exists
+     *  ({@link MeshDeviceService#revoke}) and has its own section below; the pre-existing
+     *  revoked-row invariant tests keep staging rows this way so they still assert the
+     *  SCHEMA semantics independently of the writer that produces them. */
     private void revoke(String id) {
         db.sql("UPDATE mesh_device SET state = 'revoked', revoked_by = 'mod-x', "
                         + "revoked_at = now(), revoke_reason = 'spoofing traffic' WHERE id = :id")
@@ -323,6 +331,235 @@ class MeshDeviceRepositoryTest extends PostgresTestSupport {
     void service_applyStatus_malformedNodeId_isIgnoredNotError() {
         assertThat(service.applyStatus("not-a-node", null, 50, null, null, null).block()).isFalse();
         assertThat(service.applyStatus(null, null, 50, null, null, null).block()).isFalse();
+    }
+
+    // ── MODERATION: revoke / restore CAS + the bounded console list ───────────
+
+    /**
+     * The moderator surface over the REAL constraints. These are the tests that only
+     * mean anything against Postgres: the CAS transitions are SQL predicates (so the
+     * zero-row leg is the only thing standing between two concurrent moderators and a
+     * lost update), and the revoked-row invariants asserted above must survive a
+     * revocation produced by the WRITER, not just by a hand-written UPDATE.
+     */
+    @Nested
+    class Moderation {
+
+        @Test
+        void revoke_casesActiveToRevoked_stampingTheAuditTrio() {
+            MeshDevice saved = repo.save("mod-a", "default", "!aa110011", "field radio").block();
+            assertThat(saved).isNotNull();
+
+            MeshDeviceEntity revoked = service.revoke(saved.id(), "default", "mod:alice",
+                    "spoofing another node").block();
+
+            assertThat(revoked).isNotNull();
+            assertThat(revoked.state()).isEqualTo("revoked");
+            assertThat(revoked.revokedBy()).isEqualTo("mod:alice");
+            assertThat(revoked.revokeReason()).isEqualTo("spoofing another node");
+            assertThat(revoked.revokedAt()).isNotNull();     // server-side now()
+            // The OWNER's own view carries the state + reason, never the moderator.
+            MeshDevice mine = repo.listForOwner("mod-a", "default").blockFirst();
+            assertThat(mine.state()).isEqualTo("revoked");
+            assertThat(mine.revokeReason()).isEqualTo("spoofing another node");
+        }
+
+        @Test
+        void revoke_isIdempotencyGuarded_secondRevokeIs409() {
+            MeshDevice saved = repo.save("mod-b", "default", "!aa220022", null).block();
+            service.revoke(saved.id(), "default", "mod:alice", "jamming").block();
+
+            // The ACTIVE predicate makes the second write a zero-row no-op …
+            assertThat(repo.revokeWhereActive(saved.id(), "default", "mod:bob", "again").block())
+                    .isZero();
+            // … which the service diagnoses as a 409 (the row exists, wrong state) —
+            // and the FIRST moderator's stamp is untouched (no last-writer-wins).
+            Throwable t = catchThrowable(() ->
+                    service.revoke(saved.id(), "default", "mod:bob", "again").block());
+            assertThat(t).isInstanceOf(ApiException.class);
+            assertThat(((ApiException) t).status().value()).isEqualTo(409);
+            assertThat(repo.findForModeration(saved.id(), "default").block().revokedBy())
+                    .isEqualTo("mod:alice");
+        }
+
+        @Test
+        void revoke_unknownId_is404() {
+            Throwable t = catchThrowable(() ->
+                    service.revoke("no-such-id", "default", "mod:alice", "why").block());
+            assertThat(t).isInstanceOf(ApiException.class);
+            assertThat(((ApiException) t).status().value()).isEqualTo(404);
+        }
+
+        @Test
+        void revoke_crossBrandId_is404_notAConflictLeak() {
+            MeshDevice saved = repo.save("mod-c", "brandx", "!aa330033", null).block();
+            assertThat(saved).isNotNull();
+
+            // A brandy moderator gets a 404 — NOT a 409 and not a success. The brand
+            // predicate is on the UPDATE itself, so nothing was written either.
+            Throwable t = catchThrowable(() ->
+                    service.revoke(saved.id(), "brandy", "mod:wrong-brand", "not yours").block());
+            assertThat(t).isInstanceOf(ApiException.class);
+            assertThat(((ApiException) t).status().value()).isEqualTo(404);
+            assertThat(repo.findForModeration(saved.id(), "brandx").block().state())
+                    .isEqualTo("active");
+        }
+
+        @Test
+        void revoke_unscopedDomain_isTheCrossDomainSuperadminLeg() {
+            MeshDevice saved = repo.save("mod-d", "brandx", "!aa440044", null).block();
+            // null domain = no brand predicate: the cross-domain SUPERADMIN reaches it.
+            MeshDeviceEntity revoked =
+                    service.revoke(saved.id(), null, "superadmin:root", "cross-brand pull").block();
+            assertThat(revoked.state()).isEqualTo("revoked");
+            assertThat(revoked.domain()).isEqualTo("brandx");
+        }
+
+        @Test
+        void revokedByTheWriter_keepsEveryShippedRevokedRowInvariant() {
+            MeshDevice saved = repo.save("mod-e", "default", "!aa550055", null).block();
+            service.revoke(saved.id(), "default", "mod:alice", "spoofing").block();
+
+            // (1) excluded from the bridge export …
+            var exported = repo.listActiveForBridge()
+                    .filter(e -> "mod-e".equals(e.ownerSubject())).collectList().block();
+            assertThat(exported).isEmpty();
+            // (2) … visibility frozen (409) …
+            Throwable vis = catchThrowable(() ->
+                    service.setVisibility("mod-e", saved.id(), "default", "channels").block());
+            assertThat(((ApiException) vis).status().value()).isEqualTo(409);
+            // (3) … bridge status write-back ignored (fail-soft zero rows) …
+            assertThat(service.applyStatus("!aa550055", null, 50, null, null, null).block())
+                    .isFalse();
+            // (4) … and the node id stays CLAIMED: revocation is not circumventable.
+            Throwable reclaim = catchThrowable(() ->
+                    service.claim("mod-e-again", "default", "!aa550055", null).block());
+            assertThat(((ApiException) reclaim).status().value()).isEqualTo(409);
+        }
+
+        @Test
+        void restore_casesRevokedToActive_clearingTheAuditTrio() {
+            MeshDevice saved = repo.save("mod-f", "default", "!aa660066", null).block();
+            service.revoke(saved.id(), "default", "mod:alice", "mistaken identity").block();
+
+            MeshDeviceEntity restored = service.restore(saved.id(), "default", "mod:bob").block();
+
+            assertThat(restored.state()).isEqualTo("active");
+            // The whole trio is CLEARED — the owner must not keep seeing a stale reason.
+            assertThat(restored.revokedBy()).isNull();
+            assertThat(restored.revokedAt()).isNull();
+            assertThat(restored.revokeReason()).isNull();
+            // and the radio is back in the bridge export.
+            assertThat(repo.listActiveForBridge()
+                    .filter(e -> "mod-f".equals(e.ownerSubject())).collectList().block())
+                    .extracting(MeshDeviceEntity::nodeId).containsExactly("!aa660066");
+        }
+
+        @Test
+        void restore_ofANotRevokedDevice_is409() {
+            MeshDevice saved = repo.save("mod-g", "default", "!aa770077", null).block();
+            assertThat(repo.restoreWhereRevoked(saved.id(), "default").block()).isZero();
+
+            Throwable t = catchThrowable(() ->
+                    service.restore(saved.id(), "default", "mod:alice").block());
+            assertThat(t).isInstanceOf(ApiException.class);
+            assertThat(((ApiException) t).status().value()).isEqualTo(409);
+        }
+
+        @Test
+        void restore_unknownId_is404_andCrossBrandIs404Too() {
+            Throwable unknown = catchThrowable(() ->
+                    service.restore("no-such-id", "default", "mod:alice").block());
+            assertThat(((ApiException) unknown).status().value()).isEqualTo(404);
+
+            MeshDevice saved = repo.save("mod-h", "brandx", "!aa880088", null).block();
+            service.revoke(saved.id(), "brandx", "mod:alice", "spoofing").block();
+            Throwable crossBrand = catchThrowable(() ->
+                    service.restore(saved.id(), "brandy", "mod:wrong-brand").block());
+            assertThat(((ApiException) crossBrand).status().value()).isEqualTo(404);
+            assertThat(repo.findForModeration(saved.id(), "brandx").block().state())
+                    .isEqualTo("revoked");
+        }
+
+        @Test
+        void revoke_requiresAReasonAndAModerator_400() {
+            MeshDevice saved = repo.save("mod-i", "default", "!aa990099", null).block();
+
+            // A revocation with no reason would leave the OWNER with a dead radio and no
+            // explanation — rejected before any write.
+            assertThat(catchThrowable(() ->
+                    service.revoke(saved.id(), "default", "mod:alice", "  ").block()))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(t -> assertThat(((ApiException) t).status().value()).isEqualTo(400));
+            assertThat(catchThrowable(() ->
+                    service.revoke(saved.id(), "default", null, "why").block()))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(t -> assertThat(((ApiException) t).status().value()).isEqualTo(400));
+            // over the revoke_reason column width (255) — rejected, never truncated.
+            assertThat(catchThrowable(() ->
+                    service.revoke(saved.id(), "default", "mod:alice", "x".repeat(256)).block()))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(t -> assertThat(((ApiException) t).status().value()).isEqualTo(400));
+            // nothing was written by any of the three rejected calls.
+            assertThat(repo.findForModeration(saved.id(), "default").block().state())
+                    .isEqualTo("active");
+        }
+
+        @Test
+        void moderationList_isCrossOwner_stateFiltered_brandScoped_andBounded() {
+            repo.save("list-a", "listbrand", "!ab010101", "a-radio").block();
+            MeshDevice b = repo.save("list-b", "listbrand", "!ab020202", "b-radio").block();
+            repo.save("list-c", "otherbrand", "!ab030303", "c-radio").block();
+            service.revoke(b.id(), "listbrand", "mod:alice", "spoofing").block();
+
+            // BRAND-scoped: two owners' rows, the other brand's row is absent.
+            var brandRows = service.listForModeration(null, "listbrand", null)
+                    .collectList().block();
+            assertThat(brandRows).extracting(MeshDeviceEntity::nodeId)
+                    .containsExactlyInAnyOrder("!ab010101", "!ab020202");
+
+            // STATE filter.
+            assertThat(service.listForModeration("revoked", "listbrand", null).collectList().block())
+                    .extracting(MeshDeviceEntity::nodeId).containsExactly("!ab020202");
+            assertThat(service.listForModeration("active", "listbrand", null).collectList().block())
+                    .extracting(MeshDeviceEntity::nodeId).containsExactly("!ab010101");
+
+            // BOUNDED: an explicit small limit caps the page …
+            assertThat(service.listForModeration(null, "listbrand", 1).collectList().block())
+                    .hasSize(1);
+            // … and a hostile limit is CLAMPED to the hard cap, never passed through.
+            assertThat(MeshDeviceRepository.clampModerationLimit(Integer.MAX_VALUE))
+                    .isEqualTo(MeshDeviceRepository.MAX_MODERATION_LIMIT);
+            assertThat(MeshDeviceRepository.clampModerationLimit(0))
+                    .isEqualTo(MeshDeviceRepository.DEFAULT_MODERATION_LIMIT);
+            assertThat(MeshDeviceRepository.clampModerationLimit(-5))
+                    .isEqualTo(MeshDeviceRepository.DEFAULT_MODERATION_LIMIT);
+        }
+
+        @Test
+        void moderationList_rejectsAnUnknownState_ratherThanReturningAnEmptyPage() {
+            // An empty page reads as "this brand has no devices" — a dangerously wrong
+            // answer for a moderator. A bad filter is a 400.
+            Throwable t = catchThrowable(() ->
+                    service.listForModeration("banned", "default", null).collectList().block());
+            assertThat(t).isInstanceOf(ApiException.class);
+            assertThat(((ApiException) t).status().value()).isEqualTo(400);
+        }
+
+        @Test
+        void moderationList_carriesTheFieldsTheUserFacingShapeWithholds() {
+            MeshDevice saved = repo.save("fields-owner", "fieldbrand", "!ac010101", "tagged").block();
+            service.revoke(saved.id(), "fieldbrand", "mod:alice", "spoofing").block();
+
+            MeshDeviceEntity row =
+                    service.listForModeration(null, "fieldbrand", null).blockFirst();
+            // owner_subject + revoked_by are exactly what MeshDevice (the user wire
+            // shape) omits — and exactly what a moderator console needs.
+            assertThat(row.ownerSubject()).isEqualTo("fields-owner");
+            assertThat(row.revokedBy()).isEqualTo("mod:alice");
+            assertThat(row.domain()).isEqualTo("fieldbrand");
+            assertThat(row.label()).isEqualTo("tagged");
+        }
     }
 
     // ── domain scoping ────────────────────────────────────────────────────────

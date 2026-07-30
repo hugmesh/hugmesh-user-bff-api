@@ -48,9 +48,6 @@
     "name" : "Cards",
     "description" : "The caller's OWN federation bundles (owner = JWT subject), via snapdragon-federation-api."
   }, {
-    "name" : "Mesh-devices (internal bridge)",
-    "description" : "SERVICE-PRINCIPAL ONLY: the full node-id → Matrix-localpart mapping (active rows only) + the batch LoRa status write-back for the mesh↔Matrix bridge."
-  }, {
     "name" : "Self-silence",
     "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
   }, {
@@ -68,6 +65,9 @@
   }, {
     "name" : "Sessions",
     "description" : "The caller's OWN active login sessions (owner = JWT-derived account). List + revoke."
+  }, {
+    "name" : "Mesh-devices (internal bridge + moderation)",
+    "description" : "SERVICE-PRINCIPAL ONLY: the full node-id → Matrix-localpart mapping (active rows only) + the batch LoRa status write-back for the mesh↔Matrix bridge, plus the cross-owner moderation console list and the revoke/restore state writes mod-bff drives."
   }, {
     "name" : "Connected clients",
     "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."
@@ -1044,9 +1044,83 @@
         }
       }
     },
+    "/bff/user/internal/mesh-devices/{id}/revoke" : {
+      "post" : {
+        "tags" : [ "Mesh-devices (internal bridge + moderation)" ],
+        "summary" : "REVOKE a mesh device (SERVICE-principal only; the moderator identity comes from the trusted caller's body — mod-bff derives it from the validated moderator JWT). CAS active→revoked stamping revoked_by/revoked_at/revoke_reason: the radio leaves the bridge mapping, its visibility freezes, and its node id stays claimed. Already-revoked is a 409; unknown or out-of-brand id a 404.",
+        "operationId" : "revoke",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ModerationView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/mesh-devices/{id}/restore" : {
+      "post" : {
+        "tags" : [ "Mesh-devices (internal bridge + moderation)" ],
+        "summary" : "RESTORE a revoked mesh device (SERVICE-principal only). CAS revoked→active, CLEARING revoked_by/revoked_at/revoke_reason so the owner stops seeing a stale reason (mod-bff's mod_action ledger keeps the durable record). A device that is not revoked is a 409; unknown or out-of-brand id a 404.",
+        "operationId" : "restore",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RestoreRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ModerationView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/internal/mesh-devices/status" : {
       "post" : {
-        "tags" : [ "Mesh-devices (internal bridge)" ],
+        "tags" : [ "Mesh-devices (internal bridge + moderation)" ],
         "summary" : "Batch LoRa status write-back from the bridge (SERVICE-principal only). Fail-soft per element: unknown node ids / revoked rows are counted 'ignored'; out-of-range telemetry is clamped. Returns {updated, ignored}.",
         "operationId" : "applyStatusBatch",
         "requestBody" : {
@@ -1640,7 +1714,7 @@
     },
     "/bff/user/internal/mesh-devices" : {
       "get" : {
-        "tags" : [ "Mesh-devices (internal bridge)" ],
+        "tags" : [ "Mesh-devices (internal bridge + moderation)" ],
         "summary" : "FULL mesh-device mapping for the bridge (SERVICE-principal only; every ACTIVE claim across all owners and domains). Rows whose owner's Matrix localpart cannot be resolved are omitted (fail-soft).",
         "operationId" : "fullMapping",
         "responses" : {
@@ -1652,6 +1726,54 @@
                   "type" : "array",
                   "items" : {
                     "$ref" : "#/components/schemas/BridgeMapping"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/mesh-devices/moderation" : {
+      "get" : {
+        "tags" : [ "Mesh-devices (internal bridge + moderation)" ],
+        "summary" : "MODERATOR console list of mesh devices (SERVICE-principal only; every owner, newest claim first). Optional ?state=active|revoked filter and ?domain= brand scope (omit the domain ONLY for a cross-domain SUPERADMIN view); ?limit is server-clamped. Unlike the bridge mapping this KEEPS rows whose owner localpart cannot be resolved — a moderator must still see an un-attributable radio (ownerLocalpart is then null).",
+        "operationId" : "moderationList",
+        "parameters" : [ {
+          "name" : "state",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "pattern" : "^(active|revoked)?$",
+            "type" : "string"
+          }
+        }, {
+          "name" : "domain",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }, {
+          "name" : "limit",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ModerationView"
                   }
                 }
               }
@@ -2011,7 +2133,7 @@
         "tags" : [ "Connected clients" ],
         "summary" : "Revoke one of my connected clients (per-credential gateway key + best-effort homeserver delete + audit stamp).",
         "description" : "Revokes one of the caller's own connected clients by its audit-row id.\nRevocation order: (1) write the per-credential gateway key\n<code>hs:<platform>:<localpart>:<externalRef></code> (gateway denies future use within &#x2264;5s),\n(2) best-effort DELETE at the homeserver, (3) stamp <code>revoked_at</code> on the audit row.\nAll three steps are owner+domain scoped. Steps 2 and 3 are best-effort; the gateway key is\nthe durable enforcement.\n",
-        "operationId" : "revoke",
+        "operationId" : "revoke_1",
         "parameters" : [ {
           "name" : "id",
           "in" : "path",
@@ -2666,6 +2788,90 @@
             "type" : "boolean"
           },
           "reason" : {
+            "type" : "string"
+          }
+        }
+      },
+      "RevokeRequest" : {
+        "required" : [ "moderator", "reason" ],
+        "type" : "object",
+        "properties" : {
+          "reason" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "moderator" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "domain" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "ModerationView" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "nodeId" : {
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "ownerSubject" : {
+            "type" : "string"
+          },
+          "ownerLocalpart" : {
+            "type" : "string"
+          },
+          "domain" : {
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "visibility" : {
+            "type" : "string"
+          },
+          "revokeReason" : {
+            "type" : "string"
+          },
+          "revokedBy" : {
+            "type" : "string"
+          },
+          "revokedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastSeenAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "RestoreRequest" : {
+        "required" : [ "moderator" ],
+        "type" : "object",
+        "properties" : {
+          "moderator" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "domain" : {
+            "maxLength" : 255,
+            "minLength" : 0,
             "type" : "string"
           }
         }
