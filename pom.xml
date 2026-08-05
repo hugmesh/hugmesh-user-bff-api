@@ -67,7 +67,7 @@
          (InternalTokenWebFilter), the InternalSurfaceBootGuard and the canonical
          reserved.ReservedNames (this repo's local profile.ReservedNames dup is deleted
          in favour of it). Unlike hugmesh-commons, auth-core is NOT parent-managed —
-         so this dependency carries an EXPLICIT <version>. PINNED to 2.4.1 (2.4.0 was
+         so this dependency carries an EXPLICIT <version>. PINNED to 2.4.2 (2.4.0 was
          the HugMesh-rename coordinate, bumped from the pre-rebrand 2.3.3 pin; 2.4.1
          adds the canonical reserved-prefix revision 7-9 sync — hmdm / attest plus the
          Character Forge track's character-forge / games-character-forge /
@@ -77,14 +77,25 @@
          with this pin those five labels are ALSO rejected as a clean service-layer
          400, with the 021 DB CHECK (ck_user_profile_vanity_username_reserved) as the
          defence-in-depth backstop beneath it.
-         RELEASE NOTE: 2.4.1 exists on hugmesh-auth-core branch
-         feat/character-forge-reserved-labels and is NOT yet published to the
-         registry — until it is released, CI resolution of this pin FAILS (local
-         builds work via a locally-installed ./mvnw install of that branch). -->
+         2.4.2 (auth-core #39/#40/#41) hardens the MFA subsystem: ceremony-test
+         coverage over the enroll/verify flows, the WARN-by-default MFA
+         precondition boot guard (logs loudly when app.casdoor.mfa.enabled is on
+         without a factor key; fatal only by explicit opt-in), and a 32-byte
+         CSPRNG-minted WebAuthn challenge. This BFF does not wire the MFA
+         subsystem (admin-bff owns it) — the bump keeps both consumer BFFs pinned
+         in lockstep on the same released auth-core line.
+         RELEASE NOTE (updated 2026-08-05): the earlier note here claiming 2.4.1
+         was unpublished on branch feat/character-forge-reserved-labels is STALE —
+         that branch merged to auth-core main on 2026-07-23, and auth-core CI
+         republishes on every main merge, so 2.4.1+ resolve from the registry.
+         2.4.2 is cut on auth-core branch chore/release-post-mfa and this bump
+         merges strictly AFTER that branch lands on auth-core main (whose CI
+         deploy publishes the coordinate) — merging this first would leave CI
+         resolution failing until the release lands. -->
     <dependency>
       <groupId>systems.hugmesh</groupId>
       <artifactId>hugmesh-auth-core</artifactId>
-      <version>2.4.1</version>
+      <version>2.4.2</version>
     </dependency>
 
     <!-- ============================================================================

@@ -73,7 +73,8 @@ class ProfileServiceReservedUsernameTest {
      * AttestationServer superadmin-gateway route prefixes) and the Character Forge
      * track's {@code character-forge}/{@code games-character-forge}/
      * {@code games-shadows-of-the-net} — are enforced AT RUNTIME by the pinned
-     * auth-core (2.4.1). Named explicitly here (not only via the RESERVED
+     * auth-core (2.4.1 or later; the labels arrived with 2.4.1's canonical
+     * revision-9 sync). Named explicitly here (not only via the RESERVED
      * {@code @MethodSource} iteration above) so a pin downgrade to a pre-revision-9
      * auth-core fails THIS test with the missing label's name instead of silently
      * shrinking the parameterised set. Before 2.4.1 these five were enforced only by
