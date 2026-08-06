@@ -46,7 +46,7 @@ spec:
       # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
       # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
       # to the cluster CA. Store password generated in-pod, kept only in the tmpfs
-      # /stores emptyDir, emitted into application-tls.properties loaded via
+      # /stores emptyDir, emitted into application.properties loaded via
       # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
       initContainers:
         - name: build-keystore
@@ -65,12 +65,22 @@ spec:
               keytool -importcert -noprompt -alias snapdragon-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. No manifest activates a
+              # `tls` profile, so the old application-tls.properties was silently never
+              # loaded and the store passwords fell back to the packaged application.yml's
+              # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
+              # keystore. Plain application.properties loads UNCONDITIONALLY from the
+              # additional location, with no profile needed.
               umask 077
-              cat > /stores/application-tls.properties <<EOF
+              cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
               EOF
-              echo "keystore + truststore + application-tls.properties built"
+              echo "keystore + truststore + application.properties built"
           volumeMounts:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
@@ -85,7 +95,7 @@ spec:
           env:
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Require a client cert chaining to the cluster CA. Store passwords come
-            # from /stores/application-tls.properties (in-pod generated, loaded via
+            # from /stores/application.properties (in-pod generated, loaded via
             # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
             # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave (see PR body).
             - { name: SSL_ENABLED,          value: "true" }
@@ -206,7 +216,7 @@ spec:
             # the MEDIA_PROXY_* / federation outbound-mTLS pattern: present the in-pod
             # keystore.p12 (this service's cluster-CA cert) + validate the proxy's
             # server cert against the truststore.p12 (cluster CA). Store passwords come
-            # from /stores/application-tls.properties (in-pod generated, loaded via
+            # from /stores/application.properties (in-pod generated, loaded via
             # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
             - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE,        value: "/stores/keystore.p12" }
             - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
