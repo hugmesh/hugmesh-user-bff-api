@@ -20,7 +20,7 @@ import java.util.List;
  * Coarse PATH-GATE slice — the {@link SecurityConfig} {@code authorizeExchange} policy
  * (the prod {@code !dev & !test} chain) end-to-end through the REAL filter chain,
  * driven by REAL RSA-signed tokens from in-process {@link TestIssuer} brands (the only
- * no-network decoder seam). Mirrors snapdragon-gateway's keystone
+ * no-network decoder seam). Mirrors hugmesh-gateway's keystone
  * {@code SecurityConfigPathGateSliceTest}; only the path/role table is this BFF's.
  *
  * <p>The existing {@code SecurityConfigPathRulesTest} covers the same matchers with

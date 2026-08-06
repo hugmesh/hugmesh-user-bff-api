@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Pins the OUTBOUND mTLS posture of the poison-worker leg.
  *
- * <p>The {@code snapdragon-media-poisoner} worker terminates mTLS ITSELF and serves with
+ * <p>The {@code hugmesh-media-poisoner} worker terminates mTLS ITSELF and serves with
  * {@code ssl.CERT_REQUIRED} (generator: media-poisoner deployment mounts the ESO
  * {@code media-poisoner-mtls} Secret; probes are tcpSocket precisely because a certless
  * handshake is rejected). A certless caller therefore cannot talk to it at all, so the
@@ -86,7 +86,7 @@ class MediaWebClientConfigTest {
         AtomicInteger calls = new AtomicInteger();
         PoisonWorkerClient client = new MediaWebClientConfig().poisonWorkerClient(
                 props(), applyingMtls(calls, clientSsl()),
-                "https://snapdragon-media-poisoner.snapdragon-backend.svc.cluster.local:8080");
+                "https://hugmesh-media-poisoner.hugmesh-backend.svc.cluster.local:8080");
 
         WebClient web = webClientOf(client);
         assertThat(web).isNotNull();

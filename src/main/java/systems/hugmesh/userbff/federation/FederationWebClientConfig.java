@@ -18,7 +18,7 @@ import systems.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
 
 /**
  * Wires the reactive {@link WebClient} the {@link FederationApiClient} uses to call
- * snapdragon-federation-api, with a token-injecting {@link ExchangeFilterFunction}.
+ * hugmesh-federation-api, with a token-injecting {@link ExchangeFilterFunction}.
  *
  * <p>The filter reads the CURRENT request's Casdoor JWT out of the reactive
  * security context and re-injects its raw token value as {@code Authorization:
@@ -43,7 +43,7 @@ public class FederationWebClientConfig {
     public FederationApiClient federationApiClient(
             FederationHttpClientSsl mtls,
             AdminBffInternalClient adminBff,
-            @Value("${federation.api.base-url:http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080}") String baseUrl) {
+            @Value("${federation.api.base-url:http://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080}") String baseUrl) {
         HttpClient httpClient = mtls.customize(HttpClient.create());
         WebClient web = WebClient.builder()
                 .baseUrl(baseUrl)

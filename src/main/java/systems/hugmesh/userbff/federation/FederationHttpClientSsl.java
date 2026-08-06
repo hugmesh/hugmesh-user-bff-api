@@ -16,7 +16,7 @@ import java.security.KeyStore;
 
 /**
  * OUTBOUND (client-side) mTLS for the reactive WebClient this BFF uses to call our
- * internal Java APIs (notably snapdragon-federation-api). When federation-api flips
+ * internal Java APIs (notably hugmesh-federation-api). When federation-api flips
  * its server-side {@code client-auth=need}, the handshake only completes if the
  * CALLER presents a certificate that chains to the cluster CA. This helper builds a
  * reactor-netty {@link HttpClient} carrying:

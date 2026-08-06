@@ -14,8 +14,8 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * Reactive WebClient CLIENT of the OPTIONAL {@code snapdragon-media-poisoner} worker
- * (in-cluster DNS, default {@code http://snapdragon-media-poisoner.snapdragon-backend
+ * Reactive WebClient CLIENT of the OPTIONAL {@code hugmesh-media-poisoner} worker
+ * (in-cluster DNS, default {@code http://hugmesh-media-poisoner.hugmesh-backend
  * .svc.cluster.local:8080}). The worker runs on the x86/GPU heavy tier; on a Pi5-only
  * cluster its pod stays {@code Pending} and this client's {@link #capability()} reports
  * {@code backend=none} (heavy tier absent) so the {@link MediaPoisonService} engages the

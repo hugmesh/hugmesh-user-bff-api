@@ -16,7 +16,7 @@ import systems.hugmesh.userbff.auth.AdminBffInternalClient;
  * {@link SecurityConfig#filterChain} (the actual {@code authorizeExchange} path
  * policy + the OAuth2 resource-server wiring), with NO full Spring Boot context.
  *
- * <p>COPIED from snapdragon-gateway's {@code config.SecuritySliceSupport} per
+ * <p>COPIED from hugmesh-gateway's {@code config.SecuritySliceSupport} per
  * {@code docs/testing/MULTI-ISSUER-SLICE.md}; the only edits are the package and the
  * {@link DomainRegistry} import — this BFF's {@code SecurityConfig} has the IDENTICAL
  * {@code (DomainRegistry, ObjectProvider<...>)} constructor and a

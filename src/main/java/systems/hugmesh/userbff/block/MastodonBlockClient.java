@@ -8,7 +8,7 @@ import reactor.core.publisher.Mono;
 /**
  * Pushes a self-block to the in-cluster fediverse server (Akkoma — Mastodon-API
  * compatible). Base URL is grounded in the hugmesh-generator manifests:
- * {@code http://akkoma.snapdragon-backend.svc.cluster.local:4000} (env-overridable
+ * {@code http://akkoma.hugmesh-backend.svc.cluster.local:4000} (env-overridable
  * via {@code MASTODON_URL}).
  *
  * <p>Documented Mastodon-API block endpoint (the per-user account block):

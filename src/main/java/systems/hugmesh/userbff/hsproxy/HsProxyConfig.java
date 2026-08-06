@@ -33,7 +33,7 @@ public class HsProxyConfig {
     @Qualifier("matrixProxyWebClient")
     public WebClient matrixProxyWebClient(
             FederationHttpClientSsl mtls,
-            @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl) {
+            @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443}") String matrixUrl) {
         return proxyClient(mtls, matrixUrl);
     }
 
@@ -41,7 +41,7 @@ public class HsProxyConfig {
     @Qualifier("mastodonProxyWebClient")
     public WebClient mastodonProxyWebClient(
             FederationHttpClientSsl mtls,
-            @Value("${app.hs-token.mastodon-url:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}") String mastodonUrl) {
+            @Value("${app.hs-token.mastodon-url:https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443}") String mastodonUrl) {
         return proxyClient(mtls, mastodonUrl);
     }
 

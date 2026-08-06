@@ -20,7 +20,7 @@ public class ImageModerationConfig {
     @Bean
     @ConditionalOnProperty(name = "moderation.image.enabled", havingValue = "true")
     public EdgeAiAnalysisClient liveImageModerationClient(
-            @Value("${moderation.image.base-url:http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080}") String baseUrl,
+            @Value("${moderation.image.base-url:http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080}") String baseUrl,
             @Value("${moderation.image.timeout-ms:15000}") long timeoutMs) {
         return new EdgeAiAnalysisClient(WebClient.builder().baseUrl(baseUrl).build(), timeoutMs);
     }

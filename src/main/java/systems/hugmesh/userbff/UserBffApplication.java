@@ -17,7 +17,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *   <li>PREFERENCES — own R2DBC {@code user_preference}; per-guide home-guide
  *       dismissal so each role's getting-started guide shows only on first visit.</li>
  *   <li>CARDS    — CRUD over the caller's OWN federation bundles (reactive
- *       WebClient to snapdragon-federation-api, forwarding the caller JWT).</li>
+ *       WebClient to hugmesh-federation-api, forwarding the caller JWT).</li>
  *   <li>SELF-BLOCK — own R2DBC {@code user_block} + reactive Matrix/Mastodon
  *       clients to push the external mute/block (external call STUBBED).</li>
  *   <li>RECOMMEND-INSTANCE-BLOCK — POST federation-api /moderation kind=

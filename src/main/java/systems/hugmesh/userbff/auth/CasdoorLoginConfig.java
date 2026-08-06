@@ -46,12 +46,12 @@ public class CasdoorLoginConfig {
     public CasdoorLoginClient casdoorLoginClient(
             FederationHttpClientSsl mtls,
             @Value("${app.bff.oidc.enabled:false}") boolean oidcEnabled,
-            @Value("${app.bff.oidc.login-base:http://casdoor.snapdragon-pki.svc.cluster.local:8000}")
+            @Value("${app.bff.oidc.login-base:http://casdoor.hugmesh-pki.svc.cluster.local:8000}")
             String loginBase,
             @Value("${app.bff.oidc.login-path:/api/login}") String loginPath,
-            @Value("${app.bff.oidc.client-id:user-bff}") String clientId,
+            @Value("${app.bff.oidc.client-id:app-user-bff}") String clientId,
             @Value("${app.bff.oidc.application:app-user-bff}") String application,
-            @Value("${app.bff.oidc.organization:${casdoor.organization:snapdragon}}") String organization,
+            @Value("${app.bff.oidc.organization:${casdoor.organization:hugmesh}}") String organization,
             @Value("${app.bff.oidc.scope:openid profile email}") String scope) {
 
         if (!oidcEnabled) {

@@ -47,7 +47,7 @@ public class SessionsInternalConfig {
     public SessionsInternalClient sessionsInternalClient(
             FederationHttpClientSsl mtls,
             @Value("${app.sessions.management.enabled:true}") boolean sessionsEnabled,
-            @Value("${app.admin-bff.internal.base-url:http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080}")
+            @Value("${app.admin-bff.internal.base-url:http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080}")
             String baseUrl,
             @Value("${app.internal.token-header:X-Internal-Token}") String tokenHeader,
             @Value("${app.internal.token:}") String internalToken) {

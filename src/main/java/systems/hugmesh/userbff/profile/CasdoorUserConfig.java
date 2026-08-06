@@ -29,10 +29,10 @@ public class CasdoorUserConfig {
     @Bean
     @ConditionalOnProperty(name = "casdoor.account.enabled", havingValue = "true")
     public CasdoorUserClient liveCasdoorUserClient(
-            @Value("${casdoor.account.base-url:${casdoor.gateway-base:http://casdoor.snapdragon-pki.svc.cluster.local:8000}}") String baseUrl,
-            @Value("${casdoor.account.client-id:user-bff}") String clientId,
+            @Value("${casdoor.account.base-url:${casdoor.gateway-base:http://casdoor.hugmesh-pki.svc.cluster.local:8000}}") String baseUrl,
+            @Value("${casdoor.account.client-id:app-user-bff}") String clientId,
             @Value("${casdoor.account.client-secret:}") String clientSecret,
-            @Value("${casdoor.organization:snapdragon}") String organization) {
+            @Value("${casdoor.organization:hugmesh}") String organization) {
         WebClient web = WebClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Basic "
@@ -44,7 +44,7 @@ public class CasdoorUserConfig {
     @Bean
     @ConditionalOnProperty(name = "casdoor.account.enabled", havingValue = "false", matchIfMissing = true)
     public CasdoorUserClient stubCasdoorUserClient(
-            @Value("${casdoor.organization:snapdragon}") String organization) {
+            @Value("${casdoor.organization:hugmesh}") String organization) {
         return new CasdoorUserClient(null, organization);
     }
 }

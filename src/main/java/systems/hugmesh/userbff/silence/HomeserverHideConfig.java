@@ -25,7 +25,7 @@ public class HomeserverHideConfig {
     @Bean
     @ConditionalOnProperty(name = "external.matrix.enabled", havingValue = "true")
     public MatrixHideClient liveMatrixHideClient(
-            @Value("${external.matrix.base-url:${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}}") String baseUrl) {
+            @Value("${external.matrix.base-url:${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}}") String baseUrl) {
         return new MatrixHideClient(WebClient.builder().baseUrl(baseUrl).build());
     }
 
@@ -39,7 +39,7 @@ public class HomeserverHideConfig {
     @Bean
     @ConditionalOnProperty(name = "external.mastodon.enabled", havingValue = "true")
     public MastodonHideClient liveMastodonHideClient(
-            @Value("${external.mastodon.base-url:${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}}") String baseUrl) {
+            @Value("${external.mastodon.base-url:${MASTODON_URL:http://akkoma.hugmesh-backend.svc.cluster.local:4000}}") String baseUrl) {
         return new MastodonHideClient(WebClient.builder().baseUrl(baseUrl).build());
     }
 

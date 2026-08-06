@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit test for the Casdoor JWT → authority converter (the canonical
- * {@link CasdoorAuthorities}, COPIED from snapdragon-gateway): ROLE_USER floor;
+ * {@link CasdoorAuthorities}, COPIED from hugmesh-gateway): ROLE_USER floor;
  * roles (string or {name}) → ROLE_&lt;UPPER&gt;; permissions verbatim MINUS the
  * reserved-prefix injection guard; isAdmin → ROLE_ADMIN; plus exactly one
  * issuer-derived DOMAIN_&lt;x&gt; authority.

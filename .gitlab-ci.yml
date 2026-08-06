@@ -58,6 +58,37 @@ test:
       - target/surefire-reports/
     expire_in: 7 days
 
+# Shipped-config contract. Two classes, both pure JUnit — no Postgres, no
+# Testcontainers, no Docker daemon — so they run HERE as their own gate, independent
+# of the dind service `test` needs (they run inside `test` too):
+#   ConfigDefaultsContractTest       — SHAPE: no pre-rebrand identifier under src/main,
+#                                      and the duplicated copies of a default agree.
+#   CasdoorRegistrationContractTest  — VALUE: every default on the POST /bff/login path
+#                                      matches what the cluster's casdoor-init actually
+#                                      registers (clientId app-user-bff, org hugmesh,
+#                                      the internal Casdoor base, the PKCE redirect_uri).
+#                                      Shape alone missed this: `user-bff` is not a
+#                                      pre-rebrand identifier and had one single copy,
+#                                      yet it is what made login 401 "Invalid client_id".
+# A fresh cluster is the only place these defaults are ever exercised (the deployment
+# overrides them), which is exactly why they went stale unnoticed until the first live
+# kind run.
+config-contract:
+  stage: test
+  tags: [hugmesh-x86, privileged]
+  image: maven:3.9-eclipse-temurin-25
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - ./mvnw -B -s settings.xml -Dtest=ConfigDefaultsContractTest,CasdoorRegistrationContractTest test
+  artifacts:
+    when: always
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+    expire_in: 7 days
+
 build:image:
   stage: build
   needs: [test]

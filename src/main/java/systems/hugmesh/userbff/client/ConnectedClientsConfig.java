@@ -41,7 +41,7 @@ public class ConnectedClientsConfig {
     @ConditionalOnProperty(name = "external.matrix.enabled", havingValue = "true")
     public MatrixClientsClient liveMatrixClientsClient(
             FederationHttpClientSsl mtls,
-            @Value("${external.matrix.base-url:${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}}") String baseUrl) {
+            @Value("${external.matrix.base-url:${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}}") String baseUrl) {
         return new MatrixClientsClient(secured(mtls, baseUrl));
     }
 
@@ -56,7 +56,7 @@ public class ConnectedClientsConfig {
     @ConditionalOnProperty(name = "external.mastodon.enabled", havingValue = "true")
     public MastodonClientsClient liveMastodonClientsClient(
             FederationHttpClientSsl mtls,
-            @Value("${external.mastodon.base-url:${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}}") String baseUrl) {
+            @Value("${external.mastodon.base-url:${MASTODON_URL:http://akkoma.hugmesh-backend.svc.cluster.local:4000}}") String baseUrl) {
         return new MastodonClientsClient(secured(mtls, baseUrl));
     }
 

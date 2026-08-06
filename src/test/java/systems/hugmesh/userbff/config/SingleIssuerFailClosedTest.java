@@ -226,7 +226,7 @@ class SingleIssuerFailClosedTest extends PostgresTestSupport {
                     applicationContext,
                     "spring.security.oauth2.resourceserver.jwt.issuer-uri=" + TRUSTED.issuerUri(),
                     // Pin jwk-set-uri at the in-process issuer too. The app defaults jwk-set-uri to
-                    // prod (id.snapdragon.systems/.well-known/jwks) and the resource server fetches
+                    // prod (id.hugmesh.systems/.well-known/jwks) and the resource server fetches
                     // KEYS from jwk-set-uri, not issuer-uri discovery — so without this the decoder
                     // can't obtain the test keys and every request 500s ("could not obtain the
                     // keys"). This serves TRUSTED's REAL public JWKS, so the fail-closed assertions

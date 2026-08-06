@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * Pushes a self-block to the in-cluster Matrix homeserver (tuwunel). Base URL is
  * grounded in the hugmesh-generator manifests:
- * {@code http://tuwunel.snapdragon-backend.svc.cluster.local:8008} (env-overridable
+ * {@code http://tuwunel.hugmesh-backend.svc.cluster.local:8008} (env-overridable
  * via {@code MATRIX_URL}).
  *
  * <p>Documented Matrix client-server ignore endpoint (the per-user "ignore"/mute):

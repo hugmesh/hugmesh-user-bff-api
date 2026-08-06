@@ -81,8 +81,8 @@ public class ServiceTokenBroker {
     @Autowired
     public ServiceTokenBroker(
             FederationHttpClientSsl mtls,
-            @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl,
-            @Value("${app.hs-token.mastodon-url:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}") String mastodonUrl,
+            @Value("${app.hs-token.matrix-url:https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443}") String matrixUrl,
+            @Value("${app.hs-token.mastodon-url:https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443}") String mastodonUrl,
             @Value("${app.hs-token.svc-password}") String svcPassword,
             @Value("${app.hs-token.mastodon-email-domain:}") String mastodonEmailDomain,
             HsTokenCustody custody,

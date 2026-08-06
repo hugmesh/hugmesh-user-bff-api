@@ -15,7 +15,7 @@ import java.util.Map;
 /**
  * Client for the shared on-prem edge-AI content-analysis service (the {@code edge-ai-analysis}
  * FastAPI wrapper added in the generator; reached in-cluster at
- * {@code snapdragon-edge-ai-analysis.snapdragon-inference:8080}). Used to vision-moderate a
+ * {@code hugmesh-edge-ai-analysis.hugmesh-inference:8080}). Used to vision-moderate a
  * profile picture BEFORE it is published to the homeserver media repo.
  *
  * <p>Wired by {@link ImageModerationConfig} as a live bean (real {@link WebClient}) ONLY when

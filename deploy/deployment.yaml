@@ -225,7 +225,14 @@ spec:
             # (Secret user-bff-oidc, key client-secret), optional:true so the pod still
             # starts when the Secret is absent (the surface stays dark) — mirrors the
             # APP_HS_TOKEN_KEY block. The secret VALUE is NEVER a literal here.
-            - { name: APP_BFF_OIDC_CLIENT_ID, value: "user-bff" }
+            #
+            # The id is the Casdoor Application's clientId FIELD, which casdoor-init
+            # sets to `app-<name>` (hugmesh-generator specs/cluster/manifests/casdoor/
+            # init-job.yaml, reconcile_app: `appname = f"app-{name}"`,
+            # `"clientId": appname`). The bare `user-bff` here is the app KEY, not the
+            # clientId, and hard-setting it OVERRIDES the corrected application.yml
+            # default — reproducing the live "Invalid client_id" 401 on POST /bff/login.
+            - { name: APP_BFF_OIDC_CLIENT_ID, value: "app-user-bff" }
             - name: APP_BFF_OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

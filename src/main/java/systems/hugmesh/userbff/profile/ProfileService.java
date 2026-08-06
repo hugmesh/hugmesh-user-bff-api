@@ -117,7 +117,7 @@ public class ProfileService {
      * profile public) is REJECTED with 400 when the caller's username is a reserved
      * label ({@link ReservedNames}) OR a CONFUSABLE of one ({@code 4dmin~admin},
      * {@code akk0ma~akkoma} — {@link UsernameSkeleton#isReservedConfusable}), because
-     * {@code <username>.snapdragon.systems} would collide with (or impersonate) a
+     * {@code <username>.hugmesh.systems} would collide with (or impersonate) a
      * dedicated app route. When allowed + vanity-enabled, the normalized username is
      * mirrored into {@code vanity_username} (DB-CHECK-backed).
      *

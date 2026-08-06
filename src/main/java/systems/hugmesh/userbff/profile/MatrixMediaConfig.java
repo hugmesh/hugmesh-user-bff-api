@@ -24,7 +24,7 @@ public class MatrixMediaConfig {
     @Bean
     @ConditionalOnProperty(name = "avatar.matrix.enabled", havingValue = "true")
     public MatrixMediaClient liveMatrixMediaClient(
-            @Value("${avatar.matrix.base-url:${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}}") String baseUrl) {
+            @Value("${avatar.matrix.base-url:${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}}") String baseUrl) {
         return new MatrixMediaClient(WebClient.builder().baseUrl(baseUrl).build());
     }
 

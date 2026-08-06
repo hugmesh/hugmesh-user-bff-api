@@ -16,7 +16,7 @@ import java.time.Duration;
 /**
  * Wires the media-proxy collaborators:
  * <ul>
- *   <li>the {@link PoisonWorkerClient} to the OPTIONAL {@code snapdragon-media-poisoner}
+ *   <li>the {@link PoisonWorkerClient} to the OPTIONAL {@code hugmesh-media-poisoner}
  *       worker. The worker TERMINATES mTLS ITSELF (no sidecar/mesh): its deployment
  *       projects a Vault-PKI/ESO {@code kubernetes.io/tls} Secret and {@code app/serve.py}
  *       serves TLS with {@code ssl.CERT_REQUIRED}, so a caller without a valid client cert
@@ -90,9 +90,9 @@ public class MediaWebClientConfig {
             HsTokenCustody custody,
             ServiceTokenBroker broker,
             @Value("${app.media.proxy.mastodon.enabled:false}") boolean mastodonEnabled,
-            @Value("${app.media.proxy.mastodon.base-url:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}") String mastodonUrl,
+            @Value("${app.media.proxy.mastodon.base-url:https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443}") String mastodonUrl,
             @Value("${app.media.proxy.matrix.enabled:false}") boolean matrixEnabled,
-            @Value("${app.media.proxy.matrix.base-url:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}") String matrixUrl) {
+            @Value("${app.media.proxy.matrix.base-url:https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443}") String matrixUrl) {
         WebClient mastodon = mastodonEnabled ? proxyClient(mastodonUrl, mtls, props) : null;
         WebClient matrix = matrixEnabled ? proxyClient(matrixUrl, mtls, props) : null;
         return new HomeserverMediaClient(mastodon, matrix, custody, broker);

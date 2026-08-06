@@ -175,7 +175,7 @@ public class ProfileController {
     /**
      * The caller's USERNAME for vanity purposes, derived from the JWT. Casdoor mints
      * the {@code preferred_username} claim = the user's login name (the DNS label
-     * behind {@code <username>.snapdragon.systems}); we fall back to {@code name},
+     * behind {@code <username>.hugmesh.systems}); we fall back to {@code name},
      * then to the subject only if neither claim is present. This is the documented
      * single home for "how the username is obtained from the token".
      */

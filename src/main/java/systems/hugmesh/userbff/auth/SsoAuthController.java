@@ -99,7 +99,7 @@ public class SsoAuthController {
                             OidcLoginCompletionService completion,
                             AdminBffInternalClient adminBff,
                             SessionCookieService cookies,
-                            @Value("${app.bff.oidc.redirect-uri:https://snapdragon.systems/login/callback}")
+                            @Value("${app.bff.oidc.redirect-uri:https://hugmesh.systems/login/callback}")
                             String redirectUri) {
         this.casdoorLogin = casdoorLogin;
         this.completion = completion;

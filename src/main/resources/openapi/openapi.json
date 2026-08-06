@@ -46,7 +46,7 @@
     "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
   }, {
     "name" : "Cards",
-    "description" : "The caller's OWN federation bundles (owner = JWT subject), via snapdragon-federation-api."
+    "description" : "The caller's OWN federation bundles (owner = JWT subject), via hugmesh-federation-api."
   }, {
     "name" : "Self-silence",
     "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."

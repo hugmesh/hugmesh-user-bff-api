@@ -6,7 +6,7 @@ import java.time.Instant;
 
 /**
  * A "card" = one of the caller's OWN federation-bundle versions, as returned by
- * snapdragon-federation-api ({@code user_modules} table / {@code UserModule}). The
+ * hugmesh-federation-api ({@code user_modules} table / {@code UserModule}). The
  * field names match the federation-api {@code UserModule} JSON FIELD-FOR-FIELD (its
  * getters serialize as {@code id, ownerUserId, slug, versionDir, contentHash,
  * manifestJson, visibility, createdAt, supersededAt}) so this client DTO binds the

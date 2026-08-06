@@ -26,7 +26,7 @@ import systems.hugmesh.userbff.notification.InternalNotificationDeliveryService.
  * {@code @PreAuthorize("hasRole('SERVICE')")} here is the defence-in-depth method gate.
  * {@code ROLE_SERVICE} is the platform's service-account role (a Casdoor
  * client-credentials token carries it; no human login does), the SAME mechanism
- * snapdragon-federation-api uses to gate its internal username-availability oracle.
+ * hugmesh-federation-api uses to gate its internal username-availability oracle.
  *
  * <p>The target {@code (domain, userSubject)} comes from the REQUEST BODY (the service
  * acts on behalf of the SYSTEM for a named user — NOT owner==caller). That is precisely

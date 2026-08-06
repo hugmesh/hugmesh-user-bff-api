@@ -22,7 +22,7 @@ class CasdoorLoginConfigTest {
     private CasdoorLoginClient build(FederationHttpClientSsl mtls, boolean oidcEnabled) {
         return config.casdoorLoginClient(
                 mtls, oidcEnabled,
-                "http://casdoor:8000", "/api/login", "user-bff",
+                "http://casdoor:8000", "/api/login", "app-user-bff",
                 "app-user-bff", "hugmesh", "openid profile email");
     }
 

@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * SELF-SILENCE visibility hide for the in-cluster Mastodon homeserver (akkoma). Base
  * URL is grounded in the hugmesh-generator manifests
- * {@code http://akkoma.snapdragon-backend.svc.cluster.local:4000} (env-overridable
+ * {@code http://akkoma.hugmesh-backend.svc.cluster.local:4000} (env-overridable
  * via {@code MASTODON_URL}).
  *
  * <p>Documented shape (akkoma / Pleroma): mark the account NOT discoverable —

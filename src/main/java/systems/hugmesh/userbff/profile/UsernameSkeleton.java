@@ -12,7 +12,7 @@ import java.util.Set;
  * Confusable / look-alike "skeleton" folding for usernames and free-text display
  * names — the LOCAL, self-contained half of the platform username-confusable design
  * (the registry-owned {@code username_skeleton} table + the {@code /availability}
- * service endpoint live in snapdragon-federation-api; this copy gives user-bff a
+ * service endpoint live in hugmesh-federation-api; this copy gives user-bff a
  * fail-CLOSED reserved/reserved-confusable + zero-width/bidi guard with no network
  * round-trip, so {@code 4dmin / r00t / v4ult / akk0ma} are rejected even on a
  * federation outage).

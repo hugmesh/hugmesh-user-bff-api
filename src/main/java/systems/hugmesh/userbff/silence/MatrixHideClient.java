@@ -8,7 +8,7 @@ import reactor.core.publisher.Mono;
 /**
  * SELF-SILENCE directory hide for the in-cluster Matrix homeserver (tuwunel). Base
  * URL is grounded in the hugmesh-generator manifests
- * {@code http://tuwunel.snapdragon-backend.svc.cluster.local:8008} (env-overridable
+ * {@code http://tuwunel.hugmesh-backend.svc.cluster.local:8008} (env-overridable
  * via {@code MATRIX_URL}).
  *
  * <p>Documented shape: EXCLUDE the user from the public user directory while

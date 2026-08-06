@@ -7,7 +7,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import java.util.List;
 
 /**
- * The DTOs that cross the BFF&lt;-&gt;{@code snapdragon-media-poisoner} worker boundary
+ * The DTOs that cross the BFF&lt;-&gt;{@code hugmesh-media-poisoner} worker boundary
  * and the in-BFF result types the {@link MediaPoisonService} orchestrates over. Kept
  * in one file (small, cohesive, no behaviour) so the worker contract is read in one
  * place; the Jackson-bound ones get native hints in {@code NativeHintsConfig}.

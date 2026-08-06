@@ -37,14 +37,14 @@ class SsoAuthControllerTest {
         // The native-login collaborators are unused by these register/me/session legs; pass
         // dark stubs so the controller wires. A dark CasdoorLoginClient + a completion service
         // over a null exchange provider both fail closed, but neither is reached here.
-        CasdoorLoginClient casdoorLogin = new CasdoorLoginClient(null, "/api/login", "user-bff",
+        CasdoorLoginClient casdoorLogin = new CasdoorLoginClient(null, "/api/login", "app-user-bff",
                 "app-user-bff", "hugmesh", "openid profile email");
         OidcLoginCompletionService completion =
                 new OidcLoginCompletionService(NativeLoginControllerTest.provider(null),
                         adminBff, new systems.hugmesh.authcore.casdoor.BffCustodyCipher(""), cookies);
         return WebTestClient.bindToController(
                 new SsoAuthController(casdoorLogin, completion, adminBff, cookies,
-                        "https://snapdragon.systems/login/callback")).build();
+                        "https://hugmesh.systems/login/callback")).build();
     }
 
     @Test

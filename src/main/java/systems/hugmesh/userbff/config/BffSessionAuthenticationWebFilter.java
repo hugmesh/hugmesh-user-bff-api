@@ -45,7 +45,7 @@ import java.util.Set;
  * so the session must be resolved over HTTP instead of a local repository lookup.
  *
  * <h3>Why this exists</h3>
- * The gateway's own {@code BffSessionAuthFilter} (snapdragon-gateway) authenticates a
+ * The gateway's own {@code BffSessionAuthFilter} (hugmesh-gateway) authenticates a
  * bff_ session AT THE GATEWAY, for the gateway's OWN route-access decision — but that
  * authentication is local to the gateway's request-processing context; it never reaches
  * a downstream service's OWN {@code oauth2ResourceServer().jwt(...)} config, which is

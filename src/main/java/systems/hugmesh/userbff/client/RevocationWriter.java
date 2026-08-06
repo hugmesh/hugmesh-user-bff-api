@@ -52,7 +52,7 @@ public class RevocationWriter {
     public RevocationWriter(
             FederationHttpClientSsl mtls,
             @Value("${gateway.revocation.enabled:false}") boolean enabled,
-            @Value("${gateway.revocation.base-url:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}") String baseUrl) {
+            @Value("${gateway.revocation.base-url:${GATEWAY_URL:http://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8080}}") String baseUrl) {
         this.enabled = enabled;
         if (enabled) {
             HttpClient httpClient = mtls.customize(HttpClient.create());

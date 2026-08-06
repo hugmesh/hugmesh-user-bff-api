@@ -3,7 +3,7 @@ package systems.hugmesh.userbff.federation;
 /**
  * Request/response shapes for the federation-api moderation surface, matched
  * field-for-field to {@code ModerationController.SubmitRequest} in
- * snapdragon-federation-api.
+ * hugmesh-federation-api.
  */
 public final class FederationModerationModels {
 
@@ -29,7 +29,7 @@ public final class FederationModerationModels {
      * /api/federation/moderation/recommend-instance-block} expects:
      * {@code (target, reason)} — deliberately NO {@code kind} field, matched
      * field-for-field to {@code ModerationController.RecommendInstanceBlockRequest}
-     * in snapdragon-federation-api. {@code kind} is hardcoded server-side to
+     * in hugmesh-federation-api. {@code kind} is hardcoded server-side to
      * {@code instance-block}; {@code status} likewise server-side to
      * {@code recommended}.
      *
@@ -55,7 +55,7 @@ public final class FederationModerationModels {
     /**
      * The body federation-api's {@code POST /api/federation/findings} expects, matched
      * field-for-field to {@code SystemFindingController.FileRequest} in
-     * snapdragon-federation-api: {@code (surface, disposition, classification,
+     * hugmesh-federation-api: {@code (surface, disposition, classification,
      * confidence, policyHit, perceptualHash)}.
      *
      * <p>The {@code subject} is NOT a request field — federation-api derives it

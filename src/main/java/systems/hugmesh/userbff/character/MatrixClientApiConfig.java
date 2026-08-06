@@ -26,7 +26,7 @@ public class MatrixClientApiConfig {
     @Bean
     @ConditionalOnProperty(name = "sticker.matrix.register.enabled", havingValue = "true")
     public MatrixClientApiClient liveMatrixClientApiClient(
-            @Value("${sticker.matrix.base-url:${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}}") String baseUrl) {
+            @Value("${sticker.matrix.base-url:${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}}") String baseUrl) {
         return new MatrixClientApiClient(WebClient.builder().baseUrl(baseUrl).build());
     }
 

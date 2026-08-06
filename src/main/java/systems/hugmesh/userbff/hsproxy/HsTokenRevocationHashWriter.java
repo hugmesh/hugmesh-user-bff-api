@@ -55,7 +55,7 @@ public class HsTokenRevocationHashWriter {
     public HsTokenRevocationHashWriter(
             FederationHttpClientSsl mtls,
             @Value("${app.hs-token.registry.enabled:false}") boolean enabled,
-            @Value("${app.hs-token.registry.base-url:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}") String baseUrl) {
+            @Value("${app.hs-token.registry.base-url:${GATEWAY_URL:http://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8080}}") String baseUrl) {
         this.enabled = enabled;
         if (enabled) {
             HttpClient httpClient = mtls.customize(HttpClient.create());

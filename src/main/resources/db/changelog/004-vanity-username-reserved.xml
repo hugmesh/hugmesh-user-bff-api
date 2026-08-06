@@ -11,7 +11,7 @@
         The profile is keyed by user_id = Casdoor SUBJECT (an opaque id), NOT the
         username. But the profile carries the VANITY INTENT (vanity_subdomain_enabled):
         when a user enables their vanity subdomain, their PUBLIC profile is served at
-        <username>.snapdragon.systems — so the USERNAME (the Casdoor preferred_username
+        <username>.hugmesh.systems — so the USERNAME (the Casdoor preferred_username
         claim) becomes a DNS label and must not collide with a dedicated app route.
 
         We therefore add a NORMALIZED vanity_username column that MIRRORS the Casdoor

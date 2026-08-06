@@ -36,7 +36,7 @@ class CasdoorLoginClientTest {
                     .build());
         };
         WebClient http = WebClient.builder().baseUrl(BASE).exchangeFunction(fn).build();
-        return new CasdoorLoginClient(http, "/api/login", "user-bff",
+        return new CasdoorLoginClient(http, "/api/login", "app-user-bff",
                 "app-user-bff", "hugmesh", "openid profile email");
     }
 
@@ -55,7 +55,7 @@ class CasdoorLoginClientTest {
         // The authorize request carries the OIDC + PKCE S256 query params against the internal base.
         String uri = captured.get().url().toString();
         assertThat(uri).startsWith(BASE + "/api/login");
-        assertThat(uri).contains("clientId=user-bff");
+        assertThat(uri).contains("clientId=app-user-bff");
         assertThat(uri).contains("responseType=code");
         assertThat(uri).contains("code_challenge=challenge-xyz");
         assertThat(uri).contains("code_challenge_method=S256");
@@ -88,7 +88,7 @@ class CasdoorLoginClientTest {
 
     @Test
     void darkClient_failsClosed() {
-        CasdoorLoginClient dark = new CasdoorLoginClient(null, "/api/login", "user-bff",
+        CasdoorLoginClient dark = new CasdoorLoginClient(null, "/api/login", "app-user-bff",
                 "app-user-bff", "hugmesh", "openid profile email");
         assertThat(dark.enabled()).isFalse();
         assertThatThrownBy(() ->

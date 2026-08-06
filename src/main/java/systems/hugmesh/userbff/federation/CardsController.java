@@ -16,7 +16,7 @@ import systems.hugmesh.userbff.web.ValidationPatterns;
 
 /**
  * Owner-scoped "cards" = the caller's OWN federation bundles ({@code user_modules}
- * in snapdragon-federation-api). This controller is a thin reactive pass-through to
+ * in hugmesh-federation-api). This controller is a thin reactive pass-through to
  * {@link FederationApiClient}; owner-enforcement is preserved because the
  * {@code FederationWebClientConfig} filter forwards the caller's Casdoor JWT, so
  * federation-api scopes {@code /mine} (and records ownership on PUT) to the same
@@ -24,7 +24,7 @@ import systems.hugmesh.userbff.web.ValidationPatterns;
  *
  * <p>ROLE_USER floor + {@code @PreAuthorize} defence-in-depth.
  */
-@Tag(name = "Cards", description = "The caller's OWN federation bundles (owner = JWT subject), via snapdragon-federation-api.")
+@Tag(name = "Cards", description = "The caller's OWN federation bundles (owner = JWT subject), via hugmesh-federation-api.")
 @RestController
 @RequestMapping("/bff/user/cards")
 @PreAuthorize("hasRole('USER')")

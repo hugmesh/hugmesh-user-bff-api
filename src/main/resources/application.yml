@@ -5,18 +5,22 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: "${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}"
+          issuer-uri: "${CASDOOR_ISSUER_URI:https://id.hugmesh.systems}"
           # Explicit JWKS so the resource server does NOT do OIDC discovery against issuer-uri
           # (unreachable in-container when issuer-uri is the browser-facing localhost:8000, which
           # 500s every authenticated call). Mirrors hugmesh-actions + the gateway; compose sets
           # CASDOOR_JWKS_URI=http://casdoor:8000/.well-known/jwks. iss is still validated via issuer-uri.
-          jwk-set-uri: "${CASDOOR_JWKS_URI:${CASDOOR_ISSUER_URI:https://id.snapdragon.systems}/.well-known/jwks}"
+          jwk-set-uri: "${CASDOOR_JWKS_URI:${CASDOOR_ISSUER_URI:https://id.hugmesh.systems}/.well-known/jwks}"
 
   # Runtime data access is REACTIVE (R2DBC) over the config datastore: the owner-
   # keyed user_profile / user_preference / user_block tables.
+  # The defaults name this BFF's OWN dedicated Postgres (generator manifests/
+  # user-bff-db), NOT a shared cluster instance — and the two roles are DIFFERENT
+  # on purpose: runtime binds the least-privilege DML-only `userbff_app`, while
+  # Liquibase needs the DDL owner `userbff` (initdb/10-roles.sh creates both).
   r2dbc:
-    url: "${SPRING_R2DBC_URL:r2dbc:postgresql://snapdragon-pg.snapdragon-backend.svc.cluster.local:5432/snapdragon}"
-    username: "${SPRING_R2DBC_USERNAME:snapdragon}"
+    url: "${SPRING_R2DBC_URL:r2dbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff}"
+    username: "${SPRING_R2DBC_USERNAME:userbff_app}"
     password: "${SPRING_R2DBC_PASSWORD:}"
 
   # Liquibase owns schema migrations. It has NO R2DBC runner, so it uses a plain
@@ -24,16 +28,16 @@ spring:
   liquibase:
     enabled: true
     change-log: "classpath:db/changelog/db.changelog-master.xml"
-    url: "${SPRING_LIQUIBASE_URL:jdbc:postgresql://snapdragon-pg.snapdragon-backend.svc.cluster.local:5432/snapdragon}"
-    user: "${SPRING_LIQUIBASE_USER:snapdragon}"
+    url: "${SPRING_LIQUIBASE_URL:jdbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff}"
+    user: "${SPRING_LIQUIBASE_USER:userbff}"
     password: "${SPRING_LIQUIBASE_PASSWORD:}"
 
-# Reactive WebClient to snapdragon-federation-api (the cards + recommend-instance-
+# Reactive WebClient to hugmesh-federation-api (the cards + recommend-instance-
 # block backend). The caller's Casdoor JWT is forwarded per request so federation-
 # api scopes everything to the same subject (owner-enforcement end-to-end).
 federation:
   api:
-    base-url: "${FEDERATION_API_BASE_URL:http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080}"
+    base-url: "${FEDERATION_API_BASE_URL:http://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080}"
 
 # ── API-to-API mTLS (CLIENT side / OUTBOUND) ─────────────────────────────────
 # The OTHER half of the server.ssl.* enforcement below: when federation-api flips
@@ -60,12 +64,15 @@ casdoor:
   # Self-service password/email changes go to the Casdoor IdP. STUBBED by default
   # (account.enabled=false) — the reactive flow is wired but no live write runs
   # until the payload + per-user auth are validated against the deployed Casdoor.
-  gateway-base: "${PKI_GATEWAY_BASE:http://snapdragon-pki-gateway.snapdragon-pki.svc.cluster.local:8080}"
-  organization: "${CASDOOR_ORG:snapdragon}"
+  gateway-base: "${PKI_GATEWAY_BASE:http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080}"
+  organization: "${CASDOOR_ORG:hugmesh}"
   account:
     enabled: "${CASDOOR_ACCOUNT_ENABLED:false}"
-    base-url: "${CASDOOR_ACCOUNT_BASE_URL:http://casdoor.snapdragon-pki.svc.cluster.local:8000}"
-    client-id: "${CASDOOR_ACCOUNT_CLIENT_ID:user-bff}"
+    base-url: "${CASDOOR_ACCOUNT_BASE_URL:http://casdoor.hugmesh-pki.svc.cluster.local:8000}"
+    # Casdoor authenticates its REST API with HTTP Basic <clientId>:<clientSecret>
+    # of an APPLICATION, so this is the same registered clientId as
+    # app.bff.oidc.client-id — `app-user-bff`, not the bare app key.
+    client-id: "${CASDOOR_ACCOUNT_CLIENT_ID:app-user-bff}"
     client-secret: "${CASDOOR_ACCOUNT_CLIENT_SECRET:}"
 
 # External self-block push targets. Base URLs grounded in the hugmesh-generator
@@ -75,10 +82,10 @@ casdoor:
 block:
   matrix:
     enabled: "${BLOCK_MATRIX_ENABLED:false}"
-    base-url: "${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}"
+    base-url: "${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}"
   mastodon:
     enabled: "${BLOCK_MASTODON_ENABLED:false}"
-    base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
+    base-url: "${MASTODON_URL:http://akkoma.hugmesh-backend.svc.cluster.local:4000}"
 
 # PROFILE-IMAGE VISION MODERATION (on-prem edge-AI). Ships DARK — enabled=false ⇒ avatar
 # uploads are UNCHANGED (allow-all). When enabled, every avatar is scanned by the shared
@@ -89,7 +96,7 @@ block:
 moderation:
   image:
     enabled: "${MODERATION_IMAGE_ENABLED:false}"
-    base-url: "${MODERATION_IMAGE_BASE_URL:http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080}"
+    base-url: "${MODERATION_IMAGE_BASE_URL:http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080}"
     timeout-ms: "${MODERATION_IMAGE_TIMEOUT_MS:15000}"
 
 # USER SELF-SILENCE (self-service visibility hide; NOT a ban). The durable
@@ -112,10 +119,10 @@ self-silence:
 external:
   matrix:
     enabled: "${EXTERNAL_MATRIX_ENABLED:false}"
-    base-url: "${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}"
+    base-url: "${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}"
   mastodon:
     enabled: "${EXTERNAL_MASTODON_ENABLED:false}"
-    base-url: "${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}"
+    base-url: "${MASTODON_URL:http://akkoma.hugmesh-backend.svc.cluster.local:4000}"
 
 # ── BFF MEDIA-PROXY / AI-CLOAK (poison-before-ingest) ────────────────────────
 # The server-owned media-proxy the UIs route uploads through INSTEAD of POSTing
@@ -173,11 +180,29 @@ app:
   bff:
     oidc:
       enabled: "${APP_BFF_OIDC_ENABLED:false}"
-      issuer: "${APP_BFF_OIDC_ISSUER:${casdoor.gateway-base}}"
+      # `issuer` is NOT the JWT `iss` validator (that is
+      # spring.security.oauth2.resourceserver.jwt.issuer-uri, browser-facing
+      # https://id.hugmesh.systems). It is purely the BASE URL auth-core's
+      # OidcExchangeClient POSTs `token-path` against, i.e. the server-to-server
+      # code->token leg of POST /bff/login. It MUST therefore be the same internal
+      # Casdoor the /api/login leg uses (login-base), NOT casdoor.gateway-base:
+      # the pki-gateway's route table (hugmesh-generator apps/20-gateway-pki.yaml)
+      # declares `path: /api/login` as a LITERAL Spring Cloud Gateway `Path=`
+      # predicate, which matches ONLY /api/login — /api/login/oauth/access_token
+      # matches no route there and 404s, so a fresh cluster could never complete
+      # the exchange. Pinned to CASDOOR_URL as casdoor-init sets it
+      # (specs/cluster/manifests/casdoor/init-job.yaml).
+      issuer: "${APP_BFF_OIDC_ISSUER:http://casdoor.hugmesh-pki.svc.cluster.local:8000}"
       token-path: "${APP_BFF_OIDC_TOKEN_PATH:/api/login/oauth/access_token}"
-      client-id: "${APP_BFF_OIDC_CLIENT_ID:user-bff}"
+      # MUST be the Casdoor Application's clientId FIELD, which casdoor-init sets to
+      # `app-<name>` (reconcile_app: `appname = f"app-{name}"`, `"clientId": appname`)
+      # — NOT the bare app key `user-bff`. A fresh cluster sets no
+      # APP_BFF_OIDC_CLIENT_ID (the generator manifest only injects the SECRET), so
+      # this default is what POST /bff/login actually presents; `user-bff` is what
+      # produced the live "Invalid client_id" 401 on the first kind run.
+      client-id: "${APP_BFF_OIDC_CLIENT_ID:app-user-bff}"
       client-secret: "${APP_BFF_OIDC_CLIENT_SECRET:}"
-      redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://snapdragon.systems/login/callback}"
+      redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://hugmesh.systems/login/callback}"
       default-expiry-seconds: 3600
       # ── NATIVE LOGIN (server-side credential check) ───────────────────────────
       # POST /bff/login verifies username+password SERVER-SIDE against Casdoor's
@@ -189,10 +214,10 @@ app:
       # compose sets APP_BFF_OIDC_LOGIN_BASE=http://casdoor:8000. client-id is REUSED
       # from client-id above so the /api/login authorize call and the token exchange
       # present the SAME OIDC client (a PKCE code is only redeemable by its requester).
-      login-base: "${APP_BFF_OIDC_LOGIN_BASE:http://casdoor.snapdragon-pki.svc.cluster.local:8000}"
+      login-base: "${APP_BFF_OIDC_LOGIN_BASE:http://casdoor.hugmesh-pki.svc.cluster.local:8000}"
       login-path: "${APP_BFF_OIDC_LOGIN_PATH:/api/login}"
       application: "${APP_BFF_OIDC_APPLICATION:app-user-bff}"
-      organization: "${APP_BFF_OIDC_ORGANIZATION:${casdoor.organization:snapdragon}}"
+      organization: "${APP_BFF_OIDC_ORGANIZATION:${casdoor.organization:hugmesh}}"
       scope: "${APP_BFF_OIDC_SCOPE:openid profile email}"
     custody-key: "${APP_BFF_CUSTODY_KEY:}"
   # The opaque bff_ session cookie (auth-core SessionCookieService). LIVE BY DEFAULT:
@@ -219,7 +244,7 @@ app:
   # repo as a follow-up (see PR body); the existing mutual db-denial stays.
   admin-bff:
     internal:
-      base-url: "${ADMIN_BFF_INTERNAL_BASE_URL:http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080}"
+      base-url: "${ADMIN_BFF_INTERNAL_BASE_URL:http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080}"
 
   # BffSessionAuthenticationWebFilter — bridges a native-login bff_ session (cookie or
   # Authorization header) into this service's OWN Spring Security context via admin-bff's
@@ -270,8 +295,8 @@ app:
   hs-token:
     enabled: "${APP_HS_TOKEN_ENABLED:true}"
     key: "${APP_HS_TOKEN_KEY:}"
-    matrix-url: "${APP_HS_TOKEN_MATRIX_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
-    mastodon-url: "${APP_HS_TOKEN_MASTODON_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"
+    matrix-url: "${APP_HS_TOKEN_MATRIX_URL:https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443}"
+    mastodon-url: "${APP_HS_TOKEN_MASTODON_URL:https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443}"
     # EMPTY DEFAULT + FAIL-CLOSED (mirrors `key` above): when unset, the broker bean
     # still wires (it is an unconditional @Service injected by the always-present proxy
     # controllers) but every mint 503s — exactly like an unconfigured custody `key`
@@ -291,7 +316,10 @@ app:
     mastodon-email-domain: "${APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN:}"
     registry:
       enabled: "${APP_HS_TOKEN_REGISTRY_ENABLED:false}"
-      base-url: "${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://snapdragon-gateway.snapdragon-backend.svc.cluster.local:8080}}"
+      # `hugmesh-be-gateway` is the gateway chart's Helm instance name (generator
+      # apps/20-gateway-be.yaml), which IS the Service name — it is not a prefixed
+      # rename of the old `*-gateway`, so do not derive it by substitution.
+      base-url: "${APP_HS_TOKEN_REGISTRY_BASE_URL:${GATEWAY_URL:http://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8080}}"
   media:
     poisoning:
       enabled: "${MEDIA_POISONING_ENABLED:false}"
@@ -310,7 +338,7 @@ app:
       health-timeout-ms: "${MEDIA_POISONING_HEALTH_TIMEOUT_MS:2000}"
       # max accepted upload size (bytes); a larger part is a clean 400.
       max-upload-bytes: "${MEDIA_POISONING_MAX_UPLOAD_BYTES:20971520}"
-      # the OPTIONAL snapdragon-media-poisoner worker (x86/GPU heavy tier). BLANK ⇒
+      # the OPTIONAL hugmesh-media-poisoner worker (x86/GPU heavy tier). BLANK ⇒
       # no worker wired ⇒ capability reports backend=none ⇒ lean fallback. k8s
       # protocol-probe of the Service /health, NO Eureka/Config/Task.
       worker-url: "${MEDIA_POISONING_WORKER_URL:}"
@@ -323,10 +351,10 @@ app:
     proxy:
       mastodon:
         enabled: "${MEDIA_PROXY_MASTODON_ENABLED:false}"
-        base-url: "${MEDIA_PROXY_MASTODON_BASE_URL:https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443}"
+        base-url: "${MEDIA_PROXY_MASTODON_BASE_URL:https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443}"
       matrix:
         enabled: "${MEDIA_PROXY_MATRIX_ENABLED:false}"
-        base-url: "${MEDIA_PROXY_MATRIX_BASE_URL:https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443}"
+        base-url: "${MEDIA_PROXY_MATRIX_BASE_URL:https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443}"
   # ── PRE-PUBLISH vision moderation (edge-AI) ──────────────────────────────────
   # On avatar/profile-image set, send bytes to the on-prem edge-ai-analysis API
   # (POST /v1/analyze/content/moderate) BEFORE publishing: reject ⇒ fail-closed 422,
@@ -337,7 +365,7 @@ app:
     moderation:
       enabled: "${VISION_MODERATION_ENABLED:false}"
       # in-cluster ClusterIP of the edge-ai-analysis service (generator optional svc).
-      base-url: "${VISION_MODERATION_BASE_URL:http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080}"
+      base-url: "${VISION_MODERATION_BASE_URL:http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080}"
       endpoint: "${VISION_MODERATION_ENDPOINT:/v1/analyze/content/moderate}"
       # hard per-call latency budget (ms); on timeout the fail-closed policy applies.
       timeout-ms: "${VISION_MODERATION_TIMEOUT_MS:10000}"

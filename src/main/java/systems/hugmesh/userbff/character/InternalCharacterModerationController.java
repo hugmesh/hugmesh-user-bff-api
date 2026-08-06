@@ -32,7 +32,7 @@ import systems.hugmesh.commons.web.ApiException;
  * {@code ROLE_SERVICE} is the platform's service-account role (a Casdoor client-credentials
  * token carries it; no human login does), the SAME mechanism
  * {@link systems.hugmesh.userbff.notification.InternalNotificationController} and
- * snapdragon-federation-api use to gate their internal surfaces.
+ * hugmesh-federation-api use to gate their internal surfaces.
  *
  * <p>The target ROW {@code id} is a path variable and the resolved {@code status} comes
  * from the body — the service acts on behalf of the SYSTEM resolving a finding, NOT

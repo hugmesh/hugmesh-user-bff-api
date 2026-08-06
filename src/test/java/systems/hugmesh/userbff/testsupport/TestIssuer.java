@@ -24,7 +24,7 @@ import java.util.UUID;
 /**
  * REUSABLE multi-issuer test fixture — the cornerstone of the copyable multi-issuer
  * security-slice pattern (see {@code docs/testing/MULTI-ISSUER-SLICE.md}). COPIED
- * VERBATIM from snapdragon-gateway's {@code testsupport.TestIssuer} (package adjusted
+ * VERBATIM from hugmesh-gateway's {@code testsupport.TestIssuer} (package adjusted
  * to this BFF) per that doc's "copy as-is" instruction — the only edit is the package.
  *
  * <p>Each {@code TestIssuer} stands up a tiny in-process HTTP server (JDK

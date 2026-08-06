@@ -9,7 +9,7 @@ import reactor.core.publisher.Mono;
 /**
  * Reactive (R2DBC) store for {@code user_profile} — keyed by the owner
  * ({@code user_id} = Casdoor JWT subject) AND domain-scoped by {@code domain} (the
- * validated-issuer brand). Matches the {@code snapdragon-federation-api}
+ * validated-issuer brand). Matches the {@code hugmesh-federation-api}
  * {@code R2dbcRepository} idiom: DERIVED finders/deletes for the read/delete paths,
  * an {@code @Query} (static-final SQL constant) only for the UPDATE-first /
  * INSERT-if-absent upsert that cannot be derived (server-side {@code now()}, partial

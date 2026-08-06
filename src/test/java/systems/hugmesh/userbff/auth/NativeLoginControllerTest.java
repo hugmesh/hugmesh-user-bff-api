@@ -41,8 +41,8 @@ import static org.mockito.Mockito.when;
  */
 class NativeLoginControllerTest {
 
-    private static final String REDIRECT = "https://snapdragon.systems/login/callback";
-    private static final String LOGIN_BASE = "http://casdoor.snapdragon-pki.svc.cluster.local:8000";
+    private static final String REDIRECT = "https://hugmesh.systems/login/callback";
+    private static final String LOGIN_BASE = "http://casdoor.hugmesh-pki.svc.cluster.local:8000";
 
     /** A 32-byte base64 key so BffCustodyCipher.isAvailable() is true. */
     private static BffCustodyCipher availableCipher() {

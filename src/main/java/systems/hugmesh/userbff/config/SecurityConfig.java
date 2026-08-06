@@ -153,7 +153,7 @@ public class SecurityConfig {
      * pure-JSON BFF resource server, applied to EVERY {@link SecurityWebFilterChain}.
      *
      * <p>This BFF is NOT the TLS front door — it is a no-document JSON resource server
-     * that ALWAYS sits behind the shared snapdragon-gateway, which emits the full
+     * that ALWAYS sits behind the shared hugmesh-gateway, which emits the full
      * browser-policy set (HSTS / Permissions-Policy / COOP / CORP / the UI-shell CSP)
      * ONCE at the single TLS-terminating PEP so 12 configs can't drift (NIST 800-228
      * sec 3-4). So this chain deliberately OMITS HSTS (meaningless over plaintext

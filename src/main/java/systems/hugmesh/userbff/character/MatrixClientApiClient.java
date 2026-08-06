@@ -16,7 +16,7 @@ import java.util.Map;
 /**
  * Generic per-USER Matrix client-server ACCOUNT-DATA client (GET + PUT) for the
  * MSC2545 sticker-pack registration. Base URL is the in-cluster Matrix homeserver
- * (tuwunel) {@code http://tuwunel.snapdragon-backend.svc.cluster.local:8008} —
+ * (tuwunel) {@code http://tuwunel.hugmesh-backend.svc.cluster.local:8008} —
  * env-overridable via {@code MATRIX_URL} — the DIRECT C-S endpoint (NOT the mTLS
  * sidecar; mirrors {@link systems.hugmesh.userbff.block.MatrixBlockClient}).
  *

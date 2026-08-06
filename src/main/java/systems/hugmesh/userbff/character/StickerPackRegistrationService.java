@@ -87,7 +87,7 @@ public class StickerPackRegistrationService {
             MatrixClientApiClient matrix,
             CanonicalIdentityResolver identity,
             @Value("${sticker.matrix.register.enabled:false}") boolean enabled,
-            @Value("${sticker.matrix.server-name:${MATRIX_SERVER_NAME:snapdragon-backend.svc.cluster.local}}")
+            @Value("${sticker.matrix.server-name:${MATRIX_SERVER_NAME:hugmesh.systems}}")
             String serverName) {
         this.stickerRepo = stickerRepo;
         this.custody = custody;

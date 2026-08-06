@@ -21,7 +21,7 @@ public class ExternalBlockConfig {
     @Bean
     @ConditionalOnProperty(name = "block.matrix.enabled", havingValue = "true")
     public MatrixBlockClient liveMatrixBlockClient(
-            @Value("${block.matrix.base-url:${MATRIX_URL:http://tuwunel.snapdragon-backend.svc.cluster.local:8008}}") String baseUrl) {
+            @Value("${block.matrix.base-url:${MATRIX_URL:http://tuwunel.hugmesh-backend.svc.cluster.local:8008}}") String baseUrl) {
         return new MatrixBlockClient(WebClient.builder().baseUrl(baseUrl).build());
     }
 
@@ -35,7 +35,7 @@ public class ExternalBlockConfig {
     @Bean
     @ConditionalOnProperty(name = "block.mastodon.enabled", havingValue = "true")
     public MastodonBlockClient liveMastodonBlockClient(
-            @Value("${block.mastodon.base-url:${MASTODON_URL:http://akkoma.snapdragon-backend.svc.cluster.local:4000}}") String baseUrl) {
+            @Value("${block.mastodon.base-url:${MASTODON_URL:http://akkoma.hugmesh-backend.svc.cluster.local:4000}}") String baseUrl) {
         return new MastodonBlockClient(WebClient.builder().baseUrl(baseUrl).build());
     }
 

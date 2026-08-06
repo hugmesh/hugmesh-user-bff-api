@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Multi-issuer security-slice — REPLICATED from snapdragon-gateway's keystone
+ * Multi-issuer security-slice — REPLICATED from hugmesh-gateway's keystone
  * {@code MultiIssuerSecuritySliceTest} (PR #34, branch {@code test/security-slice-keystone};
  * see {@code docs/testing/MULTI-ISSUER-SLICE.md}). Proves THIS BFF's per-brand
  * (multi-issuer) Casdoor wiring with the security property that matters most: an

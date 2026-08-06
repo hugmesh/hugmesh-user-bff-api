@@ -17,8 +17,8 @@ import systems.hugmesh.userbff.federation.FederationModerationModels.SubmitReque
 import java.util.Map;
 
 /**
- * Reactive WebClient CLIENT of snapdragon-federation-api. The base URL defaults to
- * the in-cluster DNS {@code http://snapdragon-federation-api.snapdragon-backend
+ * Reactive WebClient CLIENT of hugmesh-federation-api. The base URL defaults to
+ * the in-cluster DNS {@code http://hugmesh-federation-api.hugmesh-backend
  * .svc.cluster.local:8080} (env-overridable). The bearer token is injected per
  * request by the {@link FederationWebClientConfig} token-forwarding
  * {@code ExchangeFilterFunction}, so federation-api scopes every call to the SAME
