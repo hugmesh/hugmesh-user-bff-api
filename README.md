@@ -598,6 +598,27 @@ external channels that build on top.
   (`sourceTable`+`sourceId`), so a retry is INSERT-IF-ABSENT (a duplicate returns
   `delivered=true, deduped=true`, never a second row).
 
+**Test/seed self-notify — `TestSeedNotificationController`
+(`/bff/user/notifications/test-seed`)** (`ROLE_USER` floor) — gated by
+`app.test-seed.enabled` (default `false`).
+- `POST /bff/user/notifications/test-seed` — lets an e2e test authenticated as an
+  ordinary human persona get a REAL `user_notifications` row created for **itself**,
+  without needing the `ROLE_SERVICE` client-credentials token that gates the
+  internal-deliver endpoint above. Body is `{ category, title?, body?, sourceId? }`;
+  there is deliberately **no target field** — the target is always the caller's own
+  `(JWT-issuer domain, JWT subject)`, so no cross-user write capability is
+  introduced (the internal-deliver endpoint is `ROLE_SERVICE`-only precisely
+  because ITS target comes from the request body).
+- Not a parallel write path: it calls the exact same
+  `InternalNotificationDeliveryService` the production deliver path uses, so
+  category-preference suppression, the account-restriction forced-on rule, the
+  SSE push, and insert-if-absent idempotency all behave identically to
+  production.
+- **SHIPS DARK by default** (`APP_TEST_SEED_ENABLED`): when off, the route still
+  exists and returns a **503** (not a 404) so a misconfigured e2e run fails loudly
+  rather than silently seeding nothing. Set `APP_TEST_SEED_ENABLED=true` only in the
+  e2e/dev profile — it must stay off in production.
+
 > **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is still dark in normal operation — nothing writes `user_notifications` yet outside tests, so the SSE stream emits only when the `hugmesh-actions` reconciler (separate repo, later PR) starts calling the internal deliver endpoint. The SSE wiring itself is ✅ shipped.
 
 ### Real-time SSE stream ✅ shipped
@@ -806,7 +827,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/systems/hugmesh/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.hugmesh:hugmesh-auth-core:2.4.0`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.hugmesh:hugmesh-auth-core:2.4.2`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
    the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
    infra) is extracted to `hugmesh-auth-core` (depends on `hugmesh-commons`,
@@ -814,7 +835,12 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
    in-flight alongside the SSO relocation above. The pin was bumped to 2.4.0 as part
    of the HugMesh rename (the published `hugmesh-auth-core` coordinate under the
    renamed groupId/artifactId), carrying forward the same `ReservedNames`
-   canonical-revision sync that `ProfileService`/`UsernameSkeleton` consume directly.
+   canonical-revision sync that `ProfileService`/`UsernameSkeleton` consume directly;
+   it has since moved to 2.4.2 (auth-core #39/#40/#41 — ceremony-test coverage, a
+   WARN-by-default MFA precondition boot guard, and a 32-byte CSPRNG WebAuthn
+   challenge) to keep this BFF and admin-bff pinned in lockstep on the same
+   released auth-core line, even though this BFF does not wire the MFA subsystem
+   itself — see `pom.xml` for the full version history.
 
    The committed [`openapi.json`](src/main/resources/openapi/openapi.json) is
    **byte-identical** after the commons refactor (internal-only change).
@@ -1095,10 +1121,14 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   see *Native-login session bridge* and *Canonical homeserver-identity resolution* above,
   and PRs #115/#116/#117/#118/#120/#123/#124.
 - ✅ **Org artifact adoption:** `hugmesh-parent:2.8.0` + `hugmesh-commons` (shared
-  security/tenancy/web) + `hugmesh-auth-core:2.4.0`; GitLab-only CI with the shared
+  security/tenancy/web) + `hugmesh-auth-core:2.4.2`; GitLab-only CI with the shared
   OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
-  outbound calls), config-gated, plaintext in local/dev/CI.
+  outbound calls), config-gated, plaintext in local/dev/CI. Enforcement is already
+  turned on in the cluster deployment manifest — both the GitOps-pilot copy in this
+  repo ([`deploy/deployment.yaml`](deploy/deployment.yaml), see
+  [`snapdragon-deploy.yaml`](snapdragon-deploy.yaml)) and the canonical
+  `hugmesh-generator` manifest; see [SECURITY.md](SECURITY.md) for the wiring.
 - ✅ **SSO relocation — on `main`, ships DARK** (the headline of an earlier cycle, now
   followed by a cross-cutting identity-resolution hardening pass, see above): server-side
   OIDC code→token exchange, per-session JWT custody/refresh, the browser-side opaque
@@ -1163,14 +1193,22 @@ control surface; the actual external delivery is reconciler-driven (the
 User-facing notification silencing/preferences that land in THIS BFF will be documented
 as shipped only once merged to `main`.
 
-### Casdoor MFA / step-up 🔭 planned
+### Casdoor MFA / step-up 🚧 in-flight
 Platform MFA (WebAuthn + TOTP + recovery) is design-complete (a 9-PR plan): per-role
 defaults (superadmin/admin required, mod relaxable, user optional) enforced via
 `amr`/`acr` → `MFA_SATISFIED` + `gateway_route_access.mfa_required` (fail-closed) +
-generalized step-up. With the auth relocation, the MFA challenge/step-up stamping into
-the opaque `bff_` session lands in THIS BFF (the shared infra in `hugmesh-auth-core`),
-while the gateway keeps enforcing `amr`→`MFA_SATISFIED` for the JWT world. None is
-present today; surfaces will be marked 🚧/✅ as they land.
+generalized step-up. The **JWT-authority-derivation half already ships here, dark**:
+`SecurityConfig` wires `app.mfa.enabled` (`APP_MFA_ENABLED`, default `false`) and
+`app.mfa.freshness-window` (default 600000ms/10m) into
+`CasdoorAuthorities.MfaConfig`, which is exactly the `amr`/`acr` → `MFA_SATISFIED`
+converter this section used to describe as not-yet-existing — with the flag off
+(the default everywhere today) the converter never derives `MFA_SATISFIED` and
+behaviour is unchanged. What genuinely remains: with the auth relocation, the MFA
+challenge/step-up stamping into the opaque `bff_` session lands in THIS BFF (the
+shared infra in `hugmesh-auth-core`), while the gateway keeps enforcing
+`amr`→`MFA_SATISFIED` for the JWT world — that stamping, the gateway route
+enforcement (`gateway_route_access.mfa_required`), and turning `app.mfa.enabled` on
+are not done; surfaces will be marked ✅ as they land.
 
 ### Generator supply-chain hardening 🚧 in-flight + CI pen-test jobs 🚧 defined here
 Stage3 GPG/sha + headscale/tailscale checksum verification + de-defaulted baked creds

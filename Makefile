@@ -11,7 +11,7 @@
 # CVSS threshold that fails the SCA build (matches the inline dependency-check job).
 SCA_FAIL_CVSS ?= 9
 # JDK image used for the dockerized SCA run (matches the CI security job image).
-JDK_IMAGE     ?= eclipse-temurin:21-jdk-noble
+JDK_IMAGE     ?= eclipse-temurin:25-jdk-noble
 # Where to find the shared DAST harness. Override if you vendor/clone it elsewhere.
 PENTEST_HARNESS_DIR ?= ../hugmesh-generator/tests/pentest
 

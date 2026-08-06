@@ -58,13 +58,20 @@ existing tests run unchanged. `client-auth` maps to Netty's `ClientAuth`:
 `none → NONE`, `want → OPTIONAL`, `need → REQUIRE`. WebFlux/Netty reads these
 properties directly; no custom `SslContext`/`HttpServer` bean is needed.
 
-## Deployment requirement (owned by hugmesh-generator)
+## Deployment: shipped (dual-homed in this repo + hugmesh-generator)
 
-The deployment manifest for this BFF lives in `hugmesh-generator`
-(`specs/cluster/manifests/user-bff-api/deployment.yaml`), not in this repo. To
-turn enforcement on, that deployment must (a) add the keystore initContainer +
-`pki` (from `snapdragon-user-bff-api-mtls`) and `stores` (tmpfs) volumes —
-exactly as `charts/snapdragon-gateway/templates/deployment.yaml` does — and (b) set:
+Enforcement is **already turned on**. The GitOps-pilot copy of the deployment
+manifest lives right here in [`deploy/deployment.yaml`](deploy/deployment.yaml)
+(added as part of the Forgejo-cutover GitOps pilot; see
+[`snapdragon-deploy.yaml`](snapdragon-deploy.yaml) for the catalog descriptor
+that points at it), and the canonical copy in `hugmesh-generator`
+(`specs/cluster/manifests/user-bff-api/deployment.yaml`) carries the same
+fields. Both already:
+
+- add the `build-keystore` initContainer + the `pki` (from
+  `snapdragon-user-bff-api-mtls`) and `stores` (tmpfs) volumes — mirroring
+  `charts/snapdragon-gateway/templates/deployment.yaml`'s `build-keystore` — and
+- set:
 
 ```
 SSL_ENABLED=true
@@ -77,6 +84,11 @@ SSL_TRUST_STORE_TYPE=PKCS12
 SSL_TRUST_STORE_PASSWORD=<in-pod generated>
 ```
 
-The readiness/liveness probes must switch to HTTPS (`scheme: HTTPS`) once
-`SSL_ENABLED=true`, and the gateway must present its client cert AND call this BFF
-over `https://` for the route to keep working.
+The readiness/liveness probes go a step further than a plain `scheme: HTTPS`
+kubelet probe (which cannot present a client cert, and `client-auth=need`
+rejects a cert-less handshake): both manifests use an **HTTPS exec probe**
+(`curl --cert/--key/--cacert` against `/actuator/health/{readiness,liveness}`)
+so the probe itself authenticates as this pod's own mTLS identity. The gateway
+(`snapdragon-fe-gateway`/`snapdragon-be-gateway`) presents its own ESO-issued
+client cert AND calls this BFF over `https://` for its proxied route to work,
+as described above.
