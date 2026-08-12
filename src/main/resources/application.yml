@@ -397,7 +397,7 @@ springdoc:
     path: /swagger-ui.html
   # Restrict the component scan to this BFF's own controllers so the spec stays the
   # user-BFF surface only (no stray springframework/actuator paths leak in).
-  packages-to-scan: systems.hugmesh.userbff
+  packages-to-scan: net.hugmesh.userbff
 
 management:
   endpoints:

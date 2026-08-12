@@ -19,7 +19,7 @@ test:
   stage: test
   tags: [hugmesh-x86, privileged]
   # Spring Boot 4 upgrade: the full-context tests now run against a REAL Postgres via
-  # Testcontainers (systems.hugmesh.commons.testsupport.PostgresTestSupport), so the
+  # Testcontainers (net.hugmesh.commons.testsupport.PostgresTestSupport), so the
   # job needs a Docker daemon. Run Maven directly in a maven image with a docker:dind
   # SERVICE supplying the daemon (mirrors snapdragon-federation-api #43) instead of the
   # old `docker run` wrapper. hugmesh-commons / hugmesh-parent are PRIVATE (GitLab

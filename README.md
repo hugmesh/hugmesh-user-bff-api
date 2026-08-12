@@ -789,7 +789,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
    plugin config. Only the **repo-specific** deps stay in this POM: `icu4j` and
    `commons-text` (the Unicode confusable / typo-squat guard).
 
-2. **Shared security/tenancy/web →** `systems.hugmesh:hugmesh-commons:2.1.0` (test-jar
+2. **Shared security/tenancy/web →** `net.hugmesh:hugmesh-commons:2.1.0` (test-jar
    classifier pin; the main classifier is inherited from `hugmesh-parent`'s
    `dependencyManagement`).
    The local copies of `security.{Roles,DomainRegistry,CasdoorAuthorities,DomainScope}`,
@@ -820,12 +820,12 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
    **Two consumer-wiring steps** (the canonical recipe for the fan-out):
    - `config.CommonsSecurityConfig` `@Import`s the commons `DomainRegistry` +
      `TenancyResourceServerConfig` beans, because the `@SpringBootApplication`
-     component-scan over `systems.hugmesh.userbff` does **not** cover the
-     `systems.hugmesh.commons.*` packages. (`@Import` preserves
+     component-scan over `net.hugmesh.userbff` does **not** cover the
+     `net.hugmesh.commons.*` packages. (`@Import` preserves
      `TenancyResourceServerConfig`'s `@ConditionalOnExpression` gate.)
    - the multi-issuer security-slice tests reach the package-private
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
-     test accessor at `src/test/java/systems/hugmesh/commons/config/TenancyResolvers.java`.
+     test accessor at `src/test/java/net/hugmesh/commons/config/TenancyResolvers.java`.
 
 3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.hugmesh:hugmesh-auth-core:2.4.2`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,

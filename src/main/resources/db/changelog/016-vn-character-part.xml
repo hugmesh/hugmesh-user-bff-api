@@ -8,7 +8,7 @@
     <!--
         vn_character_part — a USER-DRAWN character PART (an SVG) for the VN/character-
         studio drawable-parts feature. The stored `svg` is the SERVER-SANITIZED subset
-        (systems.hugmesh.userbff.svg.SvgSanitizerService allowlist-filters the dirty
+        (net.hugmesh.userbff.svg.SvgSanitizerService allowlist-filters the dirty
         client SVG BEFORE it ever lands here), so the column never holds raw user XML —
         the security boundary runs in the service, the DB is the durable store.
 

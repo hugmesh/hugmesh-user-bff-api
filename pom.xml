@@ -18,7 +18,7 @@
     <relativePath/>
   </parent>
 
-  <groupId>systems.hugmesh</groupId>
+  <groupId>net.hugmesh</groupId>
   <!-- NO -api suffix in the artifactId (mirrors admin-bff): -api is only in the
        repo/service/image name. -->
   <artifactId>user-bff</artifactId>
@@ -37,12 +37,12 @@
          this repo's deleted local copies of security.{Roles,DomainRegistry,DomainScope,
          CasdoorAuthorities}, config.TenancyResourceServerConfig and web.ApiException. -->
     <dependency>
-      <groupId>systems.hugmesh</groupId>
+      <groupId>net.hugmesh</groupId>
       <artifactId>hugmesh-commons</artifactId>
     </dependency>
 
     <!-- hugmesh-commons TEST-JAR — provides the shared Testcontainers Postgres
-         base (systems.hugmesh.commons.testsupport.PostgresTestSupport) that
+         base (net.hugmesh.commons.testsupport.PostgresTestSupport) that
          full-context @SpringBootTest tests extend under Spring Boot 4. Carries an
          EXPLICIT <version>2.1.0</version>: hugmesh-parent's dependencyManagement
          entry for hugmesh-commons has NO <classifier>, so it manages only the
@@ -53,7 +53,7 @@
          clean-CI build). 2.1.0 carries current content under commons' overwrite
          publish model and is byte-identical to the relabeled 2.8.0. -->
     <dependency>
-      <groupId>systems.hugmesh</groupId>
+      <groupId>net.hugmesh</groupId>
       <artifactId>hugmesh-commons</artifactId>
       <version>2.1.0</version>
       <classifier>tests</classifier>
