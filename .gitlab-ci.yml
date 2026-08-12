@@ -9,7 +9,7 @@
 # pentest:sca / pentest:dast jobs below `extends:` those hidden jobs and run the
 # full harness (Dependency-Check SCA + authenticated ZAP baseline + probes/nuclei).
 include:
-  - project: 'Snapdragon-Systems/snapdragon-generator'
+  - project: 'hugmesh/snapdragon-generator'
     ref: main
     file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
 
