@@ -2,13 +2,13 @@ package net.hugmesh.userbff.auth;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import systems.hugmesh.authcore.casdoor.BffCustodyCipher;
-import systems.hugmesh.authcore.casdoor.OidcExchangeConfig;
-import systems.hugmesh.authcore.config.SessionCookieService;
+import net.hugmesh.authcore.casdoor.BffCustodyCipher;
+import net.hugmesh.authcore.casdoor.OidcExchangeConfig;
+import net.hugmesh.authcore.config.SessionCookieService;
 
 /**
  * Pulls the auth-core SSO building blocks this BFF's OIDC-login relocation consumes
- * into the context. They live under {@code systems.hugmesh.authcore.*} — OUTSIDE the
+ * into the context. They live under {@code net.hugmesh.authcore.*} — OUTSIDE the
  * {@code net.hugmesh.userbff} component-scan — so they are {@code @Import}ed
  * here rather than picked up by the scan (the same pattern {@code CommonsSecurityConfig}
  * uses for the commons beans):

@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-import systems.hugmesh.authcore.reserved.ReservedNames;
+import net.hugmesh.authcore.reserved.ReservedNames;
 import net.hugmesh.commons.security.DomainRegistry;
 import net.hugmesh.commons.web.ApiException;
 import net.hugmesh.userbff.federation.FederationApiClient;

@@ -29,7 +29,7 @@
         so no existing row can be invalidated by this change.
 
         NOTE on the service layer: the runtime validation list is
-        systems.hugmesh.authcore.reserved.ReservedNames.RESERVED (the shared
+        net.hugmesh.authcore.reserved.ReservedNames.RESERVED (the shared
         auth-core copy this BFF consumes as a Maven dependency). The pinned
         auth-core release predates the revision 7-9 labels, so until that library
         adds them and the pin is bumped, those five labels are enforced HERE

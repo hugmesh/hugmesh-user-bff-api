@@ -20,7 +20,7 @@
         ProfileController). The CHECK below is the DB-LEVEL backstop for the
         service-layer validation: a non-null vanity_username may not be a reserved
         label. The forbidden list is generated from the canonical
-        systems.hugmesh.authcore.reserved.ReservedNames.RESERVED set — the SAME list
+        net.hugmesh.authcore.reserved.ReservedNames.RESERVED set — the SAME list
         the federation serving layer + its 016 reserved-slug CHECK use (canonical
         source: the fe-/be-gateway routes + reserved subdomains + the hugmesh.games
         route prefixes). lower() makes the constraint case-insensitive, matching the

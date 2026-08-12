@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import net.hugmesh.userbff.support.StubFederationApiClient;
 import net.hugmesh.userbff.support.TestDatabaseConfig;
-import systems.hugmesh.authcore.reserved.ReservedNames;
+import net.hugmesh.authcore.reserved.ReservedNames;
 import net.hugmesh.commons.web.ApiException;
 
 import java.util.Set;

@@ -46,7 +46,7 @@ public class SessionsInternalClient {
 
     /**
      * The wire shape admin-bff returns for one {@code bff_session} row — mirrors auth-core's
-     * {@code systems.hugmesh.authcore.account.BffSessionRow} field-for-field (the
+     * {@code net.hugmesh.authcore.account.BffSessionRow} field-for-field (the
      * lifecycle-identity columns ONLY; never the encrypted custody/MFA internals). The raw
      * {@code token} IS a live credential, so {@link SessionsService} maps it to an opaque id
      * before anything reaches a browser.

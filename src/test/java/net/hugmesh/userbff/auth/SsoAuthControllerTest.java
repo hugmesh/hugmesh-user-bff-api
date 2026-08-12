@@ -4,8 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
-import systems.hugmesh.authcore.config.SessionCookieService;
-import systems.hugmesh.authcore.config.SessionCookieWebFilter;
+import net.hugmesh.authcore.config.SessionCookieService;
+import net.hugmesh.authcore.config.SessionCookieWebFilter;
 
 import java.time.Duration;
 import java.util.List;
@@ -41,7 +41,7 @@ class SsoAuthControllerTest {
                 "app-user-bff", "hugmesh", "openid profile email");
         OidcLoginCompletionService completion =
                 new OidcLoginCompletionService(NativeLoginControllerTest.provider(null),
-                        adminBff, new systems.hugmesh.authcore.casdoor.BffCustodyCipher(""), cookies);
+                        adminBff, new net.hugmesh.authcore.casdoor.BffCustodyCipher(""), cookies);
         return WebTestClient.bindToController(
                 new SsoAuthController(casdoorLogin, completion, adminBff, cookies,
                         "https://hugmesh.systems/login/callback")).build();

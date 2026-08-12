@@ -415,7 +415,7 @@ public class AdminBffInternalClient {
     /**
      * Stamp the encrypted OIDC custody blobs onto admin-bff's bff_session row. The
      * access/refresh tokens are AES-256-GCM-encrypted by {@link
-     * systems.hugmesh.authcore.casdoor.BffCustodyCipher} on THIS side BEFORE the
+     * net.hugmesh.authcore.casdoor.BffCustodyCipher} on THIS side BEFORE the
      * call, so only opaque ciphertext crosses the wire and lands in admin-bff's
      * columns — user-bff never writes that DB, and a plaintext token is never stored
      * (the boot guard refuses {@code oidc.enabled} with a blank custody key).

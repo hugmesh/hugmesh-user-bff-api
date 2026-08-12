@@ -72,4 +72,15 @@
   <activeProfiles>
     <activeProfile>gitlab</activeProfile>
   </activeProfiles>
+  <!-- injected by scripts/patch-stack-src.sh (local stack cold build):
+       neutralize Maven 3.9's external-http blocker so the plain-HTTP
+       local m2 registry container (tests/stack/m2-bootstrap.sh) resolves.
+       Same-id user mirrors override the installation-settings one. -->
+  <mirrors>
+    <mirror>
+      <id>maven-default-http-blocker</id>
+      <mirrorOf>__matches-no-repository__</mirrorOf>
+      <url>http://0.0.0.0/</url>
+    </mirror>
+  </mirrors>
 </settings>

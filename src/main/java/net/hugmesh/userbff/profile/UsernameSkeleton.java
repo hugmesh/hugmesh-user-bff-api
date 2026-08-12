@@ -1,7 +1,7 @@
 package net.hugmesh.userbff.profile;
 
 import com.ibm.icu.text.SpoofChecker;
-import systems.hugmesh.authcore.reserved.ReservedNames;
+import net.hugmesh.authcore.reserved.ReservedNames;
 
 import java.text.Normalizer;
 import java.util.HashSet;

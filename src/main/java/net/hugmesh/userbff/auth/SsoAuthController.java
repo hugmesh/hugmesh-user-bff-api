@@ -15,9 +15,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import systems.hugmesh.authcore.config.SessionCookieService;
-import systems.hugmesh.authcore.config.SessionCookieWebFilter;
-import systems.hugmesh.authcore.web.dto.RegisterEmailRequest;
+import net.hugmesh.authcore.config.SessionCookieService;
+import net.hugmesh.authcore.config.SessionCookieWebFilter;
+import net.hugmesh.authcore.web.dto.RegisterEmailRequest;
 
 import java.util.LinkedHashMap;
 import java.util.List;

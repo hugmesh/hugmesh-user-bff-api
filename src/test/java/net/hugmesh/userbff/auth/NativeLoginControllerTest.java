@@ -5,10 +5,10 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
-import systems.hugmesh.authcore.casdoor.BffCustodyCipher;
-import systems.hugmesh.authcore.casdoor.OidcExchangeClient;
-import systems.hugmesh.authcore.casdoor.OidcTokens;
-import systems.hugmesh.authcore.config.SessionCookieService;
+import net.hugmesh.authcore.casdoor.BffCustodyCipher;
+import net.hugmesh.authcore.casdoor.OidcExchangeClient;
+import net.hugmesh.authcore.casdoor.OidcTokens;
+import net.hugmesh.authcore.config.SessionCookieService;
 import net.hugmesh.userbff.auth.CasdoorLoginClient.CasdoorLoginResult;
 
 import java.time.Duration;

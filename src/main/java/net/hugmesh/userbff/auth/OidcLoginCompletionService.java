@@ -7,10 +7,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import systems.hugmesh.authcore.casdoor.BffCustodyCipher;
-import systems.hugmesh.authcore.casdoor.OidcExchangeClient;
-import systems.hugmesh.authcore.casdoor.OidcTokens;
-import systems.hugmesh.authcore.config.SessionCookieService;
+import net.hugmesh.authcore.casdoor.BffCustodyCipher;
+import net.hugmesh.authcore.casdoor.OidcExchangeClient;
+import net.hugmesh.authcore.casdoor.OidcTokens;
+import net.hugmesh.authcore.config.SessionCookieService;
 
 /**
  * The ONE shared login-completion path: EXCHANGE a Casdoor authorization {@code code} for
