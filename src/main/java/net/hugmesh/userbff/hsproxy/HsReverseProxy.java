@@ -249,7 +249,12 @@ public class HsReverseProxy {
         ServerHttpRequest req = exchange.getRequest();
         HttpMethod method = req.getMethod();
 
-        // WebClient.uri(String) keeps the already-encoded path + query verbatim.
+        // CONTRACT: the upstream WebClient MUST be built with the verbatim
+        // (EncodingMode.NONE) uri factory — HsProxyConfig#verbatimUriFactory. The
+        // WebClient DEFAULT treats .uri(String) as a URI template and re-escapes '%',
+        // which double-encoded every percent-encoded Matrix path segment
+        // (!r%3Alocalhost -> !r%253Alocalhost upstream) and broke all room-scoped
+        // CS-API calls. HsReverseProxyPathEncodingTest pins the pass-through.
         WebClient.RequestBodySpec built = upstream
                 .method(method)
                 .uri(fullPath)

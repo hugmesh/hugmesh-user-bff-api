@@ -48,7 +48,7 @@ public class HsProxyConfig {
     private static WebClient proxyClient(FederationHttpClientSsl mtls, String baseUrl) {
         HttpClient httpClient = mtls.customize(HttpClient.create());
         WebClient.Builder builder = WebClient.builder()
-                .baseUrl(baseUrl)
+                .uriBuilderFactory(verbatimUriFactory(baseUrl))
                 .clientConnector(new ReactorClientHttpConnector(httpClient));
         // Plain-HTTP homeserver base (compose: synapse:8008 / mastodon-web:3000, no TLS
         // sidecar): assert the edge protocol or mainline Mastodon's force_ssl 308s every
@@ -60,5 +60,24 @@ public class HsProxyConfig {
             builder.defaultHeader("X-Forwarded-Proto", "https");
         }
         return builder.build();
+    }
+
+    /**
+     * URI factory for the proxy legs: {@link DefaultUriBuilderFactory.EncodingMode#NONE},
+     * because the path {@link HsReverseProxy} forwards is the caller's RAW request path —
+     * already percent-encoded exactly as the client sent it. The WebClient default
+     * ({@code TEMPLATE_AND_VALUES}) treats {@code .uri(String)} as a URI <em>template</em>
+     * and re-escapes {@code '%'}, so an encoded Matrix room id ({@code !r%3Alocalhost})
+     * reached the homeserver as {@code !r%253Alocalhost} and every room-scoped CS-API
+     * call failed (tuwunel decodes once: {@code %253A} → a literal {@code %3A} in the
+     * room id). With NONE the raw path+query pass through verbatim; the request-line
+     * grammar already forbids characters that would need encoding here, and
+     * {@code HsReverseProxy#requireSafePath} rejects authority-shaped paths before any
+     * URI is built. Package-visible so the proxy tests exercise the SAME factory.
+     */
+    static org.springframework.web.util.DefaultUriBuilderFactory verbatimUriFactory(String baseUrl) {
+        var factory = new org.springframework.web.util.DefaultUriBuilderFactory(baseUrl);
+        factory.setEncodingMode(org.springframework.web.util.DefaultUriBuilderFactory.EncodingMode.NONE);
+        return factory;
     }
 }

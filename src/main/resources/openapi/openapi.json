@@ -21,6 +21,9 @@
     "name" : "SSO auth",
     "description" : "Native login (server-side credential check) / register / session. Ships dark behind app.bff.oidc.enabled."
   }, {
+    "name" : "Cards",
+    "description" : "The caller's OWN federation bundles (owner = JWT subject), via hugmesh-federation-api."
+  }, {
     "name" : "Character-parts",
     "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
   }, {
@@ -44,9 +47,6 @@
   }, {
     "name" : "Matrix proxy (D6)",
     "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
-  }, {
-    "name" : "Cards",
-    "description" : "The caller's OWN federation bundles (owner = JWT subject), via hugmesh-federation-api."
   }, {
     "name" : "Self-silence",
     "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
