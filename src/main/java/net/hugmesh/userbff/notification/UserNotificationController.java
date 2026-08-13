@@ -103,6 +103,13 @@ public class UserNotificationController {
                 .map(ev -> ServerSentEvent.<SseNotificationEvent>builder(ev)
                         .id(ev.id())
                         .event(ev.category())
+                        .build())
+                // Commit response HEADERS immediately: Reactor Netty only writes them on
+                // the first flush, so with no frame on subscribe the client saw 0 bytes
+                // (no status line) until the first real notification. A comment frame
+                // flushes at once; EventSource ignores SSE comments, so no client change.
+                .startWith(ServerSentEvent.<SseNotificationEvent>builder()
+                        .comment("connected")
                         .build());
     }
 }
