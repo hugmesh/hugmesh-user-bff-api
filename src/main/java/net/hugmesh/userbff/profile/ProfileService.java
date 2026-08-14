@@ -86,6 +86,19 @@ public class ProfileService {
     }
 
     /**
+     * The owner's stored avatar pixels + the SNIFFED MIME recorded at save, or EMPTY
+     * when they have no stored picture (pre-022 rows, and anyone who never uploaded).
+     *
+     * <p>Deliberately NOT part of {@link #get}: pixels must never ride the profile
+     * JSON. The serve route consumes this and 404s on the empty case, which is the
+     * same outcome those rows always had.
+     */
+    public Mono<UserProfileRepository.AvatarBody> findAvatarBody(String owner, String domain) {
+        requireOwner(owner);
+        return repo.findAvatarBody(owner, domain);
+    }
+
+    /**
      * Create/update the OWNER's profile. The owner is forced onto the row so the
      * request body's {@code userId} can never redirect the write to another user.
      *
