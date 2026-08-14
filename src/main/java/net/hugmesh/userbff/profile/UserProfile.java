@@ -24,7 +24,7 @@ import net.hugmesh.userbff.web.ValidationPatterns;
  *
  * @param vanityUsername normalized (lower-cased) Casdoor username, set ONLY when
  *        {@code vanitySubdomainEnabled} is true; NULL otherwise. This is the DNS
- *        label served at {@code <vanityUsername>.hugmesh.systems}. NOT client-
+ *        label served at {@code <vanityUsername>.hugmesh.net}. NOT client-
  *        supplied — the controller overwrites it from the JWT (see ProfileService).
  * @param screenReaderName the a11y aria-label / spoken name a screen reader announces
  *        — ASCII-only ({@link SafeScreenReaderName}). When the {@code displayName} is

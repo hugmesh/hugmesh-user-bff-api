@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Documents + locks in HOW THE VANITY USERNAME IS OBTAINED FROM THE JWT
  * ({@link ProfileController#usernameOf(Jwt)}): Casdoor's {@code preferred_username}
- * claim (the login name = the DNS label behind {@code <username>.hugmesh.systems}),
+ * claim (the login name = the DNS label behind {@code <username>.hugmesh.net}),
  * falling back to {@code name}, then to the subject only if neither is present. The
  * row key ({@code user_id}) remains the SUBJECT — these are distinct on purpose.
  */

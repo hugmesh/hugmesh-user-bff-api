@@ -5,12 +5,12 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: "${CASDOOR_ISSUER_URI:https://id.hugmesh.systems}"
+          issuer-uri: "${CASDOOR_ISSUER_URI:https://id.hugmesh.net}"
           # Explicit JWKS so the resource server does NOT do OIDC discovery against issuer-uri
           # (unreachable in-container when issuer-uri is the browser-facing localhost:8000, which
           # 500s every authenticated call). Mirrors hugmesh-actions + the gateway; compose sets
           # CASDOOR_JWKS_URI=http://casdoor:8000/.well-known/jwks. iss is still validated via issuer-uri.
-          jwk-set-uri: "${CASDOOR_JWKS_URI:${CASDOOR_ISSUER_URI:https://id.hugmesh.systems}/.well-known/jwks}"
+          jwk-set-uri: "${CASDOOR_JWKS_URI:${CASDOOR_ISSUER_URI:https://id.hugmesh.net}/.well-known/jwks}"
 
   # Runtime data access is REACTIVE (R2DBC) over the config datastore: the owner-
   # keyed user_profile / user_preference / user_block tables.
@@ -182,7 +182,7 @@ app:
       enabled: "${APP_BFF_OIDC_ENABLED:false}"
       # `issuer` is NOT the JWT `iss` validator (that is
       # spring.security.oauth2.resourceserver.jwt.issuer-uri, browser-facing
-      # https://id.hugmesh.systems). It is purely the BASE URL auth-core's
+      # https://id.hugmesh.net). It is purely the BASE URL auth-core's
       # OidcExchangeClient POSTs `token-path` against, i.e. the server-to-server
       # code->token leg of POST /bff/login. It MUST therefore be the same internal
       # Casdoor the /api/login leg uses (login-base), NOT casdoor.gateway-base:
@@ -202,7 +202,7 @@ app:
       # produced the live "Invalid client_id" 401 on the first kind run.
       client-id: "${APP_BFF_OIDC_CLIENT_ID:app-user-bff}"
       client-secret: "${APP_BFF_OIDC_CLIENT_SECRET:}"
-      redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://hugmesh.systems/login/callback}"
+      redirect-uri: "${APP_BFF_OIDC_REDIRECT_URI:https://hugmesh.net/login/callback}"
       default-expiry-seconds: 3600
       # ── NATIVE LOGIN (server-side credential check) ───────────────────────────
       # POST /bff/login verifies username+password SERVER-SIDE against Casdoor's

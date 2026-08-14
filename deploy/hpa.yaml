@@ -12,8 +12,8 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: snapdragon-user-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

@@ -4,7 +4,7 @@
 # dedicated Postgres (user-bff-db) and calls federation-api (as a JWT-bearing
 # WebClient) for the user's federated module/profile data.
 #
-# It is a ClusterIP-only service in snapdragon-backend: nothing reaches it from
+# It is a ClusterIP-only service in hugmesh-backend: nothing reaches it from
 # outside except via the fe-gateway, which routes same-origin /bff/user/** to it
 # AND enforces the Casdoor role rules (/bff/user/** => ROLE_USER) from the route
 # DB first.
@@ -24,15 +24,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: snapdragon-user-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
   selector: { matchLabels: { app: snapdragon-user-bff-api } }
   template:
     metadata: { labels: { app: snapdragon-user-bff-api } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -109,12 +109,12 @@ spec:
             # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
             # client secret needed (pure resource server, like federation-api).
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.snapdragon.systems"
+              value: "https://id.hugmesh.net"
             # WebClient to the federation-api module-federation registry (the
             # user BFF reads the user's federated module/profile data there,
             # forwarding the caller JWT).
             - name: FEDERATION_API_URL
-              value: "http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
+              value: "http://snapdragon-federation-api.hugmesh-backend.svc.cluster.local:8080"
             # ── AI-cloak / media-poisoning (poison-before-ingest) ────────────────
             # The media-proxy (/bff/user/media/upload) routes image uploads through
             # the OPTIONAL snapdragon-media-poisoner worker BEFORE the real homeserver
@@ -128,7 +128,7 @@ spec:
             # a result 'protected' only after its round-trip survival check.
             - { name: MEDIA_POISONING_ENABLED,        value: "false" }
             - name: MEDIA_POISONING_WORKER_URL
-              value: "http://snapdragon-media-poisoner.snapdragon-backend.svc.cluster.local:8080"
+              value: "http://snapdragon-media-poisoner.hugmesh-backend.svc.cluster.local:8080"
             - { name: MEDIA_POISONING_DEFAULT_MODE,   value: "glaze" }
             - { name: MEDIA_POISONING_FALLBACK_MODE,  value: "warn_before_post" }
             - { name: MEDIA_POISONING_TIMEOUT_MS,     value: "120000" }
@@ -149,7 +149,7 @@ spec:
             # initdb/10-roles.sh. Password from its OWN ESO Secret
             # user-bff-db-app-auth (the SAME the DB pod's USERBFF_APP_PASSWORD mounts).
             - name: SPRING_R2DBC_URL
-              value: "r2dbc:postgresql://user-bff-db.snapdragon-backend.svc.cluster.local:5432/userbff"
+              value: "r2dbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff"
             - name: SPRING_R2DBC_USERNAME
               value: "userbff_app"
             - name: SPRING_R2DBC_PASSWORD
@@ -161,7 +161,7 @@ spec:
             # Liquibase keeps the owner role `userbff` + the owner ESO Secret
             # user-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
             - name: SPRING_LIQUIBASE_URL
-              value: "jdbc:postgresql://user-bff-db.snapdragon-backend.svc.cluster.local:5432/userbff"
+              value: "jdbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff"
             - name: SPRING_LIQUIBASE_USER
               value: "userbff"
             - name: SPRING_LIQUIBASE_PASSWORD
@@ -210,8 +210,8 @@ spec:
             # MATRIX_URL / MASTODON_URL defaults so all homeserver traffic is mTLS.
             # Inert until HS_TOKEN_ENABLED flips (the proxy code path is the only
             # caller that dials these).
-            - { name: MATRIX_URL,   value: "https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443" }
-            - { name: MASTODON_URL, value: "https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443" }
+            - { name: MATRIX_URL,   value: "https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443" }
+            - { name: MASTODON_URL, value: "https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443" }
             # Outbound mTLS client identity for the homeserver-proxy calls — mirrors
             # the MEDIA_PROXY_* / federation outbound-mTLS pattern: present the in-pod
             # keystore.p12 (this service's cluster-CA cert) + validate the proxy's
@@ -277,7 +277,7 @@ spec:
             # (user-bff -> admin-bff :8080) is required in the manifests/generator repo
             # as a follow-up; the existing mutual db-denial between the two BFFs stays.
             - name: ADMIN_BFF_INTERNAL_BASE_URL
-              value: "http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080"
+              value: "http://snapdragon-admin-bff-api.hugmesh-backend.svc.cluster.local:8080"
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See

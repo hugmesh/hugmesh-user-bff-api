@@ -89,7 +89,7 @@ class CasdoorRegistrationContractTest {
     private static final String CASDOOR_ORG = "hugmesh";
 
     /** {@code reconcile_app()}'s user-bff override: {@code app["redirectUris"] = [...]}. */
-    private static final String REGISTERED_REDIRECT_URI = "https://hugmesh.systems/login/callback";
+    private static final String REGISTERED_REDIRECT_URI = "https://hugmesh.net/login/callback";
 
     /**
      * Every shipped default that has to agree with the Casdoor side, and the literal a

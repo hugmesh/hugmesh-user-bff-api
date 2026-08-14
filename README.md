@@ -8,7 +8,7 @@ Spring Boot 4.0.7 / Spring Cloud 2025.1.2.
 
 ## Where it sits
 
-A **backend-namespace BFF** — deployed into `snapdragon-backend`, reached only
+A **backend-namespace BFF** — deployed into `hugmesh-backend`, reached only
 *behind the gateway*, never public. It is the per-role backend-for-frontend for
 ordinary users, the `ROLE_USER` peer of `hugmesh-admin-bff-api` (admin) and the
 mod BFF. It talks to:
@@ -708,7 +708,7 @@ payload. Revoking does not free the radio: the row keeps occupying the globally-
 
 - `FederationApiClient` — reactive WebClient of federation-api. Base URL
   `FEDERATION_API_BASE_URL` (default
-  `http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080`).
+  `http://snapdragon-federation-api.hugmesh-backend.svc.cluster.local:8080`).
   A token-injecting `ExchangeFilterFunction` re-injects the caller's JWT from the
   reactive security context as `Authorization: Bearer <jwt>` on every outbound
   call (`FederationWebClientConfig`).
@@ -780,7 +780,7 @@ the only authority source.
 
 This service adopts the org's shared Maven artifacts. Three de-duplication moves:
 
-1. **Parent POM →** `systems.hugmesh:hugmesh-parent:2.8.0` (itself a child of
+1. **Parent POM →** `net.hugmesh:hugmesh-parent:2.8.0` (itself a child of
    `spring-boot-starter-parent:4.0.7`, so the whole Spring Boot dependency/plugin
    management is inherited transitively). The parent consolidates the reactive-BFF
    `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
@@ -827,7 +827,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/net/hugmesh/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `systems.hugmesh:hugmesh-auth-core:2.4.2`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `net.hugmesh:hugmesh-auth-core:2.4.2`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
    the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
    infra) is extracted to `hugmesh-auth-core` (depends on `hugmesh-commons`,

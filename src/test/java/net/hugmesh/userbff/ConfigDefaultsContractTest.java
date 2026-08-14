@@ -58,10 +58,10 @@ import static net.hugmesh.userbff.ShippedConfigDefaults.readLines;
  * and {@link #ALLOWLIST} stays empty:
  * <ul>
  *   <li>GENUINELY CURRENT — the {@code Snapdragon-Systems} GitLab/GitHub group
- *       ({@code .gitlab-ci.yml}, {@code settings.xml}), the live k8s node-label domain
- *       {@code snapdragon.systems/<tier>} and the {@code registry.snapdragon.systems}
- *       image host ({@code deploy/}). Migrating those live identifiers is a separate,
- *       not-yet-executed plan.</li>
+ *       ({@code .gitlab-ci.yml}, {@code settings.xml}), which is a RETAINED fork path and
+ *       stays. The k8s node-label domain ({@code hugmesh.net/<tier>}) and the image host
+ *       ({@code registry.hugmesh.net}, {@code deploy/}) have already been migrated off the
+ *       pre-rebrand domain.</li>
  *   <li>GENUINELY STALE, NOT FIXED HERE — {@code deploy/} and
  *       {@code snapdragon-deploy.yaml} are a Forgejo-cutover PILOT that ships dark
  *       (the live GitHub-rooted ArgoCD ignores them and the Forgejo catalog is

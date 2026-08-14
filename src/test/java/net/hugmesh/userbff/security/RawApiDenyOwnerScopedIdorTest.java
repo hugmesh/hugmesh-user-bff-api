@@ -83,7 +83,7 @@ class RawApiDenyOwnerScopedIdorTest extends PostgresTestSupport {
         // but app.tenancy.issuers having two pairs makes the registry genuinely multi-issuer.
         r.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", BRANDX::issuerUri);
         // Pin jwk-set-uri at the in-process fallback issuer (brand-X). The app defaults jwk-set-uri
-        // to prod (id.hugmesh.systems/.well-known/jwks) and the resource server fetches KEYS from
+        // to prod (id.hugmesh.net/.well-known/jwks) and the resource server fetches KEYS from
         // it, so the single-issuer fallback decoder otherwise 500s ("could not obtain the keys") on
         // every request. The multi-issuer resolver still discovers BRANDX/BRANDY per-issuer, and a
         // rogue/foreign token is still rejected — this only supplies the fallback decoder REAL

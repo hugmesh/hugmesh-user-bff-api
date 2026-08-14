@@ -12,7 +12,7 @@
 # catalog matches nothing, so it changes nothing running. deploy/ is a verbatim
 # copy of the central manifest — keep the two in sync until cutover.
 name: snapdragon-user-bff-api          # Application name
-namespace: snapdragon-backend          # target k8s namespace (existing tier ns)
+namespace: hugmesh-backend          # target k8s namespace (existing tier ns)
 image: snapdragon-systems/user-bff-api # image repo (tag pinned in deploy/ kustomize)
 port: 8080
 replicas: 1

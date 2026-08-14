@@ -44,7 +44,7 @@ class SsoAuthControllerTest {
                         adminBff, new net.hugmesh.authcore.casdoor.BffCustodyCipher(""), cookies);
         return WebTestClient.bindToController(
                 new SsoAuthController(casdoorLogin, completion, adminBff, cookies,
-                        "https://hugmesh.systems/login/callback")).build();
+                        "https://hugmesh.net/login/callback")).build();
     }
 
     @Test
