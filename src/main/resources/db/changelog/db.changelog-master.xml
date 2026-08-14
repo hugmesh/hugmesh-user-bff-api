@@ -128,4 +128,5 @@
     <include file="db/changelog/019-mesh-device.xml"/>
     <include file="db/changelog/020-vn-sticker-body.xml"/>
     <include file="db/changelog/021-vanity-username-reserved-canonical-sync.xml"/>
+    <include file="db/changelog/022-user-profile-avatar-body.xml"/>
 </databaseChangeLog>

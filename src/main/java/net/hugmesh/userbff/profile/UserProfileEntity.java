@@ -33,6 +33,11 @@ public record UserProfileEntity(
         @Column("vanity_username") String vanityUsername,
         @Column("screen_reader_name") String screenReaderName,
         @Column("avatar_url") String avatarUrl,
+        // 022: the DURABLE avatar pixels + the SNIFFED mime recorded at save.
+        // Deliberately absent from the UserProfile DTO — pixels must never ride
+        // the profile JSON; they are served by GET /bff/user/profile/avatar/body.
+        @Column("avatar_body") byte[] avatarBody,
+        @Column("avatar_content_type") String avatarContentType,
         @Column("domain") String domain,
         @Column("updated_at") Instant updatedAt) {
 }

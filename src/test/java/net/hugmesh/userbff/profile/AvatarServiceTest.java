@@ -48,7 +48,7 @@ class AvatarServiceTest {
         byte[] bytes = {1, 2, 3};
         when(media.upload(eq("alice"), eq(bytes), eq("image/png")))
                 .thenReturn(Mono.just("mxc://home/abc"));
-        when(repo.updateAvatarUrl(eq("alice"), eq("mxc://home/abc"), eq("default")))
+        when(repo.updateAvatarUrl(eq("alice"), eq("mxc://home/abc"), eq("default"), any(), any()))
                 .thenReturn(Mono.just(1L));
 
         StepVerifier.create(service.uploadAndStore("alice", bytes, "image/png", "default"))
@@ -57,7 +57,7 @@ class AvatarServiceTest {
 
         // the upload result is the EXACT value persisted onto the owner's avatar_url
         ArgumentCaptor<String> mxc = ArgumentCaptor.forClass(String.class);
-        verify(repo).updateAvatarUrl(eq("alice"), mxc.capture(), eq("default"));
+        verify(repo).updateAvatarUrl(eq("alice"), mxc.capture(), eq("default"), any(), any());
         assertThat(mxc.getValue()).isEqualTo("mxc://home/abc");
         // an allowed image is NEVER filed as a finding
         verify(federation, never()).fileFinding(any());
@@ -77,7 +77,7 @@ class AvatarServiceTest {
 
         // A blocked avatar never reaches the homeserver and is never persisted.
         verify(media, never()).upload(anyString(), any(), anyString());
-        verify(repo, never()).updateAvatarUrl(anyString(), anyString(), any());
+        verify(repo, never()).updateAvatarUrl(anyString(), anyString(), any(), any(), any());
         // ...but it IS filed as a held finding, disposition=rejected, with the verdict fields.
         ArgumentCaptor<FindingRequest> req = ArgumentCaptor.forClass(FindingRequest.class);
         verify(federation).fileFinding(req.capture());
@@ -125,7 +125,7 @@ class AvatarServiceTest {
         byte[] bytes = {4, 5};
         when(moderation.moderate(any())).thenReturn(Mono.just(ModerationVerdict.allow()));
         when(media.upload(eq("bob"), eq(bytes), eq("image/jpeg"))).thenReturn(Mono.just("mxc://h/ok"));
-        when(repo.updateAvatarUrl(eq("bob"), eq("mxc://h/ok"), eq("default"))).thenReturn(Mono.just(1L));
+        when(repo.updateAvatarUrl(eq("bob"), eq("mxc://h/ok"), eq("default"), any(), any())).thenReturn(Mono.just(1L));
 
         StepVerifier.create(service.uploadAndStore("bob", bytes, "image/jpeg", "default"))
                 .expectNext("mxc://h/ok")
@@ -138,7 +138,7 @@ class AvatarServiceTest {
         assertThatThrownBy(() -> service.uploadAndStore("  ", new byte[]{1}, "image/png", "default"))
                 .isInstanceOf(IllegalArgumentException.class);
         verify(media, never()).upload(anyString(), any(), anyString());
-        verify(repo, never()).updateAvatarUrl(anyString(), anyString(), any());
+        verify(repo, never()).updateAvatarUrl(anyString(), anyString(), any(), any(), any());
     }
 
     @Test
