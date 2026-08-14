@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        user_profile.avatar_body + .avatar_content_type — the DURABLE PROFILE-PICTURE
+        PIXELS, so the BFF can serve the avatar itself:
+        GET /bff/user/profile/avatar/body.
+
+        This is the SAME defect 020 fixed for stickers, one table over: the upload
+        endpoint accepted the bytes, handed them to the (stub-gated) homeserver client
+        and then DISCARDED them, persisting only an mxc:// ref. With the stub enabled —
+        which is every environment today — that ref is `mxc://stub.invalid/<uuid>`,
+        derived purely from the owner id, so it identifies no image at all. Meanwhile
+        hugmesh-user-ui binds that value straight into an <img src>, a scheme no browser
+        fetches, so every user who ever set an avatar rendered a broken image and a
+        successful-looking upload changed nothing they could see (operator report,
+        2026-08-14: "profile photo upload didn't seem to work either").
+
+        Columns (both NULLABLE — pre-022 rows carry only the mxc:// ref and have no
+        BFF-serveable body; the serve route 404s for them, which is exactly the outcome
+        those rows already had):
+          • avatar_body         — the raw, MODERATED avatar bytes (magic-byte-sniffed
+                                  raster, ≤5MB API-capped at the upload join; BYTEA runs
+                                  identically on production Postgres AND the H2
+                                  PostgreSQL-compat slice).
+          • avatar_content_type — the SNIFFED image MIME type recorded at save (never
+                                  the client-declared header), echoed as the serve
+                                  Content-Type.
+
+        The bytes are written in the SAME statement as avatar_url and only AFTER the
+        moderation gate, so blocked images are never persisted.
+
+        Numbered 022 — the band ABOVE the current max (021-vanity-username-reserved-
+        canonical-sync), registered LAST in db.changelog-master.xml with a SINGLE
+        <include>.
+    -->
+
+    <changeSet id="022-1-user-profile-avatar-body" author="hugmesh">
+        <addColumn tableName="user_profile">
+            <column name="avatar_body" type="bytea"/>
+            <column name="avatar_content_type" type="varchar(255)"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="user_profile" columnName="avatar_body"/>
+            <dropColumn tableName="user_profile" columnName="avatar_content_type"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

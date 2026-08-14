@@ -43,7 +43,7 @@ class UserProfileRepositoryAvatarTest {
     void updateAvatarUrl_onExistingProfile_setsAvatar_keepsOtherColumns() {
         repo.save(new UserProfile("alice", "f", "she/her", "UTC", "Alice", "public", true)).block();
 
-        Long matched = repo.updateAvatarUrl("alice", "mxc://home/pic1", "default").block();
+        Long matched = repo.updateAvatarUrl("alice", "mxc://home/pic1", "default", PNG, "image/png").block();
         assertThat(matched).isEqualTo(1L);
 
         UserProfile got = repo.find("alice").block();
@@ -58,7 +58,7 @@ class UserProfileRepositoryAvatarTest {
     void updateAvatarUrl_beforeAnyProfile_insertsMinimalRowWithAvatar() {
         assertThat(repo.find("bob").blockOptional()).isEmpty();
 
-        Long matched = repo.updateAvatarUrl("bob", "mxc://home/pic2", "default").block();
+        Long matched = repo.updateAvatarUrl("bob", "mxc://home/pic2", "default", PNG, "image/png").block();
         assertThat(matched).isEqualTo(1L);
 
         UserProfile got = repo.find("bob").block();
@@ -74,7 +74,7 @@ class UserProfileRepositoryAvatarTest {
     @Test
     void profileSave_doesNotClearAvatar() {
         repo.save(new UserProfile("carol", null, null, null, "Carol", "internal", false)).block();
-        repo.updateAvatarUrl("carol", "mxc://home/pic3", "default").block();
+        repo.updateAvatarUrl("carol", "mxc://home/pic3", "default", PNG, "image/png").block();
 
         // a subsequent profile edit must NOT wipe the avatar (main upsert omits it)
         repo.save(new UserProfile("carol", null, null, null, "Carol Edited", "internal", false)).block();
@@ -84,12 +84,36 @@ class UserProfileRepositoryAvatarTest {
         assertThat(got.avatarUrl()).isEqualTo("mxc://home/pic3");
     }
 
+    /** 8-byte PNG signature — enough to prove BYTEA round-trips on the H2 slice. */
+    private static final byte[] PNG =
+            new byte[] {(byte) 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+
+    @Test
+    void updateAvatarUrl_storesTheBytes_andFindAvatarBodyReturnsThem() {
+        // 022: the pixels are persisted WITH the ref. Before that column the bytes
+        // were discarded after the (stub-gated) homeserver upload, so the row held a
+        // ref to no image and every avatar rendered broken.
+        repo.save(new UserProfile("dave", null, null, null, "Dave", "internal", false)).block();
+        repo.updateAvatarUrl("dave", "mxc://home/pic4", "default", PNG, "image/png").block();
+
+        var body = repo.findAvatarBody("dave", "default").block();
+        assertThat(body).isNotNull();
+        assertThat(body.bytes()).isEqualTo(PNG);
+        assertThat(body.contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void findAvatarBody_isEmptyForSomeoneWhoNeverUploaded() {
+        repo.save(new UserProfile("erin", null, null, null, "Erin", "internal", false)).block();
+        assertThat(repo.findAvatarBody("erin", "default").blockOptional()).isEmpty();
+    }
+
     @Test
     void updateAvatarUrl_ownerIsolation() {
         repo.save(new UserProfile("alice", null, null, null, "Alice", "internal", false)).block();
         repo.save(new UserProfile("bob", null, null, null, "Bob", "internal", false)).block();
 
-        repo.updateAvatarUrl("alice", "mxc://home/alicepic", "default").block();
+        repo.updateAvatarUrl("alice", "mxc://home/alicepic", "default", PNG, "image/png").block();
 
         assertThat(repo.find("alice").block().avatarUrl()).isEqualTo("mxc://home/alicepic");
         // bob's avatar is untouched (still null)

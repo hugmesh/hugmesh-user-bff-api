@@ -56,6 +56,23 @@ public class UserProfileRepository {
         return found.map(UserProfileRepository::toWire);
     }
 
+    /** The owner's stored avatar pixels + sniffed MIME, or EMPTY when they have no
+     *  row or no stored body (pre-022 rows, and anyone who never uploaded).
+     *
+     *  Read through its OWN accessor rather than the profile DTO on purpose: pixels
+     *  must never ride the profile JSON, so {@link UserProfile} has no such field. */
+    public Mono<AvatarBody> findAvatarBody(String userId, String domain) {
+        var found = DomainScope.isUnscoped(domain)
+                ? repo.findByUserId(userId)
+                : repo.findByUserIdAndDomain(userId, domain);
+        return found.flatMap(e -> e.avatarBody() == null || e.avatarBody().length == 0
+                ? Mono.empty()
+                : Mono.just(new AvatarBody(e.avatarBody(), e.avatarContentType())));
+    }
+
+    /** Stored avatar pixels + the SNIFFED type recorded at save. */
+    public record AvatarBody(byte[] bytes, String contentType) { }
+
     /**
      * Upsert the owner's profile in their domain. Portable (Postgres + H2): UPDATE
      * first (owner AND domain scoped), then INSERT only if no row was updated (the
@@ -99,19 +116,21 @@ public class UserProfileRepository {
      *
      * @return the number of rows the (final) avatar UPDATE matched (1 in practice).
      */
-    public Mono<Long> updateAvatarUrl(String userId, String avatarUrl, String domain) {
-        Mono<Long> update = updateAvatarOnce(userId, avatarUrl, domain);
+    public Mono<Long> updateAvatarUrl(String userId, String avatarUrl, String domain,
+                                      byte[] avatarBody, String avatarContentType) {
+        Mono<Long> update = updateAvatarOnce(userId, avatarUrl, domain, avatarBody, avatarContentType);
         return update.flatMap(updated -> updated > 0
                 ? Mono.just(updated)
                 : insertMinimalRow(userId, domain)
-                        .then(updateAvatarOnce(userId, avatarUrl, domain)));
+                        .then(updateAvatarOnce(userId, avatarUrl, domain, avatarBody, avatarContentType)));
     }
 
     /** The avatar-only UPDATE leg, scoped or unscoped from a nullable {@code domain}. */
-    private Mono<Long> updateAvatarOnce(String userId, String avatarUrl, String domain) {
+    private Mono<Long> updateAvatarOnce(String userId, String avatarUrl, String domain,
+                                        byte[] avatarBody, String avatarContentType) {
         return DomainScope.isUnscoped(domain)
-                ? repo.updateAvatarUrlUnscoped(userId, avatarUrl)
-                : repo.updateAvatarUrlScoped(userId, domain, avatarUrl);
+                ? repo.updateAvatarUrlUnscoped(userId, avatarUrl, avatarBody, avatarContentType)
+                : repo.updateAvatarUrlScoped(userId, domain, avatarUrl, avatarBody, avatarContentType);
     }
 
     /** Create a MINIMAL owner row (no avatar_url yet — the caller updates it next) so

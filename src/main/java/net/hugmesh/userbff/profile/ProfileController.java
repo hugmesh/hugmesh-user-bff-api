@@ -23,6 +23,9 @@ import net.hugmesh.userbff.media.ImageSniffer;
 import net.hugmesh.userbff.security.PrincipalDomain;
 
 import java.util.Map;
+import org.springframework.http.CacheControl;
+import java.time.Duration;
+import org.springframework.web.bind.annotation.GetMapping;
 
 /**
  * Owner-scoped profile endpoints. The owner is ALWAYS the JWT subject
@@ -109,6 +112,35 @@ public class ProfileController {
         return readCappedBytes(file)
                 .flatMap(bytes -> storeSniffedImage(owner, bytes, domain))
                 .then(Mono.defer(() -> profiles.get(owner, domain)));
+    }
+
+    @Operation(summary = "Serve MY profile picture bytes. Returns the stored image with the "
+            + "sniffed content type recorded at upload; 404 when I have no stored picture. "
+            + "Owner = JWT subject.")
+    @GetMapping("/avatar/body")
+    public Mono<ResponseEntity<byte[]>> serveAvatar(@AuthenticationPrincipal Jwt jwt) {
+        return profiles.findAvatarBody(jwt.getSubject(), principalDomain.forScope(jwt))
+                .map(ProfileController::asImageResponse)
+                .switchIfEmpty(Mono.error(ApiException.notFound("profile picture not found")));
+    }
+
+    /**
+     * Wrap the stored pixels in an image response with hardened headers — the same
+     * posture the sticker serve route uses: the SNIFFED MIME recorded at save (never a
+     * client-declared one; {@code image/png} floor for a legacy row with no recorded
+     * type), {@code nosniff}, and a locked-down CSP. Cacheable PRIVATELY for 5 minutes:
+     * the pixels are per-user and the TTL bounds how long a replaced (or newly
+     * moderated-away) picture can keep rendering from a browser cache.
+     */
+    private static ResponseEntity<byte[]> asImageResponse(UserProfileRepository.AvatarBody body) {
+        String type = body.contentType() == null || body.contentType().isBlank()
+                ? MediaType.IMAGE_PNG_VALUE : body.contentType();
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(type))
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Security-Policy", "default-src 'none'")
+                .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+                .body(body.bytes());
     }
 
     /**

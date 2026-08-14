@@ -101,23 +101,32 @@ public interface UserProfileR2dbcRepository extends ReactiveCrudRepository<UserP
     // domain) + unscoped (owner only, SUPERADMIN bypass) variants, mirroring the
     // UPDATE_SCOPED / UPDATE_UNSCOPED pair above.
 
+    // The avatar UPDATEs carry the BYTES with the ref (022). One statement, so a
+    // stored body can never disagree with the avatar_url written beside it.
+
     /** SCOPED avatar UPDATE (owner AND domain). */
     String UPDATE_AVATAR_SCOPED =
-            "UPDATE user_profile SET avatar_url = :avatarUrl, updated_at = now() "
+            "UPDATE user_profile SET avatar_url = :avatarUrl, avatar_body = :avatarBody, "
+            + "avatar_content_type = :avatarContentType, updated_at = now() "
             + "WHERE user_id = :userId AND domain = :domain";
 
     /** UNSCOPED avatar UPDATE (owner only — SUPERADMIN bypass). */
     String UPDATE_AVATAR_UNSCOPED =
-            "UPDATE user_profile SET avatar_url = :avatarUrl, updated_at = now() "
+            "UPDATE user_profile SET avatar_url = :avatarUrl, avatar_body = :avatarBody, "
+            + "avatar_content_type = :avatarContentType, updated_at = now() "
             + "WHERE user_id = :userId";
 
     @Modifying
     @Query(UPDATE_AVATAR_SCOPED)
     Mono<Long> updateAvatarUrlScoped(@Param("userId") String userId, @Param("domain") String domain,
-                                     @Param("avatarUrl") String avatarUrl);
+                                     @Param("avatarUrl") String avatarUrl,
+                                     @Param("avatarBody") byte[] avatarBody,
+                                     @Param("avatarContentType") String avatarContentType);
 
     @Modifying
     @Query(UPDATE_AVATAR_UNSCOPED)
     Mono<Long> updateAvatarUrlUnscoped(@Param("userId") String userId,
-                                       @Param("avatarUrl") String avatarUrl);
+                                       @Param("avatarUrl") String avatarUrl,
+                                       @Param("avatarBody") byte[] avatarBody,
+                                       @Param("avatarContentType") String avatarContentType);
 }

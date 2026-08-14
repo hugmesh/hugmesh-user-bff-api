@@ -76,8 +76,15 @@ public class AvatarService {
                         .then(Mono.<String>error(ApiException.unprocessable(
                                 "profile picture blocked by content policy")));
             }
+            // The MODERATED bytes are persisted alongside the homeserver ref, in the
+            // same statement (022). Until they were, this service uploaded to a
+            // stub-gated homeserver client and then DISCARDED the pixels, so the row
+            // held `mxc://stub.invalid/<uuid-of-owner>` — a ref to no image — and
+            // every avatar rendered broken. `contentType` here is the SNIFFED type
+            // the controller resolved, never the client-declared header.
             return matrixMedia.upload(owner, bytes, contentType)
-                    .flatMap(mxc -> repo.updateAvatarUrl(owner, mxc, domain).thenReturn(mxc));
+                    .flatMap(mxc -> repo.updateAvatarUrl(owner, mxc, domain, bytes, contentType)
+                            .thenReturn(mxc));
         });
     }
 
