@@ -1607,6 +1607,26 @@
         }
       }
     },
+    "/bff/user/profile/avatar/body" : {
+      "get" : {
+        "tags" : [ "Profile" ],
+        "summary" : "Serve MY profile picture bytes. Returns the stored image with the sniffed content type recorded at upload; 404 when I have no stored picture. Owner = JWT subject.",
+        "operationId" : "serveAvatar",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string",
+                  "format" : "byte"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/notifications" : {
       "get" : {
         "tags" : [ "Notifications (in-app floor)" ],
