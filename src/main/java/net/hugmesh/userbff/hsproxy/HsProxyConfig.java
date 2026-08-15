@@ -50,11 +50,11 @@ public class HsProxyConfig {
         WebClient.Builder builder = WebClient.builder()
                 .uriBuilderFactory(verbatimUriFactory(baseUrl))
                 .clientConnector(new ReactorClientHttpConnector(httpClient));
-        // Plain-HTTP homeserver base (compose: synapse:8008 / mastodon-web:3000, no TLS
+        // Plain-HTTP homeserver base (compose: tuwunel:8008 / mastodon-web:3000, no TLS
         // sidecar): assert the edge protocol or mainline Mastodon's force_ssl 308s every
         // proxied API call. HsReverseProxy strips any INBOUND X-Forwarded-* so this
         // default is authoritative on the upstream leg. The cluster sidecar legs are
-        // https — never added there (the sidecar owns proto metadata). Synapse ignores
+        // https — never added there (the sidecar owns proto metadata). tuwunel ignores
         // the header entirely, so sharing this builder path is harmless.
         if (baseUrl != null && baseUrl.startsWith("http://")) {
             builder.defaultHeader("X-Forwarded-Proto", "https");

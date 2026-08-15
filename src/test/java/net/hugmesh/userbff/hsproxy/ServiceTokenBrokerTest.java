@@ -63,8 +63,9 @@ class ServiceTokenBrokerTest {
     }
 
     @Test
-    void mintMatrix_decodesSynapseJson_throughTheBoot4Jackson3Codec() {
-        // Synapse /register returns an access_token directly (one-shot success).
+    void mintMatrix_decodesTuwunelJson_throughTheBoot4Jackson3Codec() {
+        // tuwunel's /register (Synapse-compatible shape) returns an access_token
+        // directly (one-shot success).
         ServiceTokenBroker broker = brokerFor(
                 "{\"access_token\":\"syt_abc\",\"user_id\":\"@bob:hs\"}");
 
