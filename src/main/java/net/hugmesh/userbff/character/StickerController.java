@@ -25,7 +25,6 @@ import net.hugmesh.commons.web.ApiException;
 import net.hugmesh.userbff.media.ImageSniffer;
 import net.hugmesh.userbff.security.PrincipalDomain;
 
-import java.time.Duration;
 import java.util.regex.Pattern;
 
 /**
@@ -148,9 +147,17 @@ public class StickerController {
      * MIME type recorded at save (never a client-declared one; {@code image/png} floor
      * for a legacy row with no recorded type), {@code nosniff}, and a locked-down CSP —
      * the same defensive posture as the SVG-part serve, cheap insurance even though the
-     * bytes were magic-byte-verified raster at upload. Cacheable privately for 5 minutes:
-     * a sticker row's pixels are immutable per id, but its moderation status is not, so
-     * the TTL bounds how long a just-rejected sticker can keep rendering from cache.
+     * bytes were magic-byte-verified raster at upload.
+     *
+     * <p>{@code Cache-Control: no-store}, NOT the {@code private, max-age=300} this
+     * used to send. The URL carries only the SLUG ({@code /bff/user/character/
+     * stickers/{slug}/body}) while the body is resolved for the JWT subject — so two
+     * users' DIFFERENT stickers share one browser-cache key (the HTTP cache is
+     * URL-keyed and cookie-blind, and sign-out does not empty it). A five-minute
+     * freshness window therefore kept serving the PREVIOUS user's sticker pixels
+     * after a sign-out/account switch, and a just-rejected sticker for up to five
+     * minutes. Owner-scoped bytes on an owner-blind URL must be no-store, matching
+     * the avatar serve and every other authenticated {@code /bff} surface.
      */
     private static ResponseEntity<byte[]> asImageResponse(StickerService.StickerBody body) {
         String type = body.contentType() == null || body.contentType().isBlank()
@@ -159,7 +166,7 @@ public class StickerController {
                 .contentType(MediaType.parseMediaType(type))
                 .header("X-Content-Type-Options", "nosniff")
                 .header("Content-Security-Policy", "default-src 'none'")
-                .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+                .cacheControl(CacheControl.noStore())
                 .body(body.bytes());
     }
 

@@ -261,6 +261,12 @@ class StickerControllerTest {
                 .expectHeader().contentType(MediaType.IMAGE_PNG)
                 .expectHeader().valueEquals("X-Content-Type-Options", "nosniff")
                 .expectHeader().valueEquals("Content-Security-Policy", "default-src 'none'")
+                // REGRESSION GATE (operator 2026-08-19): the URL carries only the slug
+                // while the body is resolved for the JWT subject, and the browser HTTP
+                // cache is URL-keyed and cookie-blind — the private,max-age=300 this
+                // route used to send kept serving the PREVIOUS user's pixels after a
+                // sign-out/account switch until the cache was manually cleared.
+                .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "no-store")
                 .expectBody(byte[].class).isEqualTo(SERVED);
 
         // caller identity + domain come from the TOKEN (the service applies the gates).

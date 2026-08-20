@@ -187,4 +187,30 @@ class ProfileControllerAvatarTest {
                 .expectStatus().isUnauthorized();
         verify(avatars, never()).uploadAndStore(anyString(), any(), anyString(), any());
     }
+
+    /**
+     * REGRESSION GATE — operator report 2026-08-19 ("need to clear cache every time
+     * after log out"). The avatar-body URL is the SAME for every user (owner = JWT
+     * subject, never the path) and the browser HTTP cache is URL-keyed and
+     * cookie-blind, so the {@code private, max-age=300} this route used to send let
+     * the PREVIOUS user's avatar keep rendering — without any request leaving the
+     * browser — after sign-out/account switch, across full page reloads, until the
+     * browser cache was manually cleared. The serve must be {@code no-store}.
+     */
+    @Test
+    void avatarBody_isServedNoStore_neverBrowserCacheable() {
+        when(principalDomain.forScope(any())).thenReturn("default");
+        when(profiles.findAvatarBody(eq("alice"), eq("default")))
+                .thenReturn(Mono.just(new UserProfileRepository.AvatarBody(pngBytes(), "image/png")));
+
+        client.mutateWith(mockJwt()
+                        .jwt(j -> j.subject("alice"))
+                        .authorities(new SimpleGrantedAuthority("ROLE_USER")))
+                .get().uri("/bff/user/profile/avatar/body")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentType(MediaType.IMAGE_PNG)
+                .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "no-store")
+                .expectHeader().valueEquals("X-Content-Type-Options", "nosniff");
+    }
 }
