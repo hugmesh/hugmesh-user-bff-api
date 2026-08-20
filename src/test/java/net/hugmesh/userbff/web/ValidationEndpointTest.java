@@ -182,7 +182,7 @@ class ValidationEndpointTest extends PostgresTestSupport {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.email").exists();
-        verify(profileService, never()).changeEmail(any(), any());
+        verify(profileService, never()).changeEmail(any(), any(), any());
     }
 
     @Test
@@ -193,19 +193,19 @@ class ValidationEndpointTest extends PostgresTestSupport {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.fields.newPassword").exists();
-        verify(profileService, never()).changePassword(any(), any(), any());
+        verify(profileService, never()).changePassword(any(), any(), any(), any());
     }
 
     @Test
     void changeEmail_valid_is2xx() {
         lenient().when(profileService.casdoorEnabled()).thenReturn(false);
-        when(profileService.changeEmail(anyString(), anyString())).thenReturn(Mono.empty());
+        when(profileService.changeEmail(anyString(), anyString(), anyString())).thenReturn(Mono.empty());
         user().post().uri("/bff/user/profile/email")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"email\":\"alice@example.com\"}")
                 .exchange()
                 .expectStatus().is2xxSuccessful();
-        verify(profileService).changeEmail(anyString(), anyString());
+        verify(profileService).changeEmail(anyString(), anyString(), anyString());
     }
 
     // ------------------------------------------------------------------

@@ -68,14 +68,26 @@ class ProfileServiceOwnerEnforcementTest {
 
     @Test
     void changePassword_stubWiredFlow_noError() {
-        // stub Casdoor — the reactive flow runs end to end without a live write
-        profiles.changePassword("alice", "old", "newpw").block();
+        // stub Casdoor — the reactive flow runs end to end without a live write.
+        // owner = JWT subject; "alice" = the token's preferred_username (the Casdoor
+        // login name the IdP write is addressed by — see ProfileServiceCasdoorIdentityTest).
+        profiles.changePassword("subject-uuid", "alice", "old", "newpw").block();
         assertThat(profiles.casdoorEnabled()).isFalse();
     }
 
     @Test
     void changePassword_rejectsBlankNew() {
-        assertThatThrownBy(() -> profiles.changePassword("alice", "old", " ").block())
+        assertThatThrownBy(() -> profiles.changePassword("subject-uuid", "alice", "old", " ").block())
+                .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void changePassword_rejectsBlankUsername_failClosed() {
+        // No Casdoor username on the token ⇒ the IdP write cannot be addressed. Fail
+        // closed with a 400 — NEVER fall back to the subject (a UUID / provider:handle
+        // composite Casdoor rejects as "user doesn't exist"; the pre-fix code sent
+        // exactly that and the client swallowed the refusal into a success ack).
+        assertThatThrownBy(() -> profiles.changePassword("subject-uuid", " ", "old", "newpw").block())
                 .isInstanceOf(ApiException.class);
     }
 }

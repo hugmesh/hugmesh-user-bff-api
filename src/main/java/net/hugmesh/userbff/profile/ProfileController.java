@@ -234,7 +234,13 @@ public class ProfileController {
     @PostMapping("/password")
     public Mono<Map<String, Object>> changePassword(@AuthenticationPrincipal Jwt jwt,
                                                     @Valid @RequestBody PasswordChangeRequest body) {
-        return profiles.changePassword(jwt.getSubject(), body.oldPassword(), body.newPassword())
+        // owner = JWT SUBJECT (owner enforcement); username = the caller's Casdoor
+        // login name from the token (usernameOf: preferred_username → name → sub).
+        // Casdoor addresses /api/set-password by <org>/<username> — the subject is a
+        // UUID (real Casdoor JWT) or a provider:handle composite (bff_ synthetic
+        // principal), so sending it made every live change fail "user doesn't exist".
+        return profiles.changePassword(jwt.getSubject(), usernameOf(jwt),
+                        body.oldPassword(), body.newPassword())
                 .thenReturn(ack("password-change", profiles.casdoorEnabled()));
     }
 
@@ -242,7 +248,8 @@ public class ProfileController {
     @PostMapping("/email")
     public Mono<Map<String, Object>> changeEmail(@AuthenticationPrincipal Jwt jwt,
                                                  @Valid @RequestBody EmailChangeRequest body) {
-        return profiles.changeEmail(jwt.getSubject(), body.email())
+        // Same owner/username split as changePassword above.
+        return profiles.changeEmail(jwt.getSubject(), usernameOf(jwt), body.email())
                 .thenReturn(ack("email-change", profiles.casdoorEnabled()));
     }
 

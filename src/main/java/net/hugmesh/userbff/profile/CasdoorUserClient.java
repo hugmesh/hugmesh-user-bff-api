@@ -7,6 +7,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import net.hugmesh.commons.web.ApiException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -44,9 +45,10 @@ import java.util.Map;
  * <p>Auth (live-verified): BOTH the service client-credential Basic auth (what
  * {@code CasdoorUserConfig} wires) and the caller's own password-grant bearer are
  * accepted for the caller's OWN user; a user bearer aimed at ANOTHER user gets
- * {@code "Unauthorized operation"}. The BFF's JWT-subject-derived {@code username}
- * plus Casdoor's own oldPassword check keep the service credential from being a
- * cross-user escalation on the password path.
+ * {@code "Unauthorized operation"}. The BFF's JWT-claim-derived {@code username}
+ * (the token's {@code preferred_username} — Casdoor's login name — never a request
+ * field) plus Casdoor's own oldPassword check keep the service credential from
+ * being a cross-user escalation on the password path.
  *
  * <p>GATING: the actual HTTP call remains OFF by default (a configured
  * {@link WebClient} is only present when {@code casdoor.account.enabled=true}).
@@ -70,12 +72,22 @@ public class CasdoorUserClient {
     public boolean enabled() { return http != null; }
 
     /**
-     * Change the caller's OWN Casdoor password. {@code username} MUST be derived
-     * from the JWT subject by the caller — never from a request field — so a user
-     * can only change their own credential. Casdoor additionally verifies
-     * {@code oldPassword} server-side even for admin-credential callers
-     * (live-verified), so a compromised BFF credential alone cannot rotate a
-     * password without the current one.
+     * Change the caller's OWN Casdoor password. {@code username} MUST be the caller's
+     * Casdoor USERNAME derived from the validated JWT by the caller (the
+     * {@code preferred_username} claim — NEVER the JWT {@code sub}, which in this
+     * platform is the Casdoor UUID on a real Casdoor JWT and the composite
+     * {@code provider:handle} account id on a bff_-session synthetic principal, and
+     * never a request field) — so a user can only change their own credential.
+     * Casdoor additionally verifies {@code oldPassword} server-side even for
+     * admin-credential callers (live-verified), so a compromised BFF credential
+     * alone cannot rotate a password without the current one.
+     *
+     * <p>ERRORS PROPAGATE: Casdoor answers HTTP 200 with {@code {"status":"error",
+     * "msg":...}} on a refused change (wrong oldPassword, unknown user, policy).
+     * That is surfaced as a 400 {@link ApiException} carrying Casdoor's message —
+     * never swallowed into a success acknowledgement (the pre-fix behaviour logged a
+     * warning and completed OK, so the UI reported success while the password never
+     * changed).
      */
     public Mono<Void> changePassword(String username, String oldPassword, String newPassword) {
         if (http == null) {
@@ -94,13 +106,14 @@ public class CasdoorUserClient {
                         "newPassword", newPassword == null ? "" : newPassword))))
                 .retrieve()
                 .bodyToMono(Map.class)
-                .doOnNext(r -> warnIfNotOk("set-password", username, r))
+                .flatMap(r -> requireOk("set-password", username, r))
                 .then();
     }
 
     /**
-     * Change the caller's OWN Casdoor email. {@code username} MUST be the JWT
-     * subject's Casdoor username. The production path sends a verification code
+     * Change the caller's OWN Casdoor email. {@code username} MUST be the caller's
+     * Casdoor username derived from the JWT's {@code preferred_username} claim (see
+     * {@link #changePassword}). The production path sends a verification code
      * first; here the live-confirmed update-user shape is issued:
      * {@code columns=email} scopes the write to the email column ONLY, which is
      * what makes the partial {@code {owner,name,email}} body valid (without it
@@ -124,7 +137,7 @@ public class CasdoorUserClient {
                 .bodyValue(user)
                 .retrieve()
                 .bodyToMono(Map.class)
-                .doOnNext(r -> warnIfNotOk("update-user(email)", username, r))
+                .flatMap(r -> requireOk("update-user(email)", username, r))
                 .then();
     }
 
@@ -135,9 +148,23 @@ public class CasdoorUserClient {
         return mv;
     }
 
-    private static void warnIfNotOk(String op, String subject, Map<?, ?> response) {
-        if (response != null && !"ok".equals(response.get("status"))) {
-            log.warn("[casdoor-user] {} for {} returned non-ok: {}", op, subject, response);
+    /**
+     * Casdoor's REST surface answers HTTP 200 for REFUSED operations too, carrying
+     * {@code {"status":"error","msg":...}} in the body — so the HTTP status alone is
+     * meaningless and the body's {@code status} field is the real outcome. A non-ok
+     * body becomes a 400 {@link ApiException} carrying Casdoor's own message (wrong
+     * old password, unknown user, org policy), which the exception handler surfaces
+     * to the caller. NEVER log-and-complete: that is exactly the "change password
+     * reports success but nothing changed" defect this method exists to prevent.
+     */
+    private static Mono<Map<?, ?>> requireOk(String op, String subject, Map<?, ?> response) {
+        if (response != null && "ok".equals(response.get("status"))) {
+            return Mono.just(response);
         }
+        Object msg = response == null ? null : response.get("msg");
+        String detail = (msg == null || String.valueOf(msg).isBlank())
+                ? "no error message from the IdP" : String.valueOf(msg);
+        log.warn("[casdoor-user] {} for {} REFUSED by Casdoor: {}", op, subject, detail);
+        return Mono.error(ApiException.badRequest("identity provider refused " + op + ": " + detail));
     }
 }
