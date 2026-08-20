@@ -1,4 +1,4 @@
-# snapdragon-deploy.yaml — per-repo deploy descriptor (Phase 6 catalog).
+# hugmesh-deploy.yaml — per-repo deploy descriptor (Phase 6 catalog).
 #
 # Discovered by the catalog ApplicationSet (hugmesh-generator
 # specs/cluster/apps/13-service-catalog.yaml): its scmProvider gitea generator
@@ -11,15 +11,15 @@
 # the live GitHub-rooted ArgoCD ignores it, and the (currently unseeded) Forgejo
 # catalog matches nothing, so it changes nothing running. deploy/ is a verbatim
 # copy of the central manifest — keep the two in sync until cutover.
-name: snapdragon-user-bff-api          # Application name
+name: hugmesh-user-bff-api          # Application name
 namespace: hugmesh-backend          # target k8s namespace (existing tier ns)
-image: snapdragon-systems/user-bff-api # image repo (tag pinned in deploy/ kustomize)
+image: hugmesh/user-bff-api # image repo (tag pinned in deploy/ kustomize)
 port: 8080
 replicas: 1
 # Gateway route the admin/BFF seeds into the routing DB (Phase 2 core). The user
 # BFF is ClusterIP-only and reachable solely via the fe-gateway's same-origin
 # /bff/user/** route, which enforces ROLE_USER from the route DB.
 route:
-  gateway: snapdragon-fe-gateway
+  gateway: hugmesh-fe-gateway
   path: /bff/user/**
   stripPrefix: 0
