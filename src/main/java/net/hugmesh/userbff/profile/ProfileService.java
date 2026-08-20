@@ -330,33 +330,49 @@ public class ProfileService {
 
     /**
      * Self-service password change → Casdoor IdP (the caller's own credential).
-     * {@code owner} is the JWT subject, mapped to the Casdoor username — a user can
-     * only ever change their own password.
+     * {@code owner} is the JWT SUBJECT (owner enforcement — a user can only ever
+     * change their own password); {@code username} is the caller's Casdoor USERNAME,
+     * derived by the controller from the validated token's {@code preferred_username}
+     * claim ({@link ProfileController#usernameOf}).
+     *
+     * <p>THE TWO ARE NEVER THE SAME VALUE in this platform: the subject is the
+     * Casdoor UUID on a real Casdoor JWT and the composite {@code provider:handle}
+     * account id on a bff_-session synthetic principal — Casdoor's
+     * {@code /api/set-password} addresses users by {@code <org>/<username>}, so
+     * sending the subject made every live change fail with "user doesn't exist"
+     * (and the pre-fix client swallowed that failure into a success ack).
      */
-    public Mono<Void> changePassword(String owner, String oldPassword, String newPassword) {
+    public Mono<Void> changePassword(String owner, String username, String oldPassword, String newPassword) {
         requireOwner(owner);
+        requireUsername(username);
         if (newPassword == null || newPassword.isBlank()) {
             return Mono.error(ApiException.badRequest("newPassword required"));
         }
-        return casdoor.changePassword(usernameOf(owner), oldPassword, newPassword);
+        return casdoor.changePassword(username, oldPassword, newPassword);
     }
 
-    /** Self-service email change → Casdoor IdP (the caller's own identity). */
-    public Mono<Void> changeEmail(String owner, String newEmail) {
+    /** Self-service email change → Casdoor IdP (the caller's own identity).
+     *  {@code owner}/{@code username} split exactly as {@link #changePassword}. */
+    public Mono<Void> changeEmail(String owner, String username, String newEmail) {
         requireOwner(owner);
+        requireUsername(username);
         if (newEmail == null || newEmail.isBlank()) {
             return Mono.error(ApiException.badRequest("email required"));
         }
-        return casdoor.changeEmail(usernameOf(owner), newEmail);
+        return casdoor.changeEmail(username, newEmail);
     }
 
     /** Whether the live Casdoor account write is wired (vs. the documented stub). */
     public boolean casdoorEnabled() { return casdoor.enabled(); }
 
-    /** Casdoor username for the JWT subject. The subject already IS the Casdoor
-     *  user name in this platform (the gateway mints the JWT from Casdoor), so it
-     *  maps through unchanged; centralised here so the mapping has one home. */
-    private static String usernameOf(String owner) { return owner; }
+    /** The Casdoor username is the ADDRESS of the IdP write — fail closed (never
+     *  fall back to the subject: that is the exact defect this split fixed). */
+    private static void requireUsername(String username) {
+        if (username == null || username.isBlank()) {
+            throw ApiException.badRequest("no Casdoor username on the caller's token "
+                    + "(preferred_username claim missing) — cannot address the IdP account");
+        }
+    }
 
     private static void requireOwner(String owner) {
         if (owner == null || owner.isBlank()) {

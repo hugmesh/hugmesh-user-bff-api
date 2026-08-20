@@ -11,12 +11,14 @@ import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import net.hugmesh.commons.web.ApiException;
 
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Verifies the {@link CasdoorUserClient}: in LIVE mode it issues the CONFIRMED
@@ -43,6 +45,9 @@ class CasdoorUserClientTest {
         final List<ClientRequest> requests = new ArrayList<>();
         final List<String> bodies = new ArrayList<>();
         final List<MediaType> contentTypes = new ArrayList<>();
+        /** Response body served for every exchange — Casdoor answers HTTP 200 for
+         *  refused operations too, so error cases are modelled here as 200+error. */
+        String responseJson = "{\"status\":\"ok\"}";
         @Override public Mono<ClientResponse> exchange(ClientRequest request) {
             requests.add(request);
             MockClientHttpRequest sink = new MockClientHttpRequest(HttpMethod.POST, URI.create("http://casdoor.test"));
@@ -50,7 +55,7 @@ class CasdoorUserClientTest {
             bodies.add(sink.getBodyAsString().block());
             contentTypes.add(sink.getHeaders().getContentType());
             return Mono.just(ClientResponse.create(HttpStatus.OK)
-                    .header("Content-Type", "application/json").body("{\"status\":\"ok\"}").build());
+                    .header("Content-Type", "application/json").body(responseJson).build());
         }
         boolean hit(String suffix) { return requests.stream().anyMatch(r -> r.url().getPath().endsWith(suffix)); }
     }
@@ -101,6 +106,49 @@ class CasdoorUserClientTest {
                 .contains("\"owner\":\"hugmesh\"")
                 .contains("\"name\":\"alice\"")
                 .contains("\"email\":\"new@x.com\"");
+    }
+
+    // ── Casdoor 200 + {"status":"error"} MUST propagate (the "reported success while
+    //    the password never changed" regression) ─────────────────────────────────────
+
+    @Test
+    void live_changePassword_casdoorError_propagatesAsApiException() {
+        // Casdoor answers HTTP 200 with status:"error" for a refused change (wrong old
+        // password, unknown user). The pre-fix client logged a warning and completed
+        // OK, so the controller acked "submitted" and the UI showed success while the
+        // password never changed. Pin the propagation, message included.
+        Recorder rec = new Recorder();
+        rec.responseJson = "{\"status\":\"error\",\"msg\":\"password or code is incorrect, "
+                + "you have 4 remaining chances\"}";
+        assertThatThrownBy(() -> live(rec).changePassword("alice", "wrong-old", "new-pw").block())
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("password or code is incorrect");
+    }
+
+    @Test
+    void live_changePassword_casdoorErrorWithoutMsg_stillErrors() {
+        Recorder rec = new Recorder();
+        rec.responseJson = "{\"status\":\"error\"}";
+        assertThatThrownBy(() -> live(rec).changePassword("alice", "old", "new").block())
+                .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void live_changeEmail_casdoorError_propagatesAsApiException() {
+        Recorder rec = new Recorder();
+        rec.responseJson = "{\"status\":\"error\",\"msg\":\"Display name cannot be empty\"}";
+        assertThatThrownBy(() -> live(rec).changeEmail("alice", "new@x.com").block())
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("Display name cannot be empty");
+    }
+
+    @Test
+    void live_okResponses_completeWithoutError() {
+        // The ok-path is unchanged by the error propagation: status:"ok" completes.
+        Recorder rec = new Recorder();
+        live(rec).changePassword("alice", "old", "new").block();
+        live(rec).changeEmail("alice", "new@x.com").block();
+        assertThat(rec.requests).hasSize(2);
     }
 
     @Test

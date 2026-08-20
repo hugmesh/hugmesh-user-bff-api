@@ -155,6 +155,73 @@ class ProfileControllerTest {
         verify(profiles, never()).save(eq("bob"), anyString(), any(), any());
     }
 
+    // ── Change-password identity split (operator bug 2026-08-19: "change password
+    //    doesn't work"). The JWT subject is NEVER the Casdoor login name in this
+    //    platform (UUID on a real Casdoor JWT, provider:handle composite on a bff_
+    //    synthetic principal), so the controller must thread usernameOf(jwt) — the
+    //    preferred_username claim — to the service alongside the owner. Pre-fix it
+    //    passed the subject alone and Casdoor refused every live set-password with
+    //    "user doesn't exist" (a refusal the old client then swallowed). ────────────
+
+    @Test
+    void changePassword_forwardsPreferredUsername_andOwnerSubject() {
+        when(profiles.changePassword(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(Mono.empty());
+        when(profiles.casdoorEnabled()).thenReturn(true);
+
+        client.mutateWith(mockJwt()
+                        .jwt(j -> j.subject("9f2d1a34-casdoor-uuid").claim("preferred_username", "alice"))
+                        .authorities(new SimpleGrantedAuthority("ROLE_USER")))
+                .post().uri("/bff/user/profile/password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"oldPassword\":\"old\",\"newPassword\":\"new\"}")
+                .exchange()
+                .expectStatus().is2xxSuccessful()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("submitted");
+
+        // owner = subject (enforcement key), username = preferred_username (IdP address)
+        verify(profiles).changePassword(
+                eq("9f2d1a34-casdoor-uuid"), eq("alice"), eq("old"), eq("new"));
+    }
+
+    @Test
+    void changePassword_casdoorRefusal_surfacesAs400_notSuccess() {
+        // The service propagates Casdoor's 200+{"status":"error"} as an ApiException
+        // now — the HTTP layer must answer 4xx, never the pre-fix success ack.
+        when(profiles.changePassword(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(Mono.error(net.hugmesh.commons.web.ApiException.badRequest(
+                        "identity provider refused set-password: password or code is incorrect")));
+
+        client.mutateWith(mockJwt()
+                        .jwt(j -> j.subject("9f2d1a34-casdoor-uuid").claim("preferred_username", "alice"))
+                        .authorities(new SimpleGrantedAuthority("ROLE_USER")))
+                .post().uri("/bff/user/profile/password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"oldPassword\":\"wrong\",\"newPassword\":\"new\"}")
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void changeEmail_forwardsPreferredUsername_andOwnerSubject() {
+        when(profiles.changeEmail(anyString(), anyString(), anyString()))
+                .thenReturn(Mono.empty());
+        when(profiles.casdoorEnabled()).thenReturn(true);
+
+        client.mutateWith(mockJwt()
+                        .jwt(j -> j.subject("9f2d1a34-casdoor-uuid").claim("preferred_username", "alice"))
+                        .authorities(new SimpleGrantedAuthority("ROLE_USER")))
+                .post().uri("/bff/user/profile/email")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"email\":\"new@x.com\"}")
+                .exchange()
+                .expectStatus().is2xxSuccessful();
+
+        verify(profiles).changeEmail(
+                eq("9f2d1a34-casdoor-uuid"), eq("alice"), eq("new@x.com"));
+    }
+
     // ── BUG 2 self-review: a REAL Jwt-typed controller, driven by a bff_ session,
     //    through the REAL BffSessionAuthenticationWebFilter (auto-discovered into this
     //    slice, not hand-constructed) + the REAL SecurityConfig chain. No mockJwt()
