@@ -23,14 +23,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-user-bff-api
+  name: hugmesh-user-bff-api
   namespace: hugmesh-backend
-  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: hugmesh.net }
+  labels: { app: hugmesh-user-bff-api, app.kubernetes.io/part-of: hugmesh.net }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-user-bff-api } }
+  selector: { matchLabels: { app: hugmesh-user-bff-api } }
   template:
-    metadata: { labels: { app: snapdragon-user-bff-api } }
+    metadata: { labels: { app: hugmesh-user-bff-api } }
     spec:
       nodeSelector: { hugmesh.net/backend: "true" }
       securityContext:
@@ -41,8 +41,8 @@ spec:
           type: container_t
           level: "s0:c29"
       # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
-      # Mirrors the snapdragon-gateway chart's build-keystore initContainer: turns
-      # the Vault-PKI-issued, ESO-synced TLS Secret (snapdragon-user-bff-api-mtls:
+      # Mirrors the hugmesh-gateway chart's build-keystore initContainer: turns
+      # the Vault-PKI-issued, ESO-synced TLS Secret (hugmesh-user-bff-api-mtls:
       # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
       # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
       # to the cluster CA. Store password generated in-pod, kept only in the tmpfs
@@ -50,7 +50,7 @@ spec:
       # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
       initContainers:
         - name: build-keystore
-          image: snapdragon-systems/user-bff-api:dev
+          image: hugmesh/user-bff-api:dev
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -60,9 +60,9 @@ spec:
             - |
               P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
               openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
-                -certfile /pki/ca.crt -name snapdragon-user-bff-api \
+                -certfile /pki/ca.crt -name hugmesh-user-bff-api \
                 -out /stores/keystore.p12 -passout "pass:${P}"
-              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
               # FILENAME IS LOAD-BEARING — do NOT rename this back to
@@ -85,8 +85,8 @@ spec:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
       containers:
-        - name: snapdragon-user-bff-api
-          image: snapdragon-systems/user-bff-api:dev
+        - name: hugmesh-user-bff-api
+          image: hugmesh/user-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false
@@ -114,10 +114,10 @@ spec:
             # user BFF reads the user's federated module/profile data there,
             # forwarding the caller JWT).
             - name: FEDERATION_API_URL
-              value: "http://snapdragon-federation-api.hugmesh-backend.svc.cluster.local:8080"
+              value: "http://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
             # ── AI-cloak / media-poisoning (poison-before-ingest) ────────────────
             # The media-proxy (/bff/user/media/upload) routes image uploads through
-            # the OPTIONAL snapdragon-media-poisoner worker BEFORE the real homeserver
+            # the OPTIONAL hugmesh-media-poisoner worker BEFORE the real homeserver
             # upload, so bytes are cloaked before any thumbnail/federation happens.
             # WORKER_URL is the worker's in-cluster ClusterIP DNS; the BFF probes its
             # /health for capability (cuda|rocm|cpu|none) and POSTs /poison per upload.
@@ -128,7 +128,7 @@ spec:
             # a result 'protected' only after its round-trip survival check.
             - { name: MEDIA_POISONING_ENABLED,        value: "false" }
             - name: MEDIA_POISONING_WORKER_URL
-              value: "http://snapdragon-media-poisoner.hugmesh-backend.svc.cluster.local:8080"
+              value: "http://hugmesh-media-poisoner.hugmesh-backend.svc.cluster.local:8080"
             - { name: MEDIA_POISONING_DEFAULT_MODE,   value: "glaze" }
             - { name: MEDIA_POISONING_FALLBACK_MODE,  value: "warn_before_post" }
             - { name: MEDIA_POISONING_TIMEOUT_MS,     value: "120000" }
@@ -136,11 +136,11 @@ spec:
             # "small"; Matrix 240x240 thumbnail). CSV of the longest-edge px.
             - { name: MEDIA_POISONING_THUMBNAIL_SIZES, value: "240,480" }
             # Config datastore: the user_profile / user_preference / user_block
-            # tables. The app's application.yml defaults spring.r2dbc +
-            # spring.liquibase to a literal `snapdragon-pg` host that does NOT
-            # exist; OVERRIDE both here to the dedicated user-bff-db (mirrors how
-            # admin-bff/federation override to their dedicated dbs). R2DBC is the
-            # runtime handle; the JDBC handle is used by Liquibase ONCE at startup.
+            # tables. Pin spring.r2dbc + spring.liquibase here EXPLICITLY to the
+            # dedicated user-bff-db (mirrors how admin-bff/federation override to
+            # their dedicated dbs), so the deployment never depends on the packaged
+            # application.yml default staying resolvable. R2DBC is the runtime
+            # handle; the JDBC handle is used by Liquibase ONCE at startup.
             # Password sourced from Vault via External Secrets (ESO Secret
             # user-bff-db-auth, key password) — the SAME Secret the user-bff-db
             # pod's POSTGRES_PASSWORD mounts, so the DB and its consumer stay in sync.
@@ -277,7 +277,7 @@ spec:
             # (user-bff -> admin-bff :8080) is required in the manifests/generator repo
             # as a follow-up; the existing mutual db-denial between the two BFFs stays.
             - name: ADMIN_BFF_INTERNAL_BASE_URL
-              value: "http://snapdragon-admin-bff-api.hugmesh-backend.svc.cluster.local:8080"
+              value: "http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080"
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See
@@ -289,8 +289,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-user-bff-api:8080:127.0.0.1
-                  https://snapdragon-user-bff-api:8080/actuator/health/readiness
+                  --resolve hugmesh-user-bff-api:8080:127.0.0.1
+                  https://hugmesh-user-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
@@ -300,8 +300,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-user-bff-api:8080:127.0.0.1
-                  https://snapdragon-user-bff-api:8080/actuator/health/liveness
+                  --resolve hugmesh-user-bff-api:8080:127.0.0.1
+                  https://hugmesh-user-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
@@ -317,7 +317,7 @@ spec:
         # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
         - name: pki
           secret:
-            secretName: snapdragon-user-bff-api-mtls
+            secretName: hugmesh-user-bff-api-mtls
         # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
         - name: stores
           emptyDir:

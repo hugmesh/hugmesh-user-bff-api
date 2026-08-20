@@ -11,7 +11,7 @@ resources:
 # the moving :main here for dev. Pulls need the gitlab-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: snapdragon-systems/user-bff-api, newName: registry.hugmesh.net/snapdragon/snapdragon-user-bff-api, newTag: main }
+  - { name: hugmesh/user-bff-api, newName: registry.hugmesh.net/hugmesh/hugmesh-user-bff-api, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |
