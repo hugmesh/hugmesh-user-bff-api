@@ -53,23 +53,21 @@ import static net.hugmesh.userbff.ShippedConfigDefaults.readLines;
  * Casdoor that registers clientId {@code app-user-bff}. Agreement with the OTHER SIDE —
  * what casdoor-init actually registers — is {@link CasdoorRegistrationContractTest}.
  *
- * <p><b>Scope: {@code src/main} only.</b> {@code snapdragon} identifiers OUTSIDE
- * {@code src/main} are a MIX and are not all current, so this lint does not reach there
- * and {@link #ALLOWLIST} stays empty:
+ * <p><b>Scope: {@code src/main} only.</b> The rebrand has been applied repo-wide, so the
+ * only remaining spellings of the banned token outside {@code src/main} are this lint's
+ * own pattern and javadoc, and {@link #ALLOWLIST} stays empty. Two notes on what the
+ * rest of the repo actually is:
  * <ul>
- *   <li>GENUINELY CURRENT — the {@code Snapdragon-Systems} GitLab/GitHub group
- *       ({@code .gitlab-ci.yml}, {@code settings.xml}), which is a RETAINED fork path and
- *       stays. The k8s node-label domain ({@code hugmesh.net/<tier>}) and the image host
- *       ({@code registry.hugmesh.net}, {@code deploy/}) have already been migrated off the
- *       pre-rebrand domain.</li>
- *   <li>GENUINELY STALE, NOT FIXED HERE — {@code deploy/} and
- *       {@code snapdragon-deploy.yaml} are a Forgejo-cutover PILOT that ships dark
- *       (the live GitHub-rooted ArgoCD ignores them and the Forgejo catalog is
- *       unseeded) and are a DRIFTED copy of the authoritative central manifest in
- *       hugmesh-generator {@code specs/cluster/manifests/user-bff-api/}: they still
- *       carry {@code snapdragon-user-bff-api}, {@code snapdragon-backend} and
- *       pre-rebrand service hostnames. Re-syncing that copy is a separate change; the
- *       narrow slice of it that can silently re-break login IS guarded — see
+ *   <li>The GitLab/GitHub group ({@code .gitlab-ci.yml}, {@code settings.xml}) is
+ *       {@code hugmesh}, and the in-cluster image registry is Harbor at
+ *       {@code registry.hugmesh.net}. The k8s node-label domain is
+ *       {@code hugmesh.net/<tier>}.</li>
+ *   <li>{@code deploy/} and {@code hugmesh-deploy.yaml} are a Forgejo-cutover PILOT
+ *       that ships dark (the live GitHub-rooted ArgoCD ignores them and the Forgejo
+ *       catalog is unseeded) and are a DRIFTED copy of the authoritative central
+ *       manifest in hugmesh-generator {@code specs/cluster/manifests/user-bff-api/};
+ *       they should be re-synced from that central copy rather than hand-maintained.
+ *       The narrow slice of them that can silently re-break login IS guarded — see
  *       {@code CasdoorRegistrationContractTest#repoManifestsNeverContradictThePinnedContract()}.</li>
  * </ul>
  * A future genuine exception INSIDE {@code src/main} goes in {@link #ALLOWLIST}, one

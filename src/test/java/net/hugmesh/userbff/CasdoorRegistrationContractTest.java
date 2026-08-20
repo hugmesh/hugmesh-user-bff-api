@@ -30,7 +30,7 @@ import static net.hugmesh.userbff.ShippedConfigDefaults.literalFallback;
  * <h2>Why this exists (and why the rebrand lint was not enough)</h2>
  * The first real kind run of the GitOps payload could not log anybody in.
  * {@link ConfigDefaultsContractTest} was added for the first half of that — defaults
- * still naming {@code *.snapdragon-*} services, which NXDOMAIN. It is a SHAPE lint: it
+ * still naming pre-rebrand service hostnames, which NXDOMAIN. It is a SHAPE lint: it
  * asks "does this look pre-rebrand?" and "do the copies agree with each other?".
  * <p>{@code app.bff.oidc.client-id: user-bff} passed all of that — no banned identifier,
  * one single copy — and {@code POST /bff/login} still returned

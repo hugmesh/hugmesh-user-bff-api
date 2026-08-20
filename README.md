@@ -443,7 +443,7 @@ training-set hygiene (removable by re-encode/downscale), not a guarantee.
 (Element/Tusky) uploads that skip this BFF entirely.
 
 **Lean fallback (k8s protocol-probe, no heavy tier):** the worker is the **optional**
-x86/GPU `snapdragon-media-poisoner`. On a Pi5-only cluster its pod stays `Pending`,
+x86/GPU `hugmesh-media-poisoner`. On a Pi5-only cluster its pod stays `Pending`,
 its Service has no Ready endpoints, the `/health` probe reports `backend=none`, and
 `app.media.poisoning.fallback-mode` decides: `skip` (default — forward **uncloaked**
 with `status=skipped` + a documented signal so the UI warns *"not cloaked"*), `light`
@@ -708,7 +708,7 @@ payload. Revoking does not free the radio: the row keeps occupying the globally-
 
 - `FederationApiClient` — reactive WebClient of federation-api. Base URL
   `FEDERATION_API_BASE_URL` (default
-  `http://snapdragon-federation-api.hugmesh-backend.svc.cluster.local:8080`).
+  `http://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080`).
   A token-injecting `ExchangeFilterFunction` re-injects the caller's JWT from the
   reactive security context as `Authorization: Bearer <jwt>` on every outbound
   call (`FederationWebClientConfig`).
@@ -1127,7 +1127,7 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   outbound calls), config-gated, plaintext in local/dev/CI. Enforcement is already
   turned on in the cluster deployment manifest — both the GitOps-pilot copy in this
   repo ([`deploy/deployment.yaml`](deploy/deployment.yaml), see
-  [`snapdragon-deploy.yaml`](snapdragon-deploy.yaml)) and the canonical
+  [`hugmesh-deploy.yaml`](hugmesh-deploy.yaml)) and the canonical
   `hugmesh-generator` manifest; see [SECURITY.md](SECURITY.md) for the wiring.
 - ✅ **SSO relocation — on `main`, ships DARK** (the headline of an earlier cycle, now
   followed by a cross-cutting identity-resolution hardening pass, see above): server-side

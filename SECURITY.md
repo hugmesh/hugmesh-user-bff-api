@@ -21,7 +21,7 @@ This BFF is defended in depth by two independent layers:
 
 The cluster CA is the offline root from `hugmesh-generator/scripts/gen-keystores.sh`.
 In-cluster, Vault PKI imports that CA and issues a short-lived leaf cert per app;
-External Secrets Operator (ESO) syncs it into the `snapdragon-user-bff-api-mtls`
+External Secrets Operator (ESO) syncs it into the `hugmesh-user-bff-api-mtls`
 `kubernetes.io/tls` Secret (`tls.crt` / `tls.key` / `ca.crt`). A keystore
 initContainer (the equivalent of the gateway chart's `build-keystore`) assembles:
 
@@ -33,7 +33,7 @@ a Secret, or Vault). The deployment then sets the env below so the running pod
 enforces client-cert verification. Because every in-cluster leaf chains to the same
 cluster CA, the truststore validates them; ESO rotates the cert before expiry.
 
-The gateway (`snapdragon-fe-gateway`/`snapdragon-be-gateway`) is the legitimate
+The gateway (`hugmesh-fe-gateway`/`hugmesh-be-gateway`) is the legitimate
 caller: it presents its own ESO-issued client cert when proxying to this BFF, so
 its handshake succeeds while everyone else's fails.
 
@@ -63,14 +63,14 @@ properties directly; no custom `SslContext`/`HttpServer` bean is needed.
 Enforcement is **already turned on**. The GitOps-pilot copy of the deployment
 manifest lives right here in [`deploy/deployment.yaml`](deploy/deployment.yaml)
 (added as part of the Forgejo-cutover GitOps pilot; see
-[`snapdragon-deploy.yaml`](snapdragon-deploy.yaml) for the catalog descriptor
+[`hugmesh-deploy.yaml`](hugmesh-deploy.yaml) for the catalog descriptor
 that points at it), and the canonical copy in `hugmesh-generator`
 (`specs/cluster/manifests/user-bff-api/deployment.yaml`) carries the same
 fields. Both already:
 
 - add the `build-keystore` initContainer + the `pki` (from
-  `snapdragon-user-bff-api-mtls`) and `stores` (tmpfs) volumes — mirroring
-  `charts/snapdragon-gateway/templates/deployment.yaml`'s `build-keystore` — and
+  `hugmesh-user-bff-api-mtls`) and `stores` (tmpfs) volumes — mirroring
+  `charts/hugmesh-gateway/templates/deployment.yaml`'s `build-keystore` — and
 - set:
 
 ```
@@ -89,6 +89,6 @@ kubelet probe (which cannot present a client cert, and `client-auth=need`
 rejects a cert-less handshake): both manifests use an **HTTPS exec probe**
 (`curl --cert/--key/--cacert` against `/actuator/health/{readiness,liveness}`)
 so the probe itself authenticates as this pod's own mTLS identity. The gateway
-(`snapdragon-fe-gateway`/`snapdragon-be-gateway`) presents its own ESO-issued
+(`hugmesh-fe-gateway`/`hugmesh-be-gateway`) presents its own ESO-issued
 client cert AND calls this BFF over `https://` for its proxied route to work,
 as described above.
