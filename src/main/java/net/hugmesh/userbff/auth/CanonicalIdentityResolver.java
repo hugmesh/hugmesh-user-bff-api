@@ -63,6 +63,20 @@ public class CanonicalIdentityResolver {
      *  (changeset 291) -- its OWN uniqueness, never a re-fold of {@link #CLAIM_LOCALPART}. */
     static final String CLAIM_MASTODON_LOCALPART = "mastodon_localpart";
 
+    /**
+     * The claim stamped with the caller's CASDOOR LOGIN NAME — the {@code <org>/<userName>}
+     * address of every Casdoor account write (set-password / update-user). DISTINCT from
+     * {@code preferred_username} on a {@code bff_}-session synthetic principal, where that
+     * claim carries admin-bff's account HANDLE, which is an EMAIL for any account whose
+     * id_token carried one ({@code InternalAccountController.subjectFromIdToken} prefers
+     * {@code email}) and is a Gmail address for provider {@code google}. Casdoor usernames
+     * cannot contain {@code '@'} (see {@code CasdoorAdminClient.usernameOf}), so the handle
+     * is NOT an address — this claim is. Absent when the login name is not recoverable, in
+     * which case the consumer MUST fail closed rather than substitute the handle or the
+     * subject; see {@link net.hugmesh.userbff.profile.ProfileController#usernameOf}.
+     */
+    public static final String CLAIM_CASDOOR_USERNAME = "casdoor_username";
+
     /** The provider namespace every native-login account is keyed under (the login provider,
      *  not an invite provider). */
     static final String CASDOOR = "casdoor";

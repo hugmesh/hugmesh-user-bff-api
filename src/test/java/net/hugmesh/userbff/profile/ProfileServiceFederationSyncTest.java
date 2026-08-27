@@ -14,6 +14,7 @@ import net.hugmesh.userbff.federation.FederationApiClient;
 import net.hugmesh.userbff.support.TestDatabaseConfig;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -147,10 +148,81 @@ class ProfileServiceFederationSyncTest {
                 .isInstanceOfSatisfying(ApiException.class,
                         ex -> assertThat(ex.status()).isEqualTo(HttpStatus.NOT_FOUND));
 
-        // the LOCAL row still reflects the caller's request (best-effort local write;
-        // the federation failure is what's surfaced, not a rollback) — but the
-        // OVERALL save() call reported the true failure, never a fabricated success.
-        assertThat(repo.find("sub-5").block().visibility()).isEqualTo("public");
+        // ATOMICITY: the publish leg runs BEFORE the local write, so a refusal leaves
+        // user_profile UNTOUCHED. Previously the row was already committed public by the
+        // time the publish was attempted, so the caller got an error while the database had
+        // gone public behind it — the UI said "could not save" and the next page load read
+        // back visibility=public.
+        assertThat(repo.find("sub-5").blockOptional()).isEmpty();
+        verify(federation).publishVanity("erin", "Erin");
+    }
+
+    /**
+     * The same atomicity property on an EXISTING row — the actual user journey (a private
+     * profile that the user tries to make public+vanity, refused upstream). The prior
+     * visibility must SURVIVE unchanged; a rollback-free "save then publish" would have
+     * left it public.
+     */
+    @Test
+    void federationPublishFailure_onAnExistingRow_leavesThePriorVisibilityIntact() {
+        when(federation.unpublishVanity(eq("hana"))).thenReturn(Mono.empty());
+        profiles.save("sub-8", "hana", body("sub-8", "Hana", "internal", false), "default").block();
+        assertThat(repo.find("sub-8").block().visibility()).isEqualTo("internal");
+
+        when(federation.publishVanity(eq("hana"), any())).thenReturn(
+                Mono.error(new ApiException(HttpStatus.FORBIDDEN, "not the bundle owner")));
+
+        assertThatThrownBy(() ->
+                profiles.save("sub-8", "hana", body("sub-8", "Hana", "public", true), "default").block())
+                .isInstanceOfSatisfying(ApiException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        UserProfile after = repo.find("sub-8").block();
+        assertThat(after.visibility()).isEqualTo("internal");
+        assertThat(after.vanitySubdomainEnabled()).isFalse();
+        assertThat(after.vanityUsername()).isNull();
+    }
+
+    /**
+     * ORDER, asserted directly rather than inferred from the failure legs: the federation
+     * publish is invoked while the local row is still ABSENT. This is the property that
+     * makes the rollback-free design safe, so it is pinned on the SUCCESS path too — a
+     * future "optimisation" that moves the save back in front would flip this even though
+     * both legs succeed and every other assertion here still passes.
+     */
+    @Test
+    void publish_isInvoked_beforeTheLocalRowExists() {
+        AtomicReference<Boolean> rowExistedAtPublishTime = new AtomicReference<>();
+        when(federation.publishVanity(eq("iris"), any())).thenAnswer(inv -> {
+            rowExistedAtPublishTime.set(repo.find("sub-9").blockOptional().isPresent());
+            return Mono.just(Map.of());
+        });
+
+        profiles.save("sub-9", "iris", body("sub-9", "Iris", "public", true), "default").block();
+
+        assertThat(rowExistedAtPublishTime.get())
+                .as("federation publish must run BEFORE the local write")
+                .isFalse();
+        // ...and the save still completed, so the ordering did not cost the write.
+        assertThat(repo.find("sub-9").block().visibility()).isEqualTo("public");
+    }
+
+    /**
+     * REFUSAL, not just failure: a caller who ticks the vanity subdomain but whose token
+     * carries no usable Casdoor login name is rejected 400 and NOTHING is written or
+     * published. Before, a null username silently produced a vanity-enabled row with a NULL
+     * vanity_username and no federation call at all.
+     */
+    @Test
+    void vanityRequested_withNoUsernameOnTheToken_isRefused_andNeitherPersistsNorPublishes() {
+        assertThatThrownBy(() ->
+                profiles.save("sub-10", null, body("sub-10", "Jo", "public", true), "default").block())
+                .isInstanceOfSatisfying(ApiException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        assertThat(repo.find("sub-10").blockOptional()).isEmpty();
+        verify(federation, never()).publishVanity(any(), any());
+        verify(federation, never()).unpublishVanity(any());
     }
 
     /**

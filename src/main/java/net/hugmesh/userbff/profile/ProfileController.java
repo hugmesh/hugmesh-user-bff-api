@@ -19,6 +19,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 import net.hugmesh.commons.web.ApiException;
+import net.hugmesh.userbff.auth.CanonicalIdentityResolver;
 import net.hugmesh.userbff.media.ImageSniffer;
 import net.hugmesh.userbff.security.PrincipalDomain;
 
@@ -214,22 +215,64 @@ public class ProfileController {
     }
 
     /**
-     * The caller's USERNAME for vanity purposes, derived from the JWT. Casdoor mints
-     * the {@code preferred_username} claim = the user's login name (the DNS label
-     * behind {@code <username>.hugmesh.net}); we fall back to {@code name},
-     * then to the subject only if neither claim is present. This is the documented
-     * single home for "how the username is obtained from the token".
+     * The caller's Casdoor LOGIN NAME, derived from the JWT — the DNS label behind
+     * {@code <username>.hugmesh.net} AND the {@code <org>/<userName>} address of every
+     * Casdoor account write. This is the documented single home for "how the username is
+     * obtained from the token".
+     *
+     * <p>Precedence:
+     * <ol>
+     *   <li>{@link CanonicalIdentityResolver#CLAIM_CASDOOR_USERNAME} — stamped by
+     *       {@code BffSessionAuthenticationWebFilter} on a {@code bff_}-session synthetic
+     *       principal, which is the ONE carrier whose {@code preferred_username} is not a
+     *       login name (it carries admin-bff's account handle, an EMAIL for most accounts,
+     *       and for provider {@code google} it is absent entirely);</li>
+     *   <li>{@code preferred_username} — a real Casdoor JWT's login name;</li>
+     *   <li>{@code name};</li>
+     *   <li>the subject, LAST RESORT.</li>
+     * </ol>
+     *
+     * <p><b>Every candidate must be SHAPED like a login name</b> ({@link #loginName}) — no
+     * {@code ':'} and no {@code '@'} — and a candidate that is not is SKIPPED, not passed on.
+     * A subject bearing {@code ':'} is the composite {@code provider:handle} account id of a
+     * {@code bff_} session, and sending THAT to Casdoor as {@code userName}
+     * ({@code google:alice@example.com}) is exactly the "user doesn't exist" defect
+     * {@link ProfileService#changePassword} documents — it was fixed for the JWT-subject
+     * carrier and survived on this one. An {@code '@'}-bearing candidate can never be a
+     * Casdoor username either (Casdoor forbids the character outright — see
+     * {@code CasdoorAdminClient.usernameOf}) and is not a legal DNS label.
+     *
+     * <p>When NOTHING qualifies this returns {@code null} and the callers fail CLOSED with a
+     * reason naming the real cause ({@link ProfileService#changePassword} /
+     * {@link ProfileService#changeEmail} 400; a vanity save 400) — a named refusal beats an
+     * opaque IdP rejection, and beats silently addressing an account that is not the
+     * caller's.
      */
     static String usernameOf(Jwt jwt) {
-        String preferred = jwt.getClaimAsString("preferred_username");
-        if (preferred != null && !preferred.isBlank()) {
+        String casdoorUsername = loginName(jwt.getClaimAsString(
+                CanonicalIdentityResolver.CLAIM_CASDOOR_USERNAME));
+        if (casdoorUsername != null) {
+            return casdoorUsername;
+        }
+        String preferred = loginName(jwt.getClaimAsString("preferred_username"));
+        if (preferred != null) {
             return preferred;
         }
-        String name = jwt.getClaimAsString("name");
-        if (name != null && !name.isBlank()) {
+        String name = loginName(jwt.getClaimAsString("name"));
+        if (name != null) {
             return name;
         }
-        return jwt.getSubject();
+        return loginName(jwt.getSubject());
+    }
+
+    /** {@code candidate} when it could actually BE a Casdoor login name / DNS label, else
+     *  {@code null} — see {@link #usernameOf} for why {@code ':'} and {@code '@'} disqualify. */
+    private static String loginName(String candidate) {
+        if (candidate == null || candidate.isBlank()) {
+            return null;
+        }
+        String trimmed = candidate.trim();
+        return (trimmed.indexOf(':') >= 0 || trimmed.indexOf('@') >= 0) ? null : trimmed;
     }
 
     @Operation(summary = "Delete my profile.")

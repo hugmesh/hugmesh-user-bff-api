@@ -71,6 +71,37 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
         client.delete().uri("/bff/session").exchange().expectStatus().isOk();
     }
 
+    // ── ANONYMOUS PASSWORD RESET — permitAll for the same reason /bff/login is ──
+
+    /**
+     * A locked-out caller has NO session and NO current password, so requiring either to
+     * reach the reset would be the lock-out itself. Both legs must be reachable
+     * anonymously. (In production they still 503 while
+     * {@code casdoor.password-reset.enabled=false} — permitAll exposes the route, it
+     * enables nothing.)
+     */
+    @Test
+    void passwordResetRequest_isReachable_withoutJwt() {
+        client.post().uri("/bff/password-reset/request").exchange().expectStatus().isOk();
+    }
+
+    @Test
+    void passwordResetConfirm_isReachable_withoutJwt() {
+        client.post().uri("/bff/password-reset/confirm").exchange().expectStatus().isOk();
+    }
+
+    /**
+     * The permit is scoped to the two EXACT paths, NOT the {@code /bff/password-reset/**}
+     * subtree — so a sibling endpoint added under that prefix later cannot inherit
+     * anonymity by accident. This probe path exists in the probe controller (it would 200
+     * if the security layer admitted it), so a 401 here is a genuine security decision and
+     * not a 404 in disguise.
+     */
+    @Test
+    void passwordResetSubtree_isNotBlanketPermitted_anonymousIs401() {
+        client.post().uri("/bff/password-reset/_probe").exchange().expectStatus().isUnauthorized();
+    }
+
     // ── /bff/me + /bff/user/** still behind the authenticated() floor ──────────
 
     @Test
@@ -92,6 +123,8 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
     static class SsoProbeController {
         @RequestMapping({
                 "/bff/login", "/bff/register", "/bff/session",
+                "/bff/password-reset/request", "/bff/password-reset/confirm",
+                "/bff/password-reset/_probe",
                 "/bff/me", "/bff/user/_probe",
         })
         Mono<String> ok() {
