@@ -38,7 +38,10 @@ import net.hugmesh.userbff.web.ScreenReaderNames;
  *       (e.g. no bundle uploaded yet, or an upstream outage) FAILS THE WHOLE
  *       {@code save} call — never swallowed into a silently-degraded success, so
  *       the caller (and the UI) never sees {@code visibility=public} reported as
- *       saved while the federation registry never actually got the fragment.</li>
+ *       saved while the federation registry never actually got the fragment.
+ *       This leg runs BEFORE the local {@code repo.save}, so a refusal also leaves
+ *       {@code user_profile} untouched — the error the caller is shown and the row
+ *       they read back on the next page load always agree.</li>
  *   <li>otherwise → {@code DELETE /api/federation/vanity/{username}} (self-unpublish;
  *       idempotent no-op upstream when nothing was ever published). This call fires
  *       on EVERY non-public save — including profile edits that never touched
@@ -48,7 +51,8 @@ import net.hugmesh.userbff.web.ScreenReaderNames;
  *       itself, is unreachable). The local {@code user_profile} row — this
  *       platform's own source of truth for visibility — is already correctly
  *       private the moment the save completes; a lagging federation unpublish
- *       converges on the next successful sync. See {@link #syncVanityPublish}.</li>
+ *       converges on the next successful sync. This leg therefore keeps the
+ *       persist-THEN-sync order. See {@link #syncVanityUnpublish}.</li>
  * </ul>
  * The back-compat overload {@link #save(String, UserProfile)} threads NO username,
  * so it can never sync (there is no vanity target) — unchanged from its pre-existing
@@ -147,10 +151,21 @@ public class ProfileService {
      * {@link ScreenReaderNames}). Its ASCII charset is also re-checked here (service
      * leg) alongside the {@code @SafeScreenReaderName} API-leg constraint.
      *
-     * <p>FEDERATION SYNC: once persisted, the caller's federation-api vanity fragment
-     * is synced to match (publish or unpublish — see the class Javadoc). A federation
-     * failure fails this call (honest propagation), even though the local row was
-     * already written — see {@link #syncVanityPublish}.
+     * <p>FEDERATION SYNC: the caller's federation-api vanity fragment is synced to
+     * match (publish or unpublish — see the class Javadoc).
+     *
+     * <p><b>ORDER MATTERS — the PUBLISH leg runs BEFORE the local write.</b> The two
+     * legs of a public+vanity save are a local row and a cross-service registration,
+     * and there is no distributed transaction over them, so the ORDER decides what a
+     * partial failure leaves behind. Publishing FIRST means a refused publish (403
+     * owner mismatch, 404 no uploaded bundle, federation-api absent) fails the whole
+     * {@code save} with the row UNTOUCHED — the user sees an error AND their profile
+     * is still private. The previous order (save, then publish) committed
+     * {@code visibility='public'} and only then discovered the publish was refused:
+     * the caller got an HTTP error while the database had ALREADY gone public, so the
+     * UI showed "could not save" and the next page load read back {@code public}. That
+     * is a privacy-relevant lie, not just a confusing message. See
+     * {@link #syncVanityUnpublish} for why the UNPUBLISH leg keeps the opposite order.
      */
     public Mono<UserProfile> save(String owner, String username, UserProfile body, String domain) {
         requireOwner(owner);
@@ -172,6 +187,18 @@ public class ProfileService {
 
         boolean wantsVanity = owned.vanitySubdomainEnabled();
         boolean wantsPublic = "public".equals(owned.visibility());
+        // A vanity SUBDOMAIN is literally a DNS label, so it cannot be granted without a
+        // username to make it out of. Fail CLOSED with the real reason rather than
+        // persisting vanity_subdomain_enabled=true with a NULL vanity_username (an
+        // inconsistent row) and silently skipping the federation publish. This fires when
+        // the caller's token carries no usable Casdoor login name — see
+        // {@link ProfileController#usernameOf}, which returns null rather than handing on a
+        // composite account id or an email address.
+        if (wantsVanity && (username == null || username.isBlank())) {
+            return Mono.error(ApiException.badRequest(
+                    "no username on the caller's token — a vanity subdomain needs a Casdoor "
+                            + "login name to use as its DNS label"));
+        }
         if (wantsVanity || wantsPublic) {
             if (ReservedNames.isReserved(username)) {
                 return Mono.error(ApiException.badRequest(
@@ -189,48 +216,44 @@ public class ProfileService {
             }
         }
         String normalizedUsername = normalize(username);
+        if (wantsVanity && wantsPublic && normalizedUsername != null) {
+            // PUBLISH-THEN-PERSIST (see the method Javadoc): the cross-service leg that can
+            // refuse runs first, so a refusal leaves user_profile exactly as it was.
+            // repo.save() returns the SAME instance it was handed, so publishing with
+            // owned.displayName() sends byte-identical bytes to what the post-save order did.
+            return federation.publishVanity(normalizedUsername, owned.displayName())
+                    .then(repo.save(owned, domain));
+        }
         return repo.save(owned, domain)
-                .flatMap(saved -> syncVanityPublish(normalizedUsername, wantsVanity && wantsPublic,
-                        saved.displayName())
-                        .thenReturn(saved));
+                .flatMap(saved -> syncVanityUnpublish(normalizedUsername).thenReturn(saved));
     }
 
     /**
-     * Syncs the caller's federation-api vanity fragment to match the just-saved
-     * profile's public/vanity state — the cross-service half of a profile save (see
-     * the class Javadoc). No-ops when no username was threaded through (the
-     * back-compat {@link #save(String, UserProfile)} overload — there is no vanity
-     * DNS label to sync against, matching its documented pre-existing contract).
+     * The UNPUBLISH half of the vanity sync — fires on every save that is NOT
+     * {@code vanitySubdomainEnabled && visibility=='public'} (the PUBLISH half is
+     * inlined in {@link #save(String, String, UserProfile, String)} itself, because it
+     * must run BEFORE the local write; see that method's Javadoc). No-ops when no
+     * username was threaded through (the back-compat
+     * {@link #save(String, UserProfile)} overload — there is no vanity DNS label to
+     * sync against, matching its documented pre-existing contract), and no-ops for a
+     * caller whose token carries no usable Casdoor login name at all.
      *
-     * <p><b>Asymmetric error handling, by design:</b>
-     * <ul>
-     *   <li><b>publish</b> (the user's active, explicit intent) — an error from
-     *       {@link FederationApiClient#publishVanity} (already mapped to an
-     *       {@link ApiException} carrying the real upstream status) PROPAGATES,
-     *       failing the enclosing {@code save} Mono. Never a silent downgrade to
-     *       "saved" while the fragment was never actually published.</li>
-     *   <li><b>unpublish</b> (fires on every non-public save, most of which never
-     *       touched vanity) — an error from
-     *       {@link FederationApiClient#unpublishVanity} is LOGGED and swallowed;
-     *       the save still succeeds. The durable local row already reflects the
-     *       caller's true (private) intent; a stuck-public federation fragment
-     *       converges on the next successful sync rather than blocking every
-     *       unrelated profile edit on federation-api's availability.</li>
-     * </ul>
+     * <p><b>Why this leg keeps the opposite order (persist, THEN unpublish) and is
+     * BEST-EFFORT:</b> it fires on EVERY non-public save, most of which never touched
+     * vanity — an unrelated pronoun/timezone edit must not 500 because federation-api
+     * is unreachable. And the failure direction is benign: the durable local row is
+     * already correctly PRIVATE the moment the save completes, so the worst outcome is
+     * a lagging federation fragment that converges on the next successful sync. The
+     * publish leg's failure direction is the opposite (a row that went public when the
+     * user was told it did not), which is why only that one is ordered-first and
+     * hard-failing.
      *
-     * @param normalizedUsername the lower-cased vanity username, or {@code null}
-     *                           when none was threaded through this save
-     * @param shouldBePublic     {@code true} iff the just-saved profile wants
-     *                           {@code vanitySubdomainEnabled && visibility=='public'}
-     * @param displayName        the profile's current display name, forwarded as the
-     *                           fragment's cosmetic name on a publish
+     * @param normalizedUsername the lower-cased vanity username, or {@code null} when
+     *                           none was threaded through this save
      */
-    private Mono<Void> syncVanityPublish(String normalizedUsername, boolean shouldBePublic, String displayName) {
+    private Mono<Void> syncVanityUnpublish(String normalizedUsername) {
         if (normalizedUsername == null || normalizedUsername.isBlank()) {
             return Mono.empty();
-        }
-        if (shouldBePublic) {
-            return federation.publishVanity(normalizedUsername, displayName).then();
         }
         return federation.unpublishVanity(normalizedUsername)
                 .onErrorResume(e -> {
@@ -365,12 +388,33 @@ public class ProfileService {
     /** Whether the live Casdoor account write is wired (vs. the documented stub). */
     public boolean casdoorEnabled() { return casdoor.enabled(); }
 
-    /** The Casdoor username is the ADDRESS of the IdP write — fail closed (never
-     *  fall back to the subject: that is the exact defect this split fixed). */
+    /**
+     * The Casdoor username is the ADDRESS of the IdP write — fail closed (never fall back
+     * to the subject: that is the exact defect this split fixed).
+     *
+     * <p>Rejects BLANK and, since it is an address and not free text, anything that cannot
+     * BE a Casdoor username: a value bearing {@code ':'} is the composite
+     * {@code provider:handle} account id of a {@code bff_} session (Casdoor answers
+     * {@code "The user hugmesh/google:alice@example.com doesn't exist"}), and a value bearing
+     * {@code '@'} is an email address — Casdoor forbids {@code '@'} in a username outright
+     * (see {@code CasdoorAdminClient.usernameOf}). {@link ProfileController#usernameOf}
+     * already filters both, so in the wired flow this is DEFENCE IN DEPTH: it is the guard
+     * that holds if a future carrier ever hands on a raw handle or subject again, which is
+     * precisely how the original subject-as-username defect came back for the {@code bff_}
+     * session principal after being fixed for the JWT one. The old guard checked only
+     * null/blank and so waved every composite through.
+     */
     private static void requireUsername(String username) {
         if (username == null || username.isBlank()) {
-            throw ApiException.badRequest("no Casdoor username on the caller's token "
-                    + "(preferred_username claim missing) — cannot address the IdP account");
+            throw ApiException.badRequest("no Casdoor login name on the caller's token "
+                    + "— cannot address the IdP account. A federated or email-keyed session "
+                    + "carries no recoverable Casdoor username; sign in natively to change "
+                    + "your password or email.");
+        }
+        if (username.indexOf(':') >= 0 || username.indexOf('@') >= 0) {
+            throw ApiException.badRequest("'" + username + "' is not a Casdoor login name "
+                    + "(it is an account id or an email address) — refusing to address the "
+                    + "IdP account with it");
         }
     }
 

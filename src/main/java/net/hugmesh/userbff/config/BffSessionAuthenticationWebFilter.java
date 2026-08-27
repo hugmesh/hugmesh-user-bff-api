@@ -23,9 +23,11 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
+import net.hugmesh.authcore.casdoor.CasdoorAdminClient;
 import net.hugmesh.commons.security.DomainRegistry;
 import net.hugmesh.userbff.auth.AdminBffInternalClient;
 import net.hugmesh.userbff.auth.AdminBffInternalClient.AccountView;
+import net.hugmesh.userbff.auth.CanonicalIdentityResolver;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -416,6 +418,12 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      */
     public static final String SYNTHETIC_TOKEN_MARKER = "bff-session-principal:";
 
+    /** The provider namespace of the NATIVE (this platform's own Casdoor OIDC) login, as
+     *  opposed to the INVITE providers ({@code google}/{@code discord}). The distinction
+     *  matters for one thing only — whether the account HANDLE can be turned back into a
+     *  Casdoor login name; see {@link #casdoorUsernameOf}. */
+    private static final String NATIVE_LOGIN_PROVIDER = "casdoor";
+
     /**
      * Builds the {@link Authentication} for a resolved {@code bff_} session — a {@link
      * JwtAuthenticationToken} wrapping a SYNTHETIC (never cryptographically signed,
@@ -512,6 +520,14 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
             }
         }
 
+        // The CASDOOR LOGIN NAME — the address of every IdP account write. See
+        // casdoorUsernameOf below for why this cannot be `handle` and why it is a claim of
+        // its own rather than more overloading of `preferred_username`.
+        String casdoorUsername = casdoorUsernameOf(view.provider(), handle);
+        if (casdoorUsername != null && !casdoorUsername.isBlank()) {
+            builder.claim(CanonicalIdentityResolver.CLAIM_CASDOOR_USERNAME, casdoorUsername);
+        }
+
         // Account-takeover-by-collision fix: thread the CANONICAL, collision-checked
         // localpart through — see the class doc above.
         String localpart = view.localpart();
@@ -535,6 +551,65 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
         }
 
         return builder.build();
+    }
+
+    /**
+     * The caller's CASDOOR LOGIN NAME for {@code (provider, handle)}, or {@code null} when it
+     * is NOT recoverable from a {@code bff_} session (in which case NO claim is stamped and
+     * the consumer fails closed — see
+     * {@link net.hugmesh.userbff.profile.ProfileController#usernameOf}).
+     *
+     * <h3>Why the handle is not the answer</h3>
+     * Casdoor addresses account writes by {@code <org>/<userName>} and a Casdoor username can
+     * never contain {@code '@'}, but {@link AccountView#handle()} very often does:
+     * <ul>
+     *   <li>provider {@code google} — the handle IS the Gmail address;</li>
+     *   <li>provider {@code casdoor} (native login) — admin-bff derives the account handle
+     *       from the id_token as {@code email > preferred_username > sub}
+     *       ({@code InternalAccountController.subjectFromIdToken}), so it is the user's EMAIL
+     *       whenever Casdoor emitted one.</li>
+     * </ul>
+     * Handing either to {@code /api/set-password} produces Casdoor's opaque
+     * {@code "The user ... doesn't exist"} refusal — the SAME failure mode
+     * {@link net.hugmesh.userbff.profile.ProfileService#changePassword} already documents for
+     * the JWT subject, simply reached by a different wrong value. (The subject itself is worse
+     * still: on this principal it is the composite {@code provider:handle} account id, which
+     * is what reached Casdoor for provider {@code google}, whose branch above stamps no
+     * {@code preferred_username} at all.)
+     *
+     * <h3>What IS the answer, and where it stops</h3>
+     * For an INVITE provider ({@code google} / {@code discord} / anything that is not the
+     * native {@code casdoor} login), admin-bff minted the Casdoor user itself with
+     * {@link CasdoorAdminClient#usernameOf(String, String)} over this exact
+     * {@code (provider, handle)} pair ({@code CasdoorAdminClient.ensureUser}), so re-running
+     * that one derivation reproduces the minted name rather than guessing at it.
+     *
+     * <p>For the NATIVE {@code casdoor} provider with an email-shaped handle the login name
+     * is genuinely GONE: admin-bff preferred {@code email} over {@code preferred_username}
+     * when it keyed the account and never persisted the latter, and the email local-part is
+     * only a guess (Casdoor user {@code alice_l} may well own {@code alice@example.com} —
+     * addressing {@code alice} would be aiming an account write at a DIFFERENT user). So this
+     * returns {@code null} and the write is refused with a reason the caller can act on. A
+     * native handle that is NOT email-shaped already IS the login name (that is the
+     * {@code preferred_username} branch of admin-bff's precedence) and is returned as such,
+     * which is the pre-existing working behaviour, unchanged.
+     *
+     * <p>RESIDUAL (needs an admin-bff change, specified in this PR's notes rather than
+     * half-done here): {@code CasdoorAdminClient.ensureUser} runs its derived name through a
+     * reserved/confusable gate that can auto-disambiguate ({@code alice -> alice2}), and
+     * admin-bff does not return the name it actually minted. For such an account this
+     * derivation still misses and Casdoor still refuses — honestly, but it refuses. The fix is
+     * for admin-bff to persist the minted Casdoor username on the account row and carry it on
+     * {@code AccountOut}, at which point this method becomes a straight read of that field.
+     */
+    static String casdoorUsernameOf(String provider, String handle) {
+        if (handle == null || handle.isBlank()) {
+            return null;
+        }
+        if (NATIVE_LOGIN_PROVIDER.equalsIgnoreCase(provider) && handle.indexOf('@') >= 0) {
+            return null;
+        }
+        return CasdoorAdminClient.usernameOf(provider, handle);
     }
 
     /**

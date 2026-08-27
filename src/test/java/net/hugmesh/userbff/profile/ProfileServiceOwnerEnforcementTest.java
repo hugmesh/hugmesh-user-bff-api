@@ -36,8 +36,12 @@ class ProfileServiceOwnerEnforcementTest {
 
     @Test
     void save_ignoresBodyUserId_andWritesUnderCaller() {
-        // alice submits a body that LIES about the userId, trying to write as "bob"
-        UserProfile spoof = new UserProfile("bob", null, "she/her", null, "Mallory", "public", true);
+        // alice submits a body that LIES about the userId, trying to write as "bob".
+        // vanitySubdomainEnabled stays FALSE here: this overload threads no username, and a
+        // vanity subdomain with no DNS label to make it out of is now refused outright
+        // (see saveWithVanity_butNoUsernameThreaded_failsClosed below). The spoof axis under
+        // test — the body's userId — is unchanged.
+        UserProfile spoof = new UserProfile("bob", null, "she/her", null, "Mallory", "public", false);
         UserProfile saved = profiles.save("alice", spoof).block();
 
         // persisted under alice, NOT bob
@@ -45,6 +49,31 @@ class ProfileServiceOwnerEnforcementTest {
         assertThat(repo.find("alice").block().displayName()).isEqualTo("Mallory");
         // bob's row was never created/touched
         assertThat(repo.find("bob").blockOptional()).isEmpty();
+    }
+
+    /**
+     * FAIL CLOSED: a vanity SUBDOMAIN is a DNS label, so it cannot be granted without a
+     * username to build one from. The previous behaviour persisted
+     * {@code vanity_subdomain_enabled=true} with a NULL {@code vanity_username} — a row
+     * claiming a subdomain that nothing could ever resolve — and skipped the federation
+     * publish in silence.
+     *
+     * <p>This is the reachable case now that {@link ProfileController#usernameOf} returns
+     * {@code null} rather than handing on a composite account id or an email address: a
+     * {@code bff_} session whose account handle is email-keyed threads no username at all.
+     */
+    @Test
+    void saveWithVanity_butNoUsernameThreaded_failsClosed_andWritesNothing() {
+        UserProfile wantsVanity = new UserProfile("vanity-nouser", null, null, null, "Alice", "public", true);
+
+        assertThatThrownBy(() -> profiles.save("vanity-nouser", wantsVanity).block())
+                .isInstanceOfSatisfying(ApiException.class, ex -> {
+                    assertThat(ex.status().value()).isEqualTo(400);
+                    assertThat(ex.getMessage()).contains("no username on the caller's token");
+                });
+
+        // and NOTHING was persisted — not even a half-row with vanity enabled
+        assertThat(repo.find("vanity-nouser").blockOptional()).isEmpty();
     }
 
     @Test
