@@ -74,6 +74,33 @@ casdoor:
     # app.bff.oidc.client-id — `app-user-bff`, not the bare app key.
     client-id: "${CASDOOR_ACCOUNT_CLIENT_ID:app-user-bff}"
     client-secret: "${CASDOOR_ACCOUNT_CLIENT_SECRET:}"
+  # ANONYMOUS FORGOT-PASSWORD (PasswordResetController). A SEPARATE flag from
+  # account.enabled above, on purpose: that one governs an AUTHENTICATED change whose
+  # worst case is a visible stub, this one exposes a permitAll credential-WRITING
+  # surface that mails a code and then rotates a password on a bare username. An
+  # operator who enabled self-service password CHANGE has not thereby consented to
+  # expose an anonymous reset.
+  #
+  # DARK BY DEFAULT (false) ⇒ both legs 503, never a polite "check your email" for a
+  # code that was never sent.
+  #
+  # FLIPPING THIS ON IS NOT SUFFICIENT: Casdoor delivers the code over SMTP, and SMTP
+  # is absent-by-default platform-wide (hugmesh-generator
+  # specs/cluster/manifests/casdoor/app-conf-configmap.yaml — "When that secret is
+  # ABSENT the env vars are unset"). Provision secret/<brand>/mail FIRST, or every
+  # request 202s and no mail ever arrives. The Casdoor wire shape is also NOT
+  # live-verified — see CasdoorPasswordResetClient's javadoc for the two curl commands
+  # that settle it.
+  password-reset:
+    enabled: "${CASDOOR_PASSWORD_RESET_ENABLED:false}"
+    # Casdoor addresses an application as <owner>/<name>; the owner of a registered
+    # application is always `admin` (NOT the user organization), and the name is the
+    # `app-<key>` casdoor-init writes — the same application id the OIDC legs present.
+    application-id: "${CASDOOR_PASSWORD_RESET_APPLICATION_ID:admin/app-user-bff}"
+    # The only password-quality rule this BFF states to the user, enforced BEFORE the
+    # Casdoor call so a too-short password is refused without burning the one-time code.
+    # Casdoor's org policy stays authoritative and may be stricter.
+    min-password-length: "${CASDOOR_PASSWORD_RESET_MIN_LENGTH:8}"
 
 # External self-block push targets. Base URLs grounded in the hugmesh-generator
 # manifests (tuwunel = Matrix :8008, akkoma = Mastodon-API :4000). STUBBED by

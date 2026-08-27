@@ -213,6 +213,16 @@ public class SecurityConfig {
         // authenticated (matches admin-bff), falling through to the
         // anyExchange().authenticated() catch-all below.
         ex.pathMatchers("/bff/login", "/bff/register", "/bff/session").permitAll();
+        // ANONYMOUS PASSWORD RESET — the forgot-password legs, for a caller who by
+        // definition has no session and no current password (PasswordResetController).
+        // permitAll for the SAME reason /bff/login is: requiring the credential the
+        // caller is trying to recover is a lock-out, not a control. Declared by EXACT
+        // path, NOT a /bff/password-reset/** subtree, so a future sibling endpoint under
+        // that prefix cannot inherit anonymity by accident — the same scoping discipline
+        // the gateway applies to /bff/public/appeal-contact and /bff/public/theme.
+        // These handlers 503 while casdoor.password-reset.enabled=false (the default), so
+        // permitAll only EXPOSES them; it authenticates and enables no one.
+        ex.pathMatchers("/bff/password-reset/request", "/bff/password-reset/confirm").permitAll();
         // The entire user surface — ROLE_USER floor. The converter adds ROLE_USER to
         // every authenticated principal, so .authenticated() == the ROLE_USER floor.
         // Owner-enforcement (owner = JWT subject) AND domain-scope (DOMAIN_<x>) are

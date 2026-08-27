@@ -140,6 +140,15 @@ class CasdoorRegistrationContractTest {
         // rejects the exchange unless it byte-matches, so drift here breaks login even
         // though nothing is ever redirected.
         PINNED.put("app.bff.oidc.redirect-uri", REGISTERED_REDIRECT_URI);
+
+        // ── the anonymous password-reset application id ──────────────────────
+        // Casdoor addresses an Application as <owner>/<name>. reconcile_app() writes
+        // "name": appname ("app-user-bff") into the built-in "admin" owner, so the
+        // send-verification-code call's applicationId must be exactly "admin/app-user-bff".
+        // This is a REAL handshake value, not a local knob: Casdoor refuses the call for
+        // an application it cannot resolve, which would make every reset request fail
+        // while the endpoint itself looked perfectly healthy.
+        PINNED.put("casdoor.password-reset.application-id", "admin/" + REGISTERED_APP);
     }
 
     /**
@@ -164,7 +173,15 @@ class CasdoorRegistrationContractTest {
             "SECRET — see app.bff.oidc.client-secret.",
             "casdoor.gateway-base",
             "the hugmesh-pki-gateway front door, NOT Casdoor itself. It is deliberately absent from "
-                    + "the login chain: its route table has no predicate matching the token endpoint.");
+                    + "the login chain: its route table has no predicate matching the token endpoint.",
+            "casdoor.password-reset.enabled",
+            "local feature gate (the anonymous forgot-password surface ships dark); Casdoor has no "
+                    + "matching notion. NOTE it is also not SUFFICIENT: Casdoor mails the code over "
+                    + "SMTP, which is absent-by-default platform-wide.",
+            "casdoor.password-reset.min-password-length",
+            "a LOCAL pre-flight floor so a too-short password is refused before the one-time code is "
+                    + "burned. Casdoor's org password policy remains authoritative and may be stricter, "
+                    + "so there is no single Casdoor-side value to agree with.");
 
     /** Env var → property key, for the manifest scan. Same contract, spelled the k8s way. */
     private static final Map<String, String> ENV_TO_KEY = Map.of(

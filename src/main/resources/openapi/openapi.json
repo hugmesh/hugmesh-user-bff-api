@@ -27,6 +27,9 @@
     "name" : "Character-parts",
     "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
   }, {
+    "name" : "Password reset",
+    "description" : "Anonymous forgot-password: request a mailed code, then redeem it. Ships dark behind casdoor.password-reset.enabled."
+  }, {
     "name" : "Profile",
     "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
   }, {
@@ -1475,6 +1478,70 @@
             "application/json" : {
               "schema" : {
                 "$ref" : "#/components/schemas/RegisterEmailRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/password-reset/request" : {
+      "post" : {
+        "tags" : [ "Password reset" ],
+        "summary" : "Request a password-reset code, mailed by the IdP to the address it holds for the account. ALWAYS 202 for a well-formed request — a non-existent username is indistinguishable from an existing one (anti-enumeration). 503 when password reset is dark.",
+        "operationId" : "request",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResetRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/password-reset/confirm" : {
+      "post" : {
+        "tags" : [ "Password reset" ],
+        "summary" : "Redeem a reset code and set a new password. 200 only when the IdP actually wrote the credential; 400 with one non-revealing message when the code or the new password was refused; 503 when password reset is dark.",
+        "operationId" : "confirm",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResetConfirm"
               }
             }
           },
@@ -3069,6 +3136,38 @@
             "maxLength" : 255,
             "minLength" : 0,
             "pattern" : "[\\x20-\\x7E]*",
+            "type" : "string"
+          }
+        }
+      },
+      "ResetRequest" : {
+        "required" : [ "username" ],
+        "type" : "object",
+        "properties" : {
+          "username" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "ResetConfirm" : {
+        "required" : [ "code", "newPassword", "username" ],
+        "type" : "object",
+        "properties" : {
+          "username" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "code" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "newPassword" : {
+            "maxLength" : 256,
+            "minLength" : 1,
             "type" : "string"
           }
         }
