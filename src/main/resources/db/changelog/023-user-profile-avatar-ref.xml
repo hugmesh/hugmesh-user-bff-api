@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        user_profile.avatar_ref — the OPAQUE, STABLE, PER-USER handle under which the
+        profile picture is served to OTHER users:
+        GET /bff/user/character/avatar/{ref}/body.
+
+        Why a handle at all. 022 gave the avatar bytes a serve route, but an
+        OWNER-SCOPED one (GET /bff/user/profile/avatar/body resolves the owner from the
+        JWT subject, so the URL is the same for everybody). That is right for "show me
+        my own picture" and USELESS for the VN forum sprite, which renders the AUTHOR's
+        image inside every READER's browser: the same URL in a reader's <img> would
+        return the READER's avatar, not the author's. hugmesh-forum-ui therefore stored
+        the placeholder "/bff/user/character/avatar" in the forum VN profile
+        (hugmesh-forum-bff-api ForumVnProfile.character_img_ref) — a path with no route
+        behind it at all, so every avatar-mode VN profile rendered a broken image
+        (hugmesh-forum-bff-api issue #3).
+
+        The owner cannot travel in the URL either: a Casdoor subject is frequently a
+        `provider:handle` composite carrying an e-mail (`google:alice@example.com`),
+        which is neither URL-path-safe nor something to publish into every reader's
+        access logs — and the forum-bff allowlist that guards the stored value
+        (`^/bff/user/(?!.*\.\.)[A-Za-z0-9._/-]{1,246}$`) has no `:` or `@` in its
+        charset by design.
+
+        So: a random UUID, minted ONCE per owner (lazily, the first time the owner asks
+        for their own ref) and never rotated — a stored ref must keep resolving for as
+        long as the VN profile holds it. It identifies the OWNER's avatar slot, not one
+        upload, so re-uploading a picture keeps the same ref and simply changes the
+        pixels behind it (which is also why the serve route is `no-store`).
+
+        Column (NULLABLE — a profile with no picture has no ref, and pre-023 rows mint
+        theirs on first use):
+          • avatar_ref — 36-char UUID text (lowercase hex + hyphens, so it fits the
+                         forum-bff allowlist charset unchanged). UNIQUE, so the reverse
+                         lookup ref -> owner can never be ambiguous; the index makes
+                         that lookup a point read. Nullable + UNIQUE is fine on both
+                         Postgres and the H2 PostgreSQL-compat slice (NULLs do not
+                         collide).
+
+        Numbered 023 — the band ABOVE the current max (022-user-profile-avatar-body),
+        registered LAST in db.changelog-master.xml with a SINGLE <include>.
+    -->
+
+    <changeSet id="023-1-user-profile-avatar-ref" author="hugmesh">
+        <addColumn tableName="user_profile">
+            <column name="avatar_ref" type="varchar(36)"/>
+        </addColumn>
+        <createIndex tableName="user_profile" indexName="ux_user_profile_avatar_ref" unique="true">
+            <column name="avatar_ref"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="user_profile" indexName="ux_user_profile_avatar_ref"/>
+            <dropColumn tableName="user_profile" columnName="avatar_ref"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

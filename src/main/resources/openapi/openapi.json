@@ -63,6 +63,9 @@
     "name" : "Mastodon proxy (D6)",
     "description" : "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
   }, {
+    "name" : "Character-avatar",
+    "description" : "The profile picture as a VN forum sprite: the caller's own stable serve handle, and the raster bytes behind a handle (readable by other users in the same brand so a sprite renders in their posts)."
+  }, {
     "name" : "Notifications (in-app floor)",
     "description" : "The caller's OWN in-app notifications (owner = JWT subject, domain-scoped). The always-on in-app channel — read + mark-read only; the actions reconciler writes them."
   }, {
@@ -2003,6 +2006,53 @@
         }
       }
     },
+    "/bff/user/character/avatar" : {
+      "get" : {
+        "tags" : [ "Character-avatar" ],
+        "summary" : "My VN character-avatar serve handle + its image URL (the value to store as a forum VN profile characterImgRef). 404 when I have no stored profile picture. Owner = JWT subject.",
+        "operationId" : "myRef",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CharacterAvatarRef"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/character/avatar/{ref}/body" : {
+      "get" : {
+        "tags" : [ "Character-avatar" ],
+        "summary" : "Serve the raster bytes behind a character-avatar handle. Readable by the owner and by other users in the same brand (a VN sprite has to render inside their posts); any miss — malformed/unknown handle, cross-brand caller, no stored pixels, non-raster stored type — is a uniform 404.",
+        "operationId" : "serveBody_1",
+        "parameters" : [ {
+          "name" : "ref",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string",
+                  "format" : "byte"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/user/cards" : {
       "get" : {
         "tags" : [ "Cards" ],
@@ -3311,6 +3361,17 @@
           "revokedAt" : {
             "type" : "string",
             "format" : "date-time"
+          }
+        }
+      },
+      "CharacterAvatarRef" : {
+        "type" : "object",
+        "properties" : {
+          "ref" : {
+            "type" : "string"
+          },
+          "url" : {
+            "type" : "string"
           }
         }
       },
