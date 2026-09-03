@@ -129,4 +129,42 @@ public interface UserProfileR2dbcRepository extends ReactiveCrudRepository<UserP
                                        @Param("avatarUrl") String avatarUrl,
                                        @Param("avatarBody") byte[] avatarBody,
                                        @Param("avatarContentType") String avatarContentType);
+
+    // ---- AVATAR REF (023 — the cross-user serve handle) ----
+    //
+    // The opaque per-owner handle the avatar is served under to OTHER users
+    // (GET /bff/user/character/avatar/{ref}/body). Minted ONCE and never rotated: a
+    // forum VN profile stores the resulting path, so a rotating ref would silently
+    // break every already-saved sprite.
+
+    /** Reverse lookup: the profile row carrying this serve handle (UNIQUE by 023's
+     *  index, so at most one). Deliberately NOT domain-scoped — the row's own
+     *  {@code domain} is what the caller's domain is then compared against, and a
+     *  cross-domain miss must be indistinguishable from an unknown ref (a uniform
+     *  404), not a different query. */
+    Mono<UserProfileEntity> findByAvatarRef(String avatarRef);
+
+    /** MINT-IF-ABSENT (scoped): assign the handle ONLY when the row has none. The
+     *  {@code avatar_ref IS NULL} predicate is what makes minting idempotent and
+     *  concurrency-safe — a second racing mint matches 0 rows and the caller re-reads
+     *  the winner, so one owner can never end up with two live handles. Does NOT touch
+     *  {@code updated_at}: minting a serve handle is not a profile edit. */
+    String ASSIGN_AVATAR_REF_SCOPED =
+            "UPDATE user_profile SET avatar_ref = :avatarRef "
+            + "WHERE user_id = :userId AND domain = :domain AND avatar_ref IS NULL";
+
+    /** MINT-IF-ABSENT (unscoped — the SUPERADMIN cross-domain bypass). */
+    String ASSIGN_AVATAR_REF_UNSCOPED =
+            "UPDATE user_profile SET avatar_ref = :avatarRef "
+            + "WHERE user_id = :userId AND avatar_ref IS NULL";
+
+    @Modifying
+    @Query(ASSIGN_AVATAR_REF_SCOPED)
+    Mono<Long> assignAvatarRefScoped(@Param("userId") String userId, @Param("domain") String domain,
+                                     @Param("avatarRef") String avatarRef);
+
+    @Modifying
+    @Query(ASSIGN_AVATAR_REF_UNSCOPED)
+    Mono<Long> assignAvatarRefUnscoped(@Param("userId") String userId,
+                                       @Param("avatarRef") String avatarRef);
 }

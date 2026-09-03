@@ -11,8 +11,8 @@ import java.time.Instant;
  * {@link UserProfileRepository}). Distinct from the {@link UserProfile} WIRE record
  * (which carries Jackson/validation annotations) so the persistence mapping and the
  * API contract evolve independently. Column names/types match the Liquibase changelog
- * (001 + 004 vanity_username + 008 screen_reader_name + 010 domain + 014 avatar_url)
- * EXACTLY.
+ * (001 + 004 vanity_username + 008 screen_reader_name + 010 domain + 014 avatar_url
+ * + 022 avatar_body/avatar_content_type + 023 avatar_ref) EXACTLY.
  *
  * <p>{@code userId} is the natural PK (Casdoor JWT subject); {@code @Id} marks it so
  * the reactive repository's CRUD keys on it. {@code domain} is the multi-brand tenant
@@ -38,6 +38,12 @@ public record UserProfileEntity(
         // the profile JSON; they are served by GET /bff/user/profile/avatar/body.
         @Column("avatar_body") byte[] avatarBody,
         @Column("avatar_content_type") String avatarContentType,
+        // 023: the OPAQUE, STABLE per-owner handle the avatar is served under to
+        // OTHER users (GET /bff/user/character/avatar/{ref}/body). Minted once,
+        // never rotated, NULL until the owner first asks for it. Deliberately
+        // absent from the UserProfile DTO — it is published by its own endpoint,
+        // not smuggled into the profile JSON.
+        @Column("avatar_ref") String avatarRef,
         @Column("domain") String domain,
         @Column("updated_at") Instant updatedAt) {
 }

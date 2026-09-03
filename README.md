@@ -37,7 +37,7 @@ flowchart LR
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
     subgraph BFF["hugmesh-user-bff-api (ROLE_USER floor, owner = JWT subject)"]
-        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE) ·<br/>character/parts · character/stickers · mesh-devices"]
+        Surfaces["/bff/user/** surfaces<br/>profile · home-guide · preferences · cards ·<br/>blocks · self-silence · connected-clients · sessions ·<br/>media · status · notifications · notifications/events(SSE) ·<br/>character/parts · character/stickers · character/avatar · mesh-devices"]
         Internal["/bff/user/internal/**<br/>(ROLE_SERVICE only)"]
         DB[("own R2DBC tables<br/>+ domain-scoped rows")]
     end
@@ -481,6 +481,34 @@ upload path). `ROLE_USER` floor.
   endpoint** — a sticker's pixels live on the homeserver (`mxc://`) and are fetched
   direct-to-homeserver by the Matrix client, never proxied through this BFF.
 - `GET /bff/user/character/stickers` — list MY stickers (newest first).
+
+**VN character avatar — `CharacterAvatarController` (`/bff/user/character/avatar`)** — the
+profile picture as a forum-post sprite, served to the READERS of a post. `ROLE_USER` floor.
+- `GET /bff/user/character/avatar` — MY stable serve **handle** (023
+  `user_profile.avatar_ref`, a random UUID minted lazily on first use and never rotated)
+  plus the assembled `/bff/user/character/avatar/{ref}/body` URL. `404` when I have no
+  stored picture, which `hugmesh-forum-ui` feature-detects to hide the "use my avatar"
+  option. This is the value the forum VN profile stores as its `characterImgRef`.
+- `GET /bff/user/character/avatar/{ref}/body` — the raster pixels behind a handle.
+  **Not owner-scoped**, on purpose: the owner always, plus any caller in the SAME brand
+  (or an unscoped SUPERADMIN caller) — mirroring the ACTIVE branch of the sticker serve,
+  because it is the same job (media that has to render inside other users' posts). There
+  is no PENDING ladder to mirror: an avatar cannot be stored un-moderated
+  (`AvatarService.uploadAndStore` runs the edge-AI gate before persisting). Served with
+  the sniffed MIME recorded at upload, restricted to `ImageSniffer`'s raster set so the
+  SVG rejection holds on the READ side too, `nosniff` + `default-src 'none'` +
+  `Content-Disposition: inline`, and `Cache-Control: no-store` (the handle is stable
+  across re-uploads, so a URL-keyed cache could not tell that the pixels changed). Every
+  miss — malformed handle, unknown handle, cross-brand caller, no stored pixels — is one
+  uniform `404`.
+
+  *Why a handle instead of a path like `/bff/user/character/avatar`:* the owner-scoped
+  serve `GET /bff/user/profile/avatar/body` resolves the owner from the JWT, so the same
+  URL in a reader's `<img>` returns the READER's avatar, not the author's; and the owner
+  cannot travel in the URL either, because a Casdoor subject is routinely a
+  `provider:handle` composite carrying an e-mail. `hugmesh-forum-ui` used to store the
+  literal `/bff/user/character/avatar`, which had no route at all behind it — every
+  avatar-mode VN profile rendered a broken image (hugmesh-forum-bff-api issue #3).
 
 **MSC2545 sticker-pack registration — `StickerPackRegistrationService`** (no HTTP
 surface of its own) — the SERVER half of getting a user's ACTIVE stickers into their

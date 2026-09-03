@@ -5,6 +5,8 @@ import reactor.core.publisher.Mono;
 import net.hugmesh.commons.security.DomainRegistry;
 import net.hugmesh.commons.tenancy.DomainScope;
 
+import java.util.UUID;
+
 /**
  * Owner-AND-domain-scoped facade over the Spring Data {@link UserProfileR2dbcRepository}
  * for {@code user_profile}. Keeps the original method surface ({@code find} / {@code save}
@@ -72,6 +74,77 @@ public class UserProfileRepository {
 
     /** Stored avatar pixels + the SNIFFED type recorded at save. */
     public record AvatarBody(byte[] bytes, String contentType) { }
+
+    /**
+     * Stored avatar pixels + sniffed type resolved by the 023 SERVE HANDLE, carrying
+     * the row's OWNER and DOMAIN so the caller can make the cross-user access
+     * decision. Deliberately NOT domain-scoped in the query: a cross-domain ref must
+     * be refused by the SAME uniform 404 as an unknown one, which requires reading the
+     * row first and comparing.
+     *
+     * @param owner  the subject the avatar belongs to (never echoed on the wire).
+     * @param domain the brand the row lives in.
+     */
+    public record AvatarBodyForRef(byte[] bytes, String contentType, String owner, String domain) { }
+
+    /**
+     * The avatar bytes behind a 023 serve handle, or EMPTY when the handle is unknown
+     * or the row has no stored pixels. Applies NO access rule — the caller
+     * ({@code CharacterAvatarService}) owns that decision, and every refusal it makes
+     * must look identical to this method's empty result.
+     */
+    public Mono<AvatarBodyForRef> findAvatarBodyByRef(String avatarRef) {
+        if (avatarRef == null || avatarRef.isBlank()) {
+            return Mono.empty();
+        }
+        return repo.findByAvatarRef(avatarRef)
+                .flatMap(e -> e.avatarBody() == null || e.avatarBody().length == 0
+                        ? Mono.empty()
+                        : Mono.just(new AvatarBodyForRef(e.avatarBody(), e.avatarContentType(),
+                                e.userId(), e.domain())));
+    }
+
+    /**
+     * The owner's STABLE avatar serve handle (023), minting one on first use.
+     *
+     * <p>Lazy minting is what makes this work for rows that predate 023 — everyone who
+     * had already uploaded a picture gets a handle the first time they ask for it,
+     * with no data migration. It is also why the handle can never be rotated here:
+     * {@code assignAvatarRef*} carries an {@code avatar_ref IS NULL} predicate, so a
+     * row that already has one is left alone and two racing minters converge (the
+     * loser's UPDATE matches 0 rows and the RE-READ below returns the winner's value).
+     *
+     * <p>Returns EMPTY when the owner has no profile row at all — a caller with no
+     * stored picture must get a 404, not a freshly-minted handle pointing at nothing.
+     *
+     * @param userId the owner (the caller's JWT subject — never a client-supplied id).
+     * @param domain the caller's brand ({@code null} = SUPERADMIN cross-domain bypass).
+     */
+    public Mono<String> ensureAvatarRef(String userId, String domain) {
+        return findEntity(userId, domain).flatMap(e -> e.avatarRef() != null && !e.avatarRef().isBlank()
+                ? Mono.just(e.avatarRef())
+                : mintAvatarRef(userId, domain));
+    }
+
+    /** Mint a fresh handle, write it ONLY if the row still has none, then RE-READ so a
+     *  racing minter's value (not ours) is what the caller is told. */
+    private Mono<String> mintAvatarRef(String userId, String domain) {
+        String minted = UUID.randomUUID().toString();
+        Mono<Long> assign = DomainScope.isUnscoped(domain)
+                ? repo.assignAvatarRefUnscoped(userId, minted)
+                : repo.assignAvatarRefScoped(userId, domain, minted);
+        return assign.then(findEntity(userId, domain))
+                .flatMap(e -> e.avatarRef() == null || e.avatarRef().isBlank()
+                        ? Mono.empty()
+                        : Mono.just(e.avatarRef()));
+    }
+
+    /** The raw row for an owner, scoped or unscoped from a nullable {@code domain}. */
+    private Mono<UserProfileEntity> findEntity(String userId, String domain) {
+        return DomainScope.isUnscoped(domain)
+                ? repo.findByUserId(userId)
+                : repo.findByUserIdAndDomain(userId, domain);
+    }
 
     /**
      * Upsert the owner's profile in their domain. Portable (Postgres + H2): UPDATE
