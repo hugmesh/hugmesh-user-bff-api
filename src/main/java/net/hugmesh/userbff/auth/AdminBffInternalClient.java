@@ -398,19 +398,43 @@ public class AdminBffInternalClient {
                 .then();
     }
 
-    /** The account's namespace grants (the {@code /me/namespaces} leg). */
-    public Mono<List<NamespaceView>> accountNamespaces(String accountId) {
+    /**
+     * The account's granted namespace names (the {@code /me/namespaces} leg) — admin-bff's
+     * {@code GET /bff/internal/accounts/{id}/namespaces}, whose body is
+     * {@code {"namespaces": ["wiki", "forum", ...]}} (a JSON OBJECT wrapping a string array,
+     * built by {@code InternalAccountController#namespaces} as
+     * {@code Map.of("namespaces", accounts.namespacesFor(a))}).
+     *
+     * <p><b>This decode was wrong and failed SILENTLY until 2026-09-16.</b> It read the body
+     * as {@code bodyToFlux(NamespaceView.class)} — a {@code (grantee, namespace)} record shape
+     * admin-bff has never emitted on this route. Measured against the real body
+     * {@code {"namespaces":["wiki","forum"]}} it did not throw: it produced the single element
+     * {@code [NamespaceView[grantee=null, namespace=null]]}, i.e. "this account holds exactly
+     * one grant, to a null namespace". A caller would have rendered one bogus grant and lost
+     * every real one, with no error anywhere. The {@code NamespaceView} record is deleted with
+     * the decode — it described a wire shape that does not exist, and nothing else referenced it.
+     *
+     * <p>Fails CLOSED on a missing/absent {@code namespaces} key (empty list, never null), and
+     * the returned list is an immutable copy. Same fail-closed stub as every other call here
+     * when the OIDC surface is dark.
+     */
+    public Mono<List<String>> accountNamespaces(String accountId) {
         if (http == null) {
             return stub("accountNamespaces");
         }
         return http.get().uri("/bff/internal/accounts/{id}/namespaces", accountId)
                 .retrieve()
-                .bodyToFlux(NamespaceView.class)
-                .collectList();
+                .bodyToMono(NAMESPACES_RESPONSE_TYPE)
+                .map(body -> {
+                    List<String> ns = body == null ? null : body.get("namespaces");
+                    return ns == null ? List.<String>of() : List.copyOf(ns);
+                })
+                .defaultIfEmpty(List.of());
     }
 
-    /** A namespace grant view. */
-    public record NamespaceView(String grantee, String namespace) {}
+    /** The {@code {"namespaces": [...]}} body shape of admin-bff's account-namespaces read. */
+    private static final org.springframework.core.ParameterizedTypeReference<Map<String, List<String>>>
+            NAMESPACES_RESPONSE_TYPE = new org.springframework.core.ParameterizedTypeReference<>() {};
 
     /**
      * Stamp the encrypted OIDC custody blobs onto admin-bff's bff_session row. The

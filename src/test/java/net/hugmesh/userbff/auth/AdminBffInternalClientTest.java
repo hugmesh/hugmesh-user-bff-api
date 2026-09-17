@@ -273,6 +273,47 @@ class AdminBffInternalClientTest {
                 .verifyComplete();
     }
 
+    /**
+     * REGRESSION PIN — the {@code /accounts/{id}/namespaces} decode, against the body
+     * admin-bff's {@code InternalAccountController#namespaces} actually emits:
+     * {@code Map.of("namespaces", accounts.namespacesFor(a))}, i.e. a JSON OBJECT wrapping a
+     * string array.
+     *
+     * <p>Until 2026-09-16 this client read that body as {@code bodyToFlux(NamespaceView.class)}
+     * — a {@code (grantee, namespace)} record shape admin-bff has never emitted here. Measured
+     * against this exact JSON it did NOT throw: it produced
+     * {@code [NamespaceView[grantee=null, namespace=null]]}, so a consumer would have shown one
+     * bogus grant to a null namespace and silently lost every real one. The method had no
+     * caller, which is why the whole-cloth wrong shape survived; {@code
+     * LegacyPathParityController#myNamespaces} is now its first one.
+     */
+    @Test
+    void accountNamespaces_decodesAdminBffsNamespacesObject() {
+        ExchangeFunction realShape = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"namespaces\":[\"forum\",\"wiki\"]}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(realShape).build());
+
+        StepVerifier.create(client.accountNamespaces("google:alice@example.test"))
+                .assertNext(ns -> assertThat(ns).containsExactly("forum", "wiki"))
+                .verifyComplete();
+    }
+
+    /** Fails CLOSED, not null: an admin-bff that ever omits the key yields an EMPTY list, so a
+     *  caller can never read "no such key" as "every namespace" (or NPE on it). */
+    @Test
+    void accountNamespaces_missingKey_isEmptyList() {
+        ExchangeFunction noKey = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json").body("{}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(noKey).build());
+
+        StepVerifier.create(client.accountNamespaces("google:alice@example.test"))
+                .assertNext(ns -> assertThat(ns).isEmpty())
+                .verifyComplete();
+    }
+
     @Test
     void config_whenEnabled_buildsLiveClient_andAppliesMtlsConnector() {
         // mtls.enabled=true but no keystore file present ⇒ FederationHttpClientSsl

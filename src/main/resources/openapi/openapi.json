@@ -9,6 +9,36 @@
     "url" : ""
   } ],
   "tags" : [ {
+    "name" : "Legacy path parity",
+    "description" : "admin-bff AuthController parity for the cluster-routed legacy user paths (/bff/me/namespaces, /bff/provision/matrix, /bff/provision/mastodon). Decision 25 on hugmesh-generator#347: parity first, then retire."
+  }, {
+    "name" : "Character-parts",
+    "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
+  }, {
+    "name" : "Password reset",
+    "description" : "Anonymous forgot-password: request a mailed code, then redeem it. Ships dark behind casdoor.password-reset.enabled."
+  }, {
+    "name" : "Notifications (TEST-SEED, self only)",
+    "description" : "TEST/SEED-ONLY. Ships dark behind app.test-seed.enabled (default false). Creates a real in-app notification for the CALLER ONLY via the same delivery service the production ROLE_SERVICE internal-deliver path uses — never a parallel write."
+  }, {
+    "name" : "Matrix proxy (D6)",
+    "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
+  }, {
+    "name" : "Self-silence",
+    "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
+  }, {
+    "name" : "Account status",
+    "description" : "Polling endpoint for the caller's own account status (roles, domain, silence)."
+  }, {
+    "name" : "Mastodon proxy (D6)",
+    "description" : "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
+  }, {
+    "name" : "Mesh-devices (internal bridge + moderation)",
+    "description" : "SERVICE-PRINCIPAL ONLY: the full node-id → Matrix-localpart mapping (active rows only) + the batch LoRa status write-back for the mesh↔Matrix bridge, plus the cross-owner moderation console list and the revoke/restore state writes mod-bff drives."
+  }, {
+    "name" : "Connected clients",
+    "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."
+  }, {
     "name" : "Home guide",
     "description" : "Per-user home/getting-started guide dismissal (owner = JWT subject)."
   }, {
@@ -24,20 +54,11 @@
     "name" : "Cards",
     "description" : "The caller's OWN federation bundles (owner = JWT subject), via hugmesh-federation-api."
   }, {
-    "name" : "Character-parts",
-    "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
-  }, {
-    "name" : "Password reset",
-    "description" : "Anonymous forgot-password: request a mailed code, then redeem it. Ships dark behind casdoor.password-reset.enabled."
-  }, {
     "name" : "Profile",
     "description" : "The caller's OWN profile (owner = JWT subject). Password/email go to the Casdoor IdP."
   }, {
     "name" : "User preferences",
     "description" : "Durable per-user UI preferences (owner = JWT subject, domain-scoped). Carries media.poison.default (the per-user AI-cloak default; value vocabulary = the MediaPoisonMode schema, off|low|medium|high, BFF-owned) and the mastodon.appearance.* keys (the mastodon-ui appearance panel)."
-  }, {
-    "name" : "Notifications (TEST-SEED, self only)",
-    "description" : "TEST/SEED-ONLY. Ships dark behind app.test-seed.enabled (default false). Creates a real in-app notification for the CALLER ONLY via the same delivery service the production ROLE_SERVICE internal-deliver path uses — never a parallel write."
   }, {
     "name" : "Self-block",
     "description" : "The caller's OWN blocks (owner = JWT subject) + instance-block recommendation."
@@ -48,20 +69,8 @@
     "name" : "Notification preferences",
     "description" : "Per-category notification preferences (owner = JWT subject, domain-scoped). account-restriction is forced-on / un-silenceable."
   }, {
-    "name" : "Matrix proxy (D6)",
-    "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
-  }, {
-    "name" : "Self-silence",
-    "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
-  }, {
-    "name" : "Account status",
-    "description" : "Polling endpoint for the caller's own account status (roles, domain, silence)."
-  }, {
     "name" : "Character-moderation (internal receiver)",
     "description" : "SERVICE-PRINCIPAL ONLY part/sticker status flip (PENDING→ACTIVE/REJECTED) when a moderator resolves the finding. PENDING-guarded + idempotent (a no-op/unknown id is a 404)."
-  }, {
-    "name" : "Mastodon proxy (D6)",
-    "description" : "Owner-scoped Mastodon reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
   }, {
     "name" : "Character-avatar",
     "description" : "The profile picture as a VN forum sprite: the caller's own stable serve handle, and the raster bytes behind a handle (readable by other users in the same brand so a sprite renders in their posts)."
@@ -71,12 +80,6 @@
   }, {
     "name" : "Sessions",
     "description" : "The caller's OWN active login sessions (owner = JWT-derived account). List + revoke."
-  }, {
-    "name" : "Mesh-devices (internal bridge + moderation)",
-    "description" : "SERVICE-PRINCIPAL ONLY: the full node-id → Matrix-localpart mapping (active rows only) + the batch LoRa status write-back for the mesh↔Matrix bridge, plus the cross-owner moderation console list and the revoke/restore state writes mod-bff drives."
-  }, {
-    "name" : "Connected clients",
-    "description" : "The caller's OWN connected apps + device sessions (owner = JWT subject). Requires an external-client role."
   }, {
     "name" : "Notifications (internal deliver)",
     "description" : "SERVICE-PRINCIPAL ONLY in-app notification delivery (target taken from the body). Honours prefs (account-restriction forced-on) and is idempotent on the source event."
@@ -1503,6 +1506,50 @@
         }
       }
     },
+    "/bff/provision/matrix" : {
+      "post" : {
+        "tags" : [ "Legacy path parity" ],
+        "summary" : "Broker/recover the caller's Matrix homeserver token server-side (held in custody; the token is NEVER returned). admin-bff AuthController parity. 403 without ROLE_MATRIX or before registration is complete; 502 on a mint failure.",
+        "operationId" : "authProvisionMatrix",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/provision/mastodon" : {
+      "post" : {
+        "tags" : [ "Legacy path parity" ],
+        "summary" : "Broker/recover the caller's Mastodon homeserver token server-side (held in custody; the token is NEVER returned). admin-bff AuthController parity. 403 without ROLE_MASTODON or before registration is complete; 502 on a mint failure.",
+        "operationId" : "authProvisionMastodon",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bff/password-reset/request" : {
       "post" : {
         "tags" : [ "Password reset" ],
@@ -2160,6 +2207,28 @@
         "tags" : [ "SSO auth" ],
         "summary" : "The caller's account view (from admin-bff). Authenticated. 503 when the SSO surface is dark.",
         "operationId" : "me_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/me/namespaces" : {
+      "get" : {
+        "tags" : [ "Legacy path parity" ],
+        "summary" : "The caller's own granted namespaces. admin-bff AuthController parity (cluster routes /bff/me/** to user-bff). 401 with no resolvable account.",
+        "operationId" : "authMyNamespaces",
         "responses" : {
           "200" : {
             "description" : "OK",

@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+import net.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
 import net.hugmesh.userbff.hsproxy.ServiceTokenBroker;
 
 import java.util.Locale;
@@ -174,15 +175,61 @@ public class CanonicalIdentityResolver {
 
     /**
      * The caller's OWN account id, mirroring the key admin-bff persisted -- for consumers that
-     * need the id itself (e.g. {@code SessionsService}), not a homeserver localpart. Claim-derived,
-     * NEVER a cross-namespace guess: {@code subject} = first non-blank of {@link #SUBJECT_CLAIMS};
-     * a subject that already looks like a full account id (contains {@code ':'} -- e.g. the bff_
-     * synthetic principal's {@code sub}, which IS {@code provider:handle} for EVERY provider) is
-     * used verbatim, else it is normalised to {@code casdoor:<subject>}. {@code null} when the JWT
-     * carries no usable identity claim.
+     * need the id itself (e.g. {@code SessionsService}, {@code LegacyPathParityController}), not a
+     * homeserver localpart. NEVER a cross-namespace guess. Two carriers, in order:
+     *
+     * <ol>
+     *   <li><b>The {@code bff_}-session SYNTHETIC principal</b> (recognised by
+     *       {@link BffSessionAuthenticationWebFilter#SYNTHETIC_TOKEN_MARKER} on the token value):
+     *       its {@code sub} IS the admin-bff account id ({@code provider:handle}) -- the exact
+     *       value {@code AccountStore.newSession} wrote into {@code bff_session.account_id} -- so
+     *       it is used VERBATIM and the claim derivation below is never consulted. A synthetic
+     *       principal with a blank {@code sub} is a filter-internal bug, not a caller condition, so
+     *       it FAILS CLOSED ({@code null}) rather than falling through.</li>
+     *   <li><b>A REAL Casdoor JWT presented directly:</b> {@code subject} = first non-blank of
+     *       {@link #SUBJECT_CLAIMS}, normalised to {@code casdoor:<subject>} (a subject that
+     *       already contains {@code ':'} is honoured verbatim). {@code null} when the JWT carries
+     *       no usable identity claim.</li>
+     * </ol>
+     *
+     * <p><b>Why branch 1 exists (regression pin).</b> {@link #SUBJECT_CLAIMS} puts {@code email}
+     * and {@code preferred_username} AHEAD of {@code sub}, and
+     * {@link BffSessionAuthenticationWebFilter#syntheticJwt} ALWAYS stamps one of those two with
+     * the bare account HANDLE (the {@code email} claim for provider {@code google}, {@code
+     * preferred_username} for every other provider). Without this branch, a {@code bff_} session
+     * for account {@code google:alice@example.test} derived subject {@code alice@example.test},
+     * which contains no {@code ':'} and was therefore normalised to {@code casdoor:alice@example.test}
+     * -- an id no account is keyed under. MEASURED with a principal built exactly as the filter
+     * builds it: {@code GET /bff/me/namespaces} answered {@code 401 {"error":"login required"}}
+     * after asking admin-bff for {@code casdoor:alice@example.test}, and the same for a
+     * {@code discord:} account, while a {@code casdoor:} account (where the normalisation happens
+     * to reproduce the real key) answered 200 -- so the failure was invisible on a cluster that
+     * holds only {@code casdoor:} accounts. {@code SessionsService.accountIdFromJwt} already
+     * carried this branch privately (its javadoc records the live {@code 200 []} symptom on the
+     * sessions surface); hoisting it here makes every consumer of this method correct by default
+     * instead of each one having to remember.
      */
     public static String ownAccountId(Jwt jwt) {
+        if (jwt == null) {
+            return null;
+        }
+        if (isSyntheticSessionPrincipal(jwt)) {
+            String subject = jwt.getSubject();
+            return (subject == null || subject.isBlank()) ? null : subject;
+        }
         return ownAccountId(subjectOf(jwt));
+    }
+
+    /** Whether {@code jwt} is the non-decodable {@code bff_}-session principal
+     *  {@link BffSessionAuthenticationWebFilter#syntheticJwt} builds server-side, rather than a
+     *  real Casdoor token. Recognised by the SAME token-value marker
+     *  {@code SessionsService.accountIdFromJwt} and
+     *  {@code FederationWebClientConfig.bearerTokenForwardingFilter} already branch on -- one
+     *  recognition mechanism, not a second one. */
+    static boolean isSyntheticSessionPrincipal(Jwt jwt) {
+        String tokenValue = jwt.getTokenValue();
+        return tokenValue != null
+                && tokenValue.startsWith(BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER);
     }
 
     /** Subject-string overload of {@link #ownAccountId(Jwt)} -- the shared account-id derivation
