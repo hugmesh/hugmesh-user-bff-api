@@ -60,7 +60,7 @@ import java.util.Map;
  *   <tr><td>brokering not configured</td><td>(no such gate)</td><td>503 — see below</td></tr>
  * </table>
  *
- * <h2>The four DELIBERATE divergences, and why each one is not a regression</h2>
+ * <h2>The DELIBERATE divergences, and why each one is not a regression</h2>
  *
  * <ol>
  *   <li><b>The provision response body carries NO {@code access_token}.</b> admin-bff returns
@@ -86,23 +86,71 @@ import java.util.Map;
  *       {@code accountFromJwt} resolves {@code email → google:<email>} else
  *       {@code preferred_username → discord:<preferred_username>}. That is precisely the
  *       cross-namespace lookup {@link CanonicalIdentityResolver}'s class doc documents as the
- *       account-takeover vector it was created to delete. This class uses the resolver — the
- *       caller's OWN {@code casdoor:<subject>} account, claim-first off a {@code bff_}-session
- *       synthetic principal. <b>On the {@code bff_} carrier the two are identical</b> (the
- *       synthetic {@code sub} IS the account id {@code provider:handle}), and that is the only
- *       carrier the live callers use — login-ui and admin-ui both ride the httpOnly
- *       {@code bff_} cookie. Reproducing admin-bff's JWT branch would re-open a closed
- *       takeover class.</li>
+ *       account-takeover vector it was created to delete. This class uses the resolver instead,
+ *       so a raw Casdoor JWT resolves the caller's OWN {@code casdoor:<subject>} account and
+ *       never a foreign provider-namespace one. Reproducing admin-bff's JWT branch would re-open
+ *       a closed takeover class.
+ *
+ *       <p><b>On the {@code bff_} carrier — the only one the live callers use — the two agree,
+ *       but ONLY because {@link CanonicalIdentityResolver#ownAccountId(Jwt)} branches on the
+ *       synthetic-principal marker.</b> An earlier revision of this class claimed the two
+ *       resolutions were identical on that carrier "because the synthetic {@code sub} IS the
+ *       account id". That reasoning was WRONG and the claim was false: {@code SUBJECT_CLAIMS}
+ *       reads {@code email} and {@code preferred_username} BEFORE {@code sub}, and
+ *       {@code BffSessionAuthenticationWebFilter.syntheticJwt} always stamps one of them with
+ *       the bare HANDLE, so the derivation never reached the {@code sub} at all. MEASURED
+ *       against a principal built exactly as that filter builds it: a {@code google:} session
+ *       asked admin-bff for {@code casdoor:alice@example.test} and every one of these three
+ *       paths answered {@code 401 {"error":"login required"}}; a {@code discord:} session the
+ *       same; only a {@code casdoor:} session worked, which is why a cluster holding only
+ *       {@code casdoor:} rows would not have shown it. The resolver now honours the synthetic
+ *       {@code sub} verbatim for EVERY provider — see its own javadoc — and
+ *       {@code LegacyPathParityControllerTest} pins all three namespaces.</li>
  *   <li><b>No self-heal of a blank persisted localpart.</b> admin-bff's {@code provision} calls
  *       {@code AccountLocalpartService.resolveAndPersist} when {@code account.localpart} is
  *       blank and then mints; user-bff owns no account table, so {@link
- *       CanonicalIdentityResolver} FAILS CLOSED instead — 409 on a raw Casdoor JWT carrier,
- *       401 on a {@code bff_} carrier (the resolver probes {@code casdoor:<sub>} on the
- *       claim-absent branch even when the {@code sub} is already a full account id; both are
- *       pinned in {@code LegacyPathParityControllerTest}). Unreachable on the cluster lane in
- *       practice: {@code POST /bff/login} routes here and its {@code ensureAccount} hop makes
- *       admin-bff persist the localpart on EVERY sign-in, so a caller holding a session holds
- *       a localpart.</li>
+ *       CanonicalIdentityResolver} FAILS CLOSED instead — 409 on a raw Casdoor JWT carrier, and
+ *       on a {@code bff_} carrier 409 for a {@code casdoor:} account but 401 for a
+ *       {@code google:}/{@code discord:} one, because the resolver's {@code resolveOwnAccount}
+ *       branch (taken only when the {@code localpart} claim is absent) still derives its key
+ *       from {@code SUBJECT_CLAIMS}. That residual asymmetry is filed as
+ *       hugmesh-user-bff-api#14 and deliberately NOT closed here — {@code resolveOwnAccount} is
+ *       shared by five other mint/custody/revoke call sites, so re-pointing it is a change to
+ *       the shared identity policy rather than a parity fix. Both outcomes are fail-closed
+ *       refusals with no mint down either branch, and both are pinned in
+ *       {@code LegacyPathParityControllerTest}. Unreachable on the cluster lane in practice:
+ *       {@code POST /bff/login} routes here and its {@code ensureAccount} hop makes admin-bff
+ *       persist the localpart on EVERY sign-in, so a caller holding a session holds a
+ *       localpart.</li>
+ *   <li><b>Gate ORDER: the brokering 503 is evaluated before the registration-complete
+ *       check.</b> admin-bff has no brokering gate at all, so on a deploy with
+ *       {@code app.hs-token.enabled=false} an incomplete-registration caller gets 503 here where
+ *       admin-bff gives 403 "complete registration first". Deliberate: the 503 is a pure local
+ *       constant-check and running it first avoids an admin-bff round trip that cannot change
+ *       the answer. Reachable only for a RAW Casdoor JWT carrier on a dark deploy — a
+ *       {@code bff_} caller with an incomplete registration has already been 403'd by
+ *       {@code @PreAuthorize}, because the filter strips every role but the {@code ROLE_USER}
+ *       floor from such an account.</li>
+ *   <li><b>ReservedNames input on the Mastodon leg.</b> admin-bff applies
+ *       {@code ReservedNames.isReserved} to the MATRIX username on BOTH legs and never to the
+ *       Mastodon fold ({@code AuthController} lines 456-465); this class checks the fold each leg
+ *       actually mints under. The two differ only for a handle whose Matrix and Mastodon folds
+ *       disagree about reservedness — user-bff is stricter in one direction (a reserved Mastodon
+ *       fold 400s where admin-bff mints) and looser in the other. This is defence-in-depth on
+ *       both sides: registration already refuses a reserved handle. Checking the value actually
+ *       being minted is the behaviour worth keeping, so it is declared rather than "fixed"
+ *       towards admin-bff's.</li>
+ *   <li><b>CSRF posture.</b> admin-bff requires a CSRF token for these cookie-carried, non-mint
+ *       mutations when its cookie mode is on ({@code SecurityConfig.cookieCsrfMatcher}; the
+ *       exempt set is {@code /bff/login}, {@code /bff/login/local}, {@code /bff/sessionOut},
+ *       {@code /bff/register/**} — provision is NOT exempt), and login-ui sends the header
+ *       accordingly. user-bff disables CSRF on BOTH chains and accepts the {@code bff_session}
+ *       cookie as a carrier, so moving these POSTs here moves them to that posture. NOT a choice
+ *       this class makes — it is user-bff's pre-existing org-wide posture, which every other
+ *       mutating user-bff endpoint already rides — and not practically exploitable: the session
+ *       cookie is {@code SameSite=Lax}, so a cross-site POST never carries it, and
+ *       {@code APP_SESSION_COOKIE_ENABLED} defaults false. Declared here because a divergence
+ *       list that omits it is not exhaustive.</li>
  * </ol>
  *
  * <h2>The two paths that are NOT here</h2>

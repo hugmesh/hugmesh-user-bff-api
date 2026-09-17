@@ -11,7 +11,9 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.JwtMutator;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import net.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
 import net.hugmesh.userbff.config.SecurityConfig;
 import net.hugmesh.userbff.hsproxy.HsTokenCustody;
 import net.hugmesh.userbff.hsproxy.ServiceTokenBroker;
@@ -45,6 +47,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 class LegacyPathParityControllerDarkTest {
 
     private static final String ACCOUNT_ID = "google:alice@example.test";
+    private static final String HANDLE = "alice@example.test";
 
     @Autowired ApplicationContext context;
     WebTestClient client;
@@ -67,10 +70,31 @@ class LegacyPathParityControllerDarkTest {
         return out;
     }
 
+    /** The bff_-session synthetic principal EXACTLY as {@code BffSessionAuthenticationWebFilter
+     *  .syntheticJwt} builds it — token marker, {@code sub} = the account id, AND the
+     *  {@code email} claim (provider {@code google}) the filter always stamps. Omitting that last
+     *  claim models a principal production never emits; see the sibling
+     *  {@code LegacyPathParityControllerTest.sessionPrincipal} javadoc for the defect it hid. */
+    private static JwtMutator sessionPrincipal(String localpart, String mastodonLocalpart,
+                                               String... authorities) {
+        return mockJwt().jwt(j -> {
+            j.tokenValue(BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER + ACCOUNT_ID)
+                    .header("typ", "bff-synthetic-principal")
+                    .subject(ACCOUNT_ID)
+                    .claim("email", HANDLE)
+                    .claim("roles", List.of("user", "matrix", "mastodon"));
+            if (localpart != null && !localpart.isBlank()) {
+                j.claim("localpart", localpart);
+            }
+            if (mastodonLocalpart != null && !mastodonLocalpart.isBlank()) {
+                j.claim("mastodon_localpart", mastodonLocalpart);
+            }
+        }).authorities(authorities(authorities));
+    }
+
     @Test
     void provisionMatrix_featureDark_is503_andNothingDownstreamIsTouched() {
-        client.mutateWith(mockJwt().jwt(j -> j.subject(ACCOUNT_ID).claim("localpart", "alice.example"))
-                        .authorities(authorities("ROLE_USER", "ROLE_MATRIX")))
+        client.mutateWith(sessionPrincipal("alice.example", null, "ROLE_USER", "ROLE_MATRIX"))
                 .post().uri("/bff/provision/matrix")
                 .exchange()
                 .expectStatus().isEqualTo(503);
@@ -80,8 +104,7 @@ class LegacyPathParityControllerDarkTest {
 
     @Test
     void provisionMastodon_featureDark_is503_andNothingDownstreamIsTouched() {
-        client.mutateWith(mockJwt().jwt(j -> j.subject(ACCOUNT_ID).claim("mastodon_localpart", "alice_example"))
-                        .authorities(authorities("ROLE_USER", "ROLE_MASTODON")))
+        client.mutateWith(sessionPrincipal(null, "alice_example", "ROLE_USER", "ROLE_MASTODON"))
                 .post().uri("/bff/provision/mastodon")
                 .exchange()
                 .expectStatus().isEqualTo(503);
@@ -95,8 +118,7 @@ class LegacyPathParityControllerDarkTest {
         org.mockito.Mockito.when(adminBff.accountNamespaces(ACCOUNT_ID))
                 .thenReturn(reactor.core.publisher.Mono.just(List.of("wiki")));
 
-        client.mutateWith(mockJwt().jwt(j -> j.subject(ACCOUNT_ID))
-                        .authorities(authorities("ROLE_USER")))
+        client.mutateWith(sessionPrincipal("alice.example", "alice_example", "ROLE_USER"))
                 .get().uri("/bff/me/namespaces")
                 .exchange()
                 .expectStatus().isOk()

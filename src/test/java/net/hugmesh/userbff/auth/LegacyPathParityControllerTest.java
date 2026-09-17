@@ -11,9 +11,11 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.JwtMutator;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import net.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
 import net.hugmesh.userbff.config.SecurityConfig;
 import net.hugmesh.userbff.hsproxy.HsTokenCustody;
 import net.hugmesh.userbff.hsproxy.MintedToken;
@@ -53,8 +55,14 @@ class LegacyPathParityControllerTest {
 
     /** The account id a bff_-session synthetic principal carries as its {@code sub}
      *  ({@code provider:handle}) — {@link CanonicalIdentityResolver#ownAccountId} uses it
-     *  verbatim, so no {@code casdoor:} normalisation happens on this carrier. */
+     *  verbatim on this carrier (recognised by the synthetic token marker), so no
+     *  {@code casdoor:} normalisation happens. */
     private static final String ACCOUNT_ID = "google:alice@example.test";
+
+    /** The bare account HANDLE. The filter stamps this as the {@code email} claim for provider
+     *  {@code google} (and as {@code preferred_username} for every other provider) — the claim
+     *  that USED to win the subject derivation and mis-key the lookup. */
+    private static final String HANDLE = "alice@example.test";
 
     @Autowired ApplicationContext context;
     WebTestClient client;
@@ -87,15 +95,54 @@ class LegacyPathParityControllerTest {
                 complete, List.of("user", "matrix", "mastodon"), localpart, mastodonLocalpart);
     }
 
-    /** The bff_-session synthetic principal shape: {@code sub} IS the account id, and the
-     *  persisted localparts ride as claims (changesets 290/291), so the resolver is claim-first
-     *  and never hops to admin-bff for identity. */
-    private static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers
-            .JwtMutator sessionPrincipal(String... authorities) {
-        return mockJwt().jwt(j -> j.subject(ACCOUNT_ID)
-                        .claim("localpart", "alice.example")
-                        .claim("mastodon_localpart", "alice_example"))
-                .authorities(authorities(authorities));
+    /**
+     * The bff_-session synthetic principal EXACTLY as {@code BffSessionAuthenticationWebFilter
+     * .syntheticJwt} builds it — <b>including the claim this helper used to omit</b>.
+     *
+     * <p>The filter stamps ALL of: the non-decodable token-value marker, {@code sub} = the
+     * admin-bff account id ({@code provider:handle}), a {@code roles} claim, EITHER
+     * {@code email} (provider {@code google}) OR {@code preferred_username} (every other
+     * provider) = the bare handle, and the persisted {@code localpart} /
+     * {@code mastodon_localpart} when non-blank (changesets 290/291).
+     *
+     * <p><b>Why the email/preferred_username claim matters here.</b> An earlier revision of this
+     * helper built only {@code sub} + the two localpart claims. That is a principal the
+     * production filter never emits, and it hid a real defect: {@code CanonicalIdentityResolver
+     * .SUBJECT_CLAIMS} reads {@code email} and {@code preferred_username} BEFORE {@code sub}, so
+     * with the real claim present the resolver derived the bare handle, normalised it to
+     * {@code casdoor:alice@example.test}, and every one of these three paths answered 401 for
+     * {@code google:} and {@code discord:} accounts (measured). Only {@code casdoor:} accounts —
+     * which is what a cluster happens to hold today — worked. Build the principal the filter
+     * builds, or these pins assert nothing about the live carrier.
+     */
+    private static JwtMutator principalFor(String accountId, String handle, String provider,
+                                          String localpart, String mastodonLocalpart,
+                                          String... authorities) {
+        return mockJwt().jwt(j -> {
+            j.tokenValue(BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER + accountId)
+                    .header("typ", "bff-synthetic-principal")
+                    .subject(accountId)
+                    .claim("roles", List.of("user", "matrix", "mastodon"));
+            if (handle != null && !handle.isBlank()) {
+                if ("google".equalsIgnoreCase(provider)) {
+                    j.claim("email", handle);
+                } else {
+                    j.claim("preferred_username", handle);
+                }
+            }
+            if (localpart != null && !localpart.isBlank()) {
+                j.claim("localpart", localpart);
+            }
+            if (mastodonLocalpart != null && !mastodonLocalpart.isBlank()) {
+                j.claim("mastodon_localpart", mastodonLocalpart);
+            }
+        }).authorities(authorities(authorities));
+    }
+
+    /** The default (provider {@code google}) session principal every status pin below rides. */
+    private static JwtMutator sessionPrincipal(String... authorities) {
+        return principalFor(ACCOUNT_ID, HANDLE, "google", "alice.example", "alice_example",
+                authorities);
     }
 
     // ── GET /bff/me/namespaces ────────────────────────────────────────────────────────────
@@ -131,6 +178,79 @@ class LegacyPathParityControllerTest {
                 .get().uri("/bff/me/namespaces")
                 .exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    /**
+     * REGRESSION PIN for the defect the old principal helper hid. admin-bff resolves the acting
+     * account from the opaque session token ({@code AuthController.me} → {@code store.sessionOf}),
+     * so it answers 200 for an account in ANY provider namespace. Parity therefore requires that
+     * a {@code bff_} session for a {@code google:} / {@code discord:} / {@code casdoor:} account
+     * all resolve to THAT account's id — never to a {@code casdoor:<handle>} normalisation of the
+     * {@code email}/{@code preferred_username} claim the filter also stamps.
+     *
+     * <p>Before the fix, only the {@code casdoor:} row passed (its normalisation happens to
+     * reproduce the real key); the other two answered {@code 401 {"error":"login required"}}
+     * after asking admin-bff for {@code casdoor:alice@example.test} / {@code casdoor:bob}.
+     */
+    @Test
+    void namespaces_googleAccount_resolvesItsOwnAccountId_notACasdoorNormalisationOfTheEmailClaim() {
+        when(adminBff.accountNamespaces(eq("google:alice@example.test")))
+                .thenReturn(Mono.just(List.of("forum")));
+
+        client.mutateWith(principalFor("google:alice@example.test", "alice@example.test",
+                        "google", "alice.example", "alice_example", "ROLE_USER"))
+                .get().uri("/bff/me/namespaces")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("{\"namespaces\":[\"forum\"]}");
+        verify(adminBff, never()).accountNamespaces("casdoor:alice@example.test");
+    }
+
+    /** The {@code preferred_username} half of the same defect. */
+    @Test
+    void namespaces_discordAccount_resolvesItsOwnAccountId_notACasdoorNormalisationOfPreferredUsername() {
+        when(adminBff.accountNamespaces(eq("discord:bob")))
+                .thenReturn(Mono.just(List.of("wiki")));
+
+        client.mutateWith(principalFor("discord:bob", "bob", "discord",
+                        "bob", "bob", "ROLE_USER"))
+                .get().uri("/bff/me/namespaces")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("{\"namespaces\":[\"wiki\"]}");
+        verify(adminBff, never()).accountNamespaces("casdoor:bob");
+    }
+
+    /** The native-login namespace — the ONLY one that worked before the fix, kept so a
+     *  regression that re-breaks the other two cannot hide behind this one still passing. */
+    @Test
+    void namespaces_casdoorAccount_resolvesItsOwnAccountId() {
+        when(adminBff.accountNamespaces(eq("casdoor:carol")))
+                .thenReturn(Mono.just(List.of("forum", "wiki")));
+
+        client.mutateWith(principalFor("casdoor:carol", "carol", "casdoor",
+                        "carol", "carol", "ROLE_USER"))
+                .get().uri("/bff/me/namespaces")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("{\"namespaces\":[\"forum\",\"wiki\"]}");
+    }
+
+    /** A synthetic principal with a blank {@code sub} is a filter-internal bug, not a caller
+     *  condition: it must FAIL CLOSED rather than fall through to the claim derivation (which
+     *  would key the read to some other account). Mirrors
+     *  {@code SessionsService.accountIdFromJwt}'s own stance. */
+    @Test
+    void namespaces_syntheticPrincipalWithBlankSubject_is401_andNeverFallsThroughToTheEmailClaim() {
+        client.mutateWith(mockJwt().jwt(j -> j
+                                .tokenValue(BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER)
+                                .subject("")
+                                .claim("email", HANDLE))
+                        .authorities(authorities("ROLE_USER")))
+                .get().uri("/bff/me/namespaces")
+                .exchange()
+                .expectStatus().isUnauthorized();
+        verify(adminBff, never()).accountNamespaces(anyString());
     }
 
     // ── POST /bff/provision/{matrix,mastodon} ─────────────────────────────────────────────
@@ -222,6 +342,115 @@ class LegacyPathParityControllerTest {
         verify(broker).mintMastodon(ACCOUNT_ID, "alice_example");
     }
 
+    /**
+     * REGRESSION PIN, provision half. The identity miss 401'd BEFORE the mint, so a
+     * {@code google:}/{@code discord:} user could never provision through user-bff at all —
+     * and login-ui swallows both provision failures by design
+     * ({@code .catch(() =&gt; undefined)}), so the UI showed nothing.
+     */
+    @Test
+    void provisionMatrix_googleAccount_resolvesItsOwnAccountId_andMints() {
+        when(adminBff.getAccount(eq(ACCOUNT_ID)))
+                .thenReturn(Mono.just(account(true, "alice.example", "alice_example")));
+        when(broker.mintMatrix(eq(ACCOUNT_ID), eq("alice.example")))
+                .thenReturn(Mono.just(new MintedToken("syt_secret", null, null, "alice.example")));
+
+        client.mutateWith(sessionPrincipal("ROLE_USER", "ROLE_MATRIX"))
+                .post().uri("/bff/provision/matrix")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().json("{\"ok\":true}");
+        verify(adminBff, never()).getAccount("casdoor:" + HANDLE);
+        verify(broker).mintMatrix(ACCOUNT_ID, "alice.example");
+    }
+
+    /**
+     * FAIL-CLOSED pin for the unknown-account leg of {@code requireCompleteAccount}: admin-bff
+     * holds no account for this principal, so the internal 404 becomes 401 and <b>nothing is
+     * minted</b>.
+     *
+     * <p>This asserts the {@code switchIfEmpty} specifically, and it is not redundant with the
+     * namespaces pin one section up: {@code provision()} composes the gate as
+     * {@code requireCompleteAccount(jwt).then(Mono.defer(...))}, and {@code Mono.empty().then(x)}
+     * SUBSCRIBES to {@code x} — so dropping that {@code switchIfEmpty} does not merely change a
+     * status code, it lets an unknown account proceed into a REAL mint. Reachable on the
+     * {@code bff_} carrier because {@code identity.matrixLocalpart} is claim-first and never
+     * touches admin-bff, so the missing account would otherwise never be noticed.
+     */
+    @Test
+    void provisionMatrix_unknownAccount_is401_andNothingIsMinted() {
+        when(adminBff.getAccount(eq(ACCOUNT_ID))).thenReturn(Mono.error(
+                WebClientResponseException.create(404, "Not Found", null, null, null)));
+        // Stub the mint to SUCCEED so this pin fails on the mint actually happening, not on a
+        // null mock: with the switchIfEmpty removed the request reaches here and returns 200.
+        when(broker.mintMatrix(anyString(), anyString()))
+                .thenReturn(Mono.just(new MintedToken("syt_secret", null, null, "alice.example")));
+
+        client.mutateWith(sessionPrincipal("ROLE_USER", "ROLE_MATRIX"))
+                .post().uri("/bff/provision/matrix")
+                .exchange()
+                .expectStatus().isUnauthorized();
+        verify(broker, never()).mintMatrix(anyString(), anyString());
+    }
+
+    /** The same fail-closed leg on the Mastodon path — the two legs share {@code provision()},
+     *  but only a pin on each proves the shared helper is actually reached from both. */
+    @Test
+    void provisionMastodon_unknownAccount_is401_andNothingIsMinted() {
+        when(adminBff.getAccount(eq(ACCOUNT_ID))).thenReturn(Mono.error(
+                WebClientResponseException.create(404, "Not Found", null, null, null)));
+        when(broker.mintMastodon(anyString(), anyString()))
+                .thenReturn(Mono.just(new MintedToken("mtd_secret", null, null, "alice_example")));
+
+        client.mutateWith(sessionPrincipal("ROLE_USER", "ROLE_MASTODON"))
+                .post().uri("/bff/provision/mastodon")
+                .exchange()
+                .expectStatus().isUnauthorized();
+        verify(broker, never()).mintMastodon(anyString(), anyString());
+    }
+
+    /**
+     * The SECOND half of the fail-closed brokering gate (divergence 2), which
+     * {@link LegacyPathParityControllerDarkTest} cannot reach: {@code app.hs-token.enabled} is
+     * TRUE in this slice but the custody cipher key is absent, so a minted token could not be
+     * persisted and the mint must not fire at all. Without this pin, deleting
+     * {@code || !custody.cipherAvailable()} from the gate ships GREEN (measured).
+     */
+    @Test
+    void provisionMatrix_enabledButNoCustodyCipher_is503_andNothingDownstreamIsTouched() {
+        when(custody.cipherAvailable()).thenReturn(false);
+        // Everything downstream stubbed to SUCCEED, so a regression that drops the cipher half
+        // of the gate fails this pin with 200 + a real mint rather than with a null mock.
+        when(adminBff.getAccount(eq(ACCOUNT_ID)))
+                .thenReturn(Mono.just(account(true, "alice.example", "alice_example")));
+        when(broker.mintMatrix(anyString(), anyString()))
+                .thenReturn(Mono.just(new MintedToken("syt_secret", null, null, "alice.example")));
+
+        client.mutateWith(sessionPrincipal("ROLE_USER", "ROLE_MATRIX"))
+                .post().uri("/bff/provision/matrix")
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(adminBff, never()).getAccount(anyString());
+        verify(broker, never()).mintMatrix(anyString(), anyString());
+    }
+
+    /** The Mastodon leg of the same custody gate. */
+    @Test
+    void provisionMastodon_enabledButNoCustodyCipher_is503_andNothingDownstreamIsTouched() {
+        when(custody.cipherAvailable()).thenReturn(false);
+        when(adminBff.getAccount(eq(ACCOUNT_ID)))
+                .thenReturn(Mono.just(account(true, "alice.example", "alice_example")));
+        when(broker.mintMastodon(anyString(), anyString()))
+                .thenReturn(Mono.just(new MintedToken("mtd_secret", null, null, "alice_example")));
+
+        client.mutateWith(sessionPrincipal("ROLE_USER", "ROLE_MASTODON"))
+                .post().uri("/bff/provision/mastodon")
+                .exchange()
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(adminBff, never()).getAccount(anyString());
+        verify(broker, never()).mintMastodon(anyString(), anyString());
+    }
+
     /** admin-bff: a reserved localpart is 400 at the provision point (defence in depth — the
      *  mint creates a REAL homeserver account). */
     @Test
@@ -229,8 +458,8 @@ class LegacyPathParityControllerTest {
         when(adminBff.getAccount(eq(ACCOUNT_ID)))
                 .thenReturn(Mono.just(account(true, "admin", "admin")));
 
-        client.mutateWith(mockJwt().jwt(j -> j.subject(ACCOUNT_ID).claim("localpart", "admin"))
-                        .authorities(authorities("ROLE_USER", "ROLE_MATRIX")))
+        client.mutateWith(principalFor(ACCOUNT_ID, HANDLE, "google", "admin", "admin",
+                        "ROLE_USER", "ROLE_MATRIX"))
                 .post().uri("/bff/provision/matrix")
                 .exchange()
                 .expectStatus().isBadRequest();
@@ -297,32 +526,37 @@ class LegacyPathParityControllerTest {
     }
 
     /**
-     * PINS AN EXISTING {@link CanonicalIdentityResolver} ASYMMETRY, not a choice this
-     * controller makes. On a {@code bff_}-session synthetic principal the {@code sub} IS the
-     * account id ({@code provider:handle}); {@code ownAccountId} honours that verbatim, but
-     * {@code resolveOwnAccount} — the branch taken when the {@code localpart} claim is ABSENT —
-     * unconditionally looks up {@code casdoor:<subject>}, i.e. {@code casdoor:google:alice@…},
-     * which no account is keyed under. The caller therefore gets the resolver's 401 ("no
-     * registered account for this token's OWN identity"), NOT the 409 the raw-JWT carrier above
-     * gets, and not admin-bff's self-heal-and-mint.
+     * PINS A RESIDUAL {@link CanonicalIdentityResolver} ASYMMETRY that this lane deliberately did
+     * NOT close, filed as hugmesh-user-bff-api#14. It is NOT the defect the provider pins above
+     * cover: {@code ownAccountId} is now synthetic-principal-aware (it honours the {@code sub},
+     * which IS the account id, for every provider), but {@code resolveOwnAccount} — a DIFFERENT
+     * branch, taken only when the {@code localpart} claim is ABSENT — still derives its key from
+     * {@code SUBJECT_CLAIMS} and so probes {@code casdoor:<email-or-preferred_username>}, i.e.
+     * {@code casdoor:alice@example.test} for this {@code google:} account. No account is keyed
+     * under that, so the caller gets the resolver's 401 ("no registered account for this token's
+     * OWN identity") rather than the 409 the raw-JWT carrier above gets.
      *
-     * <p>This is asserted so the behaviour is visible rather than surprising. It is reachable
-     * only for an account row whose {@code account.localpart} is blank — {@code
-     * BffSessionAuthenticationWebFilter} stamps the claim whenever it is not — which admin-bff
-     * documents as "RARE/transient" and which every cluster sign-in repairs. Fixing the
-     * asymmetry means changing the shared resolver, which five other mint/custody/revoke call
-     * sites depend on; that is deliberately NOT done in this parity lane.
+     * <p><b>Exactly how narrow this is.</b> It is reachable ONLY when the account row's
+     * {@code account.localpart} is blank — {@code BffSessionAuthenticationWebFilter} stamps the
+     * claim whenever it is not, so on this carrier "claim absent" and "persisted blank" are the
+     * same condition — AND the account is in a non-{@code casdoor:} namespace. Both the 401 here
+     * and the 409 there are FAIL-CLOSED refusals: the localpart is blank either way, so no mint
+     * is reachable down either branch and this is a status/message difference, not a security or
+     * availability hole. It is left alone because {@code resolveOwnAccount} is shared by five
+     * other mint/custody/revoke call sites and re-pointing it is a change to the shared identity
+     * policy, not a parity fix — the operator's call, recorded on the issue.
      */
     @Test
-    void provisionMatrix_sessionCarrier_blankLocalpartClaim_is401_theResolversCasdoorKeyMiss() {
+    void provisionMatrix_sessionCarrier_blankLocalpartClaim_is401_theResidualResolverKeyMiss() {
         when(adminBff.getAccount(eq(ACCOUNT_ID)))
                 .thenReturn(Mono.just(account(true, "", "")));
-        // The key the resolver actually probes on this carrier — no such account.
-        when(adminBff.getAccount(eq("casdoor:" + ACCOUNT_ID))).thenReturn(Mono.error(
+        // The key resolveOwnAccount actually probes on this carrier (SUBJECT_CLAIMS-derived from
+        // the email claim the filter stamps) — no such account. user-bff-api#14.
+        when(adminBff.getAccount(eq("casdoor:" + HANDLE))).thenReturn(Mono.error(
                 WebClientResponseException.create(404, "Not Found", null, null, null)));
 
-        client.mutateWith(mockJwt().jwt(j -> j.subject(ACCOUNT_ID))
-                        .authorities(authorities("ROLE_USER", "ROLE_MATRIX")))
+        client.mutateWith(principalFor(ACCOUNT_ID, HANDLE, "google", "", "",
+                        "ROLE_USER", "ROLE_MATRIX"))
                 .post().uri("/bff/provision/matrix")
                 .exchange()
                 .expectStatus().isUnauthorized();
