@@ -23,6 +23,7 @@ import net.hugmesh.userbff.testsupport.TestIssuer;
  * chain builds with NO network JWKS fetch.
  *
  * <p>Proves the pre-auth login entrypoints ({@code /bff/login}, {@code /bff/register},
+ * {@code /bff/register/google}, {@code /bff/register/discord},
  * {@code /bff/session}) are reachable WITHOUT a Casdoor JWT (they
  * are how a caller obtains a session), while {@code /bff/me} and the {@code /bff/user/**}
  * floor STILL require authentication (anonymous ⇒ 401). "Reachable" means the SECURITY
@@ -86,6 +87,40 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
         client.post().uri("/bff/sessionOut").exchange().expectStatus().isOk();
     }
 
+    // ── INVITE-GATED SELF-REGISTRATION (LegacyPathParityController) ────────────
+
+    /**
+     * {@code POST /bff/register/google} and {@code /bff/register/discord} are permitAll for the
+     * same reason {@code /bff/register} is: registration is PRE-AUTHENTICATION, so the caller
+     * has no token to present. The gate that decides who may register is admin-bff's
+     * domain-scoped ALLOWLIST, consulted before any account is created — permitAll only exposes
+     * the route. Operator decisions 25 + 40 on hugmesh-generator#347 sent both paths here on
+     * BOTH gateway route tables.
+     */
+    @Test
+    void registerGoogle_isReachable_withoutJwt() {
+        client.post().uri("/bff/register/google").exchange().expectStatus().isOk();
+    }
+
+    @Test
+    void registerDiscord_isReachable_withoutJwt() {
+        client.post().uri("/bff/register/discord").exchange().expectStatus().isOk();
+    }
+
+    /**
+     * The permit is scoped to those two EXACT paths, NOT the {@code /bff/register/**} subtree.
+     * This is not style: admin-bff owns {@code POST /bff/register/complete} — registration
+     * stage 2, an AUTHENTICATED mutation that flips {@code registrationComplete} — under the
+     * same prefix, and a subtree permit here would expose that sibling anonymously on this BFF
+     * the moment anything routes it here. Both probes exist in the probe controller, so a 401
+     * is a genuine security decision and not a 404 in disguise.
+     */
+    @Test
+    void registerSubtree_isNotBlanketPermitted_anonymousIs401() {
+        client.post().uri("/bff/register/_probe").exchange().expectStatus().isUnauthorized();
+        client.post().uri("/bff/register/complete").exchange().expectStatus().isUnauthorized();
+    }
+
     // ── ANONYMOUS PASSWORD RESET — permitAll for the same reason /bff/login is ──
 
     /**
@@ -138,6 +173,8 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
     static class SsoProbeController {
         @RequestMapping({
                 "/bff/login", "/bff/register", "/bff/session", "/bff/sessionOut",
+                "/bff/register/google", "/bff/register/discord",
+                "/bff/register/complete", "/bff/register/_probe",
                 "/bff/password-reset/request", "/bff/password-reset/confirm",
                 "/bff/password-reset/_probe",
                 "/bff/me", "/bff/user/_probe",
