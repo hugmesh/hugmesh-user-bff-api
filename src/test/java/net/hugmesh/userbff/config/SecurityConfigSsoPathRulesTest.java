@@ -71,6 +71,21 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
         client.delete().uri("/bff/session").exchange().expectStatus().isOk();
     }
 
+    /**
+     * hugmesh-generator#549: {@code /bff/sessionOut} is the LEGACY POST alias of
+     * {@code DELETE /bff/session} — the same operation, so it must be reachable the SAME
+     * way. Without this permitAll it falls through to the {@code anyExchange()
+     * .authenticated()} floor; {@link BffSessionAuthenticationWebFilter} passes an
+     * absent/unresolvable {@code bff_} token through UNAUTHENTICATED rather than
+     * blocking it, so an anonymous (or already-logged-out) caller would 401 at the
+     * SECURITY layer and never reach the controller's own idempotent 204 — silently
+     * breaking the second sign-out call this endpoint exists to make safe.
+     */
+    @Test
+    void sessionOut_isReachable_withoutJwt() {
+        client.post().uri("/bff/sessionOut").exchange().expectStatus().isOk();
+    }
+
     // ── ANONYMOUS PASSWORD RESET — permitAll for the same reason /bff/login is ──
 
     /**
@@ -122,7 +137,7 @@ class SecurityConfigSsoPathRulesTest extends SecuritySliceSupport {
     @RestController
     static class SsoProbeController {
         @RequestMapping({
-                "/bff/login", "/bff/register", "/bff/session",
+                "/bff/login", "/bff/register", "/bff/session", "/bff/sessionOut",
                 "/bff/password-reset/request", "/bff/password-reset/confirm",
                 "/bff/password-reset/_probe",
                 "/bff/me", "/bff/user/_probe",

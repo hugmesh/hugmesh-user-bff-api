@@ -212,7 +212,18 @@ public class SecurityConfig {
         // through to .authenticated(). NOTE: /bff/me is deliberately NOT here — it stays
         // authenticated (matches admin-bff), falling through to the
         // anyExchange().authenticated() catch-all below.
-        ex.pathMatchers("/bff/login", "/bff/register", "/bff/session").permitAll();
+        //
+        // /bff/sessionOut (hugmesh-generator#549) MUST sit alongside /bff/session, not
+        // fall through to .authenticated(): it is the SAME operation (SsoAuthController
+        // aliases it to DELETE /bff/session) and must stay idempotent the same way — an
+        // ALREADY-logged-out caller (no cookie, or an expired one) has to reach the
+        // controller's own null-token 204, not a security-filter 401 first.
+        // BffSessionAuthenticationWebFilter passes an unresolvable/absent bff_ token
+        // through UNAUTHENTICATED rather than blocking it (see that filter's "Fail-closed
+        // posture" doc), so without this line the SECOND sign-out call (or a stale/absent
+        // cookie) would 401 at the chain and never reach the graceful branch that already
+        // exists for exactly that case.
+        ex.pathMatchers("/bff/login", "/bff/register", "/bff/session", "/bff/sessionOut").permitAll();
         // ANONYMOUS PASSWORD RESET — the forgot-password legs, for a caller who by
         // definition has no session and no current password (PasswordResetController).
         // permitAll for the SAME reason /bff/login is: requiring the credential the

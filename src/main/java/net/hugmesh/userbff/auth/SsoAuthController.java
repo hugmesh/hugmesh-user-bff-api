@@ -164,6 +164,22 @@ public class SsoAuthController {
         return adminBff.deleteSession(token).thenReturn(expireCookie());
     }
 
+    /**
+     * {@code POST /bff/sessionOut} — the LEGACY path host-shell and login-ui actually call
+     * (hugmesh-generator#549: the fe route tables now send it here instead of admin-bff's
+     * broken same-named endpoint, which read the token from a header a browser never sends
+     * and could not expire the cookie). A pure alias of {@link #sessionOut(ServerWebExchange)}
+     * so there is exactly ONE implementation of "revoke this session" to keep correct —
+     * decision 25 (legacy paths reach parity in user-bff) applied to sign-out.
+     */
+    @Operation(summary = "Alias of DELETE /bff/session for the POST /bff/sessionOut clients "
+            + "actually call. Revoke the caller's session and expire the bff_ cookie. "
+            + "503 when the SSO surface is dark.")
+    @PostMapping("/sessionOut")
+    public Mono<ResponseEntity<Void>> sessionOutLegacyAlias(ServerWebExchange exchange) {
+        return sessionOut(exchange);
+    }
+
     @Operation(summary = "The caller's account view (from admin-bff). Authenticated. "
             + "503 when the SSO surface is dark.")
     @GetMapping("/me")
