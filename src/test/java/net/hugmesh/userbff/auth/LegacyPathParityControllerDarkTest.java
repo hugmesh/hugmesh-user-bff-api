@@ -13,6 +13,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.JwtMutator;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import net.hugmesh.authcore.config.SessionCookieService;
 import net.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
 import net.hugmesh.userbff.config.SecurityConfig;
 import net.hugmesh.userbff.hsproxy.HsTokenCustody;
@@ -56,6 +57,9 @@ class LegacyPathParityControllerDarkTest {
     @MockitoBean AdminBffInternalClient adminBff;
     @MockitoBean HsTokenCustody custody;
     @MockitoBean ServiceTokenBroker broker;
+    /** Constructor dependency of the two /bff/register/* legs; those legs are not
+     *  exercised by this class, so the default (cookies disabled) stub is enough. */
+    @MockitoBean SessionCookieService cookies;
 
     @BeforeEach
     void setUp() {
