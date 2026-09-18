@@ -1474,6 +1474,18 @@
         }
       }
     },
+    "/bff/sessionOut" : {
+      "post" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "Alias of DELETE /bff/session for the POST /bff/sessionOut clients actually call. Revoke the caller's session and expire the bff_ cookie. 503 when the SSO surface is dark.",
+        "operationId" : "sessionOutLegacyAlias",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
     "/bff/register" : {
       "post" : {
         "tags" : [ "SSO auth" ],

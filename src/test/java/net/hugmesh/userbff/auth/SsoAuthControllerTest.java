@@ -1,15 +1,19 @@
 package net.hugmesh.userbff.auth;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import net.hugmesh.authcore.config.SessionCookieService;
 import net.hugmesh.authcore.config.SessionCookieWebFilter;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -151,6 +155,52 @@ class SsoAuthControllerTest {
                 .exchange()
                 .expectStatus().isNoContent()
                 .expectHeader().value("Set-Cookie", v -> org.assertj.core.api.Assertions.assertThat(v).contains("bff_"));
+
+        verify(adminBff).deleteSession("bff_opaque");
+    }
+
+    /**
+     * hugmesh-generator#549's "Done when": the server is modeled STATEFULLY, not just
+     * "the endpoint was called". {@code adminBff} tracks revocation in a real flag —
+     * {@code getAccountBySession} answers the live account until {@code deleteSession} flips
+     * it, exactly like the real admin-bff would once the row is gone. A test that only
+     * verified {@code deleteSession} was invoked would pass the broken admin-bff sessionOut
+     * too (it also returns 200 having deleted nothing); this one cannot, because it re-reads
+     * the session afterwards and the mock's own state has to have actually changed.
+     */
+    @Test
+    void sessionOutPost_legacyAlias_endsSessionStatefully_andExpiresCookie() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        AtomicBoolean revoked = new AtomicBoolean(false);
+        when(adminBff.getAccountBySession("bff_opaque")).thenAnswer(inv -> revoked.get()
+                ? Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session"))
+                : Mono.just(ACCOUNT));
+        when(adminBff.deleteSession("bff_opaque")).thenAnswer(inv -> {
+            revoked.set(true);
+            return Mono.empty();
+        });
+
+        WebTestClient client = client(adminBff, true);
+
+        // 1. While the session is alive, GET /bff/session (the shell's hydrate call) is 200.
+        client.get().uri("/bff/session")
+                .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
+                .exchange()
+                .expectStatus().isOk();
+
+        // 2. Sign out via the LEGACY POST path (the one host-shell/login-ui actually call —
+        //    hugmesh-generator#549's route-table fix now sends it here instead of admin-bff).
+        client.post().uri("/bff/sessionOut")
+                .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
+                .exchange()
+                .expectStatus().isNoContent()
+                .expectHeader().value("Set-Cookie", v -> assertThat(v).contains("Max-Age=0"));
+
+        // 3. Post-logout state, not the call: the SAME session token now 401s.
+        client.get().uri("/bff/session")
+                .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
+                .exchange()
+                .expectStatus().isUnauthorized();
 
         verify(adminBff).deleteSession("bff_opaque");
     }
