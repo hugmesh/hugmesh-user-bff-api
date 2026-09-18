@@ -314,6 +314,77 @@ class AdminBffInternalClientTest {
                 .verifyComplete();
     }
 
+    // ── allowlistCheck: admin-bff's REAL wire shape, not this repo's idea of it ───────────
+
+    /**
+     * Defect 1 of hugmesh-user-bff-api#13, and the blocker
+     * {@code LegacyPathParityController}'s two {@code /bff/register/*} handlers named. This
+     * read the body as {@code bodyToMono(Boolean.class)}; admin-bff's
+     * {@code InternalAccountController#allowlist} returns {@code invited.map(b ->
+     * Map.of("invited", b))} — the JSON OBJECT {@code {"invited":true}} — so the decode threw
+     * {@code DecodingException: Cannot deserialize value of type java.lang.Boolean from Object
+     * value (token JsonToken.START_OBJECT)} and EVERY live call was a 500. It failed CLOSED, so
+     * it was never a bypass; it simply made the invite gate unevaluatable.
+     *
+     * <p>Driven with admin-bff's LITERAL response body through a stub {@code ExchangeFunction},
+     * not a Mockito stub of this repo's own idea of the contract — the defect is invisible to a
+     * mocked client by construction (the sibling {@code accountNamespaces} pins say the same).
+     */
+    @Test
+    void allowlistCheck_decodesAdminBffsInvitedObject_true() {
+        ExchangeFunction realShape = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"invited\":true}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(realShape).build());
+
+        StepVerifier.create(client.allowlistCheck("google", "alice@example.test"))
+                .expectNext(Boolean.TRUE)
+                .verifyComplete();
+    }
+
+    @Test
+    void allowlistCheck_decodesAdminBffsInvitedObject_false() {
+        ExchangeFunction realShape = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"invited\":false}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(realShape).build());
+
+        StepVerifier.create(client.allowlistCheck("discord", "dragoneer"))
+                .expectNext(Boolean.FALSE)
+                .verifyComplete();
+    }
+
+    /** Fails CLOSED, never null and never "true by absence": an admin-bff that ever omits the
+     *  key yields {@code false}, so a caller can never read "no such key" as "invited". */
+    @Test
+    void allowlistCheck_missingKey_isFalse_failsClosed() {
+        ExchangeFunction noKey = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json").body("{}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(noKey).build());
+
+        StepVerifier.create(client.allowlistCheck("google", "alice@example.test"))
+                .expectNext(Boolean.FALSE)
+                .verifyComplete();
+    }
+
+    /** An EMPTY 200 body (no JSON at all) completes empty out of the decoder; the
+     *  {@code defaultIfEmpty} floor must turn that into {@code false}, not an empty Mono that
+     *  would make the caller's {@code flatMap} silently skip the gate AND the registration. */
+    @Test
+    void allowlistCheck_emptyBody_isFalse_failsClosed() {
+        ExchangeFunction empty = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(empty).build());
+
+        StepVerifier.create(client.allowlistCheck("google", "alice@example.test"))
+                .expectNext(Boolean.FALSE)
+                .verifyComplete();
+    }
+
     @Test
     void config_whenEnabled_buildsLiveClient_andAppliesMtlsConnector() {
         // mtls.enabled=true but no keystore file present ⇒ FederationHttpClientSsl

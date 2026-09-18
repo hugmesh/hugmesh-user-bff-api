@@ -364,6 +364,33 @@ public class AdminBffInternalClient {
     /**
      * Whether {@code (provider, handle)} is allowed to register/log in (admin-bff owns
      * the allowlist). Fail-closed: the stub errors rather than returning {@code true}.
+     *
+     * <p><b>This decode was wrong and made EVERY live call a 500</b> until this commit —
+     * defect 1 of hugmesh-user-bff-api#13, and the reason
+     * {@code LegacyPathParityController}'s two {@code /bff/register/*} handlers list it as a
+     * blocker. It read the body as {@code bodyToMono(Boolean.class)}; admin-bff's
+     * {@code InternalAccountController#allowlist} returns {@code invited.map(b ->
+     * Map.of("invited", b))}, i.e. the JSON OBJECT {@code {"invited":true}}. Measured against
+     * that exact body with a stub {@code ExchangeFunction} on this box:
+     *
+     * <pre>
+     * org.springframework.core.codec.DecodingException: JSON decoding error:
+     *   Cannot deserialize value of type `java.lang.Boolean`
+     *   from Object value (token `JsonToken.START_OBJECT`)
+     * </pre>
+     *
+     * <p>It failed CLOSED (the error propagates, no account is created), so this was a 500 and
+     * never a bypass — but the gate could not be evaluated at all. Now decoded as the object
+     * admin-bff emits, reading the {@code invited} key and failing CLOSED ({@code false}) when
+     * the key or the whole body is absent — the same shape {@link #accountNamespaces} uses for
+     * the same class of bug.
+     *
+     * <p><b>NOT fixed here: defect 2 of #13.</b> {@code SsoAuthController#register} calls this
+     * with provider {@code "email"}, which admin-bff's allowlist switch answers
+     * {@code 400 "unknown provider"} — that is a behaviour change to a pre-auth mutating
+     * endpoint plus an undecided product question (whether that account should then be keyed
+     * {@code google:} or {@code casdoor:}), so it stays on #13. The providers admin-bff
+     * understands here are exactly {@code google} and {@code discord}.
      */
     public Mono<Boolean> allowlistCheck(String provider, String handle) {
         if (http == null) {
@@ -371,8 +398,17 @@ public class AdminBffInternalClient {
         }
         return http.get().uri("/bff/internal/allowlist/{provider}/{handle}", provider, handle)
                 .retrieve()
-                .bodyToMono(Boolean.class);
+                .bodyToMono(ALLOWLIST_RESPONSE_TYPE)
+                .map(body -> {
+                    Boolean invited = body == null ? null : body.get("invited");
+                    return Boolean.TRUE.equals(invited);
+                })
+                .defaultIfEmpty(Boolean.FALSE);
     }
+
+    /** The {@code {"invited": bool}} body shape of admin-bff's allowlist read. */
+    private static final org.springframework.core.ParameterizedTypeReference<Map<String, Boolean>>
+            ALLOWLIST_RESPONSE_TYPE = new org.springframework.core.ParameterizedTypeReference<>() {};
 
     /** Mint a fresh opaque {@code bff_} session for the account; admin-bff persists the
      *  bff_session row (user-bff never writes that DB). */

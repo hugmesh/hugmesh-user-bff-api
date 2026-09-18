@@ -1,0 +1,405 @@
+package net.hugmesh.userbff.auth;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseCookie;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Mono;
+import net.hugmesh.authcore.config.SessionCookieService;
+import net.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
+import net.hugmesh.userbff.config.SecurityConfig;
+import net.hugmesh.userbff.hsproxy.HsTokenCustody;
+import net.hugmesh.userbff.hsproxy.ServiceTokenBroker;
+import net.hugmesh.userbff.web.ApiExceptionHandler;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
+
+/**
+ * Status-code + body parity pins for {@link LegacyPathParityController}'s two REGISTER legs —
+ * {@code POST /bff/register/google} and {@code POST /bff/register/discord} — against
+ * hugmesh-admin-bff-api's {@code AuthController#registerGoogle}/{@code registerDiscord}
+ * (operator decision 25 on hugmesh-generator#347, and decision 40, which aligned the compose
+ * route table onto user-bff and so made both paths 404 on BOTH lanes until these handlers
+ * existed).
+ *
+ * <p><b>These are PRE-AUTH paths</b>, so unlike the three legs pinned in
+ * {@link LegacyPathParityControllerTest} there is no principal: every request here is
+ * ANONYMOUS and travels the REAL {@link SecurityConfig} prod chain, which makes each 200/403/503
+ * below simultaneously a pin that the two exact {@code permitAll} entries are in place. A
+ * missing {@code permitAll} would surface as a 401 and fail every test in this class.
+ * {@link net.hugmesh.userbff.config.SecurityConfigSsoPathRulesTest} pins the negative half (a
+ * sibling under {@code /bff/register/**} is NOT permitted).
+ *
+ * <p><b>The one deliberate divergence is pinned here, not merely documented:</b>
+ * {@code alreadyCompleteAccount_is503_andNeverMintsASession} (both legs). admin-bff calls
+ * {@code AccountStore.restartOnboarding} at that exact point; admin-bff's
+ * {@code /bff/internal/**} surface exposes no endpoint that can set
+ * {@code registration_complete} back to FALSE, so this class refuses rather than hand back a
+ * session whose {@code registrationComplete:true} makes the UI skip onboarding. See the
+ * controller's class doc and hugmesh/hugmesh-admin-bff-api#2 box 1.
+ */
+@WebFluxTest(controllers = LegacyPathParityController.class)
+@Import({SecurityConfig.class, CanonicalIdentityResolver.class, ApiExceptionHandler.class})
+class LegacyPathParityRegisterTest {
+
+    private static final String EMAIL = "alice@example.test";
+    private static final String GOOGLE_ID = "google:" + EMAIL;
+    private static final String DISCORD_HANDLE = "dragoneer";
+    private static final String DISCORD_ID = "discord:" + DISCORD_HANDLE;
+    private static final String TOKEN = "bff_freshly-minted-session";
+
+    @Autowired ApplicationContext context;
+    WebTestClient client;
+
+    @MockitoBean ReactiveJwtDecoder jwtDecoder;
+    @MockitoBean AdminBffInternalClient adminBff;
+    @MockitoBean HsTokenCustody custody;
+    @MockitoBean ServiceTokenBroker broker;
+    @MockitoBean SessionCookieService cookies;
+
+    @BeforeEach
+    void setUp() {
+        client = WebTestClient.bindToApplicationContext(context).apply(springSecurity()).build();
+        // Cookie mode OFF is the SHIPPED default (app.session.cookie.enabled=false), so it is
+        // the default posture here; cookieMode_mintsTheBffCookie below flips it explicitly.
+        when(cookies.enabled()).thenReturn(false);
+    }
+
+    /** An account view as admin-bff's internal {@code AccountOut} deserialises after
+     *  {@code POST /bff/internal/accounts/ensure} — which has ALREADY resolved and persisted
+     *  the collision-checked localpart ({@code withLocalpart}). */
+    private static AdminBffInternalClient.AccountView account(String id, String provider,
+                                                              String handle, boolean complete) {
+        return new AdminBffInternalClient.AccountView(id, provider, handle, complete,
+                List.of("user", "matrix", "mastodon"), handle.replaceAll("[^a-z0-9]", ""), "");
+    }
+
+    private WebTestClient.ResponseSpec postGoogle(String bodyJson) {
+        return client.post().uri("/bff/register/google")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(bodyJson).exchange();
+    }
+
+    private WebTestClient.ResponseSpec postDiscord(String bodyJson) {
+        return client.post().uri("/bff/register/discord")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue(bodyJson).exchange();
+    }
+
+    // ── The happy path: invited ⇒ account ensured ⇒ session minted ─────────────────────────
+
+    /**
+     * admin-bff's {@code registerGoogle}: {@code isEmailInvited} ⇒ {@code ensureAccount("google",
+     * email)} ⇒ (restartOnboarding, a NO-OP for a fresh row) ⇒ session. The body is the shape
+     * user-bff's own {@code POST /bff/register} already emits and the shape hugmesh-generator's
+     * {@code tests/qemu/seed-accounts.sh} reads ({@code .token}).
+     */
+    @Test
+    void google_invited_ensuresTheAccount_andMintsASession() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.token").isEqualTo(TOKEN)
+                .jsonPath("$.id").isEqualTo(GOOGLE_ID)
+                .jsonPath("$.provider").isEqualTo("google")
+                .jsonPath("$.registrationComplete").isEqualTo(false)
+                .jsonPath("$.roles[0]").isEqualTo("user");
+    }
+
+    @Test
+    void discord_invited_ensuresTheAccount_andMintsASession() {
+        when(adminBff.allowlistCheck("discord", DISCORD_HANDLE)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("discord", DISCORD_HANDLE))
+                .thenReturn(Mono.just(account(DISCORD_ID, "discord", DISCORD_HANDLE, false)));
+        when(adminBff.createSession(DISCORD_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, DISCORD_ID)));
+
+        postDiscord("{\"username\":\"" + DISCORD_HANDLE + "\"}")
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.token").isEqualTo(TOKEN)
+                .jsonPath("$.id").isEqualTo(DISCORD_ID)
+                .jsonPath("$.provider").isEqualTo("discord")
+                .jsonPath("$.registrationComplete").isEqualTo(false);
+    }
+
+    /**
+     * The INVITE NAMESPACE is the one admin-bff's allowlist switch understands — {@code google}
+     * for an email and {@code discord} for a username. This is the pin that keeps defect 2 of
+     * hugmesh-user-bff-api#13 ({@code allowlistCheck("email", …)} ⇒ admin-bff 400 "unknown
+     * provider") from being reintroduced on THESE two paths. The handle is lowercased with
+     * {@link java.util.Locale#ROOT} before BOTH calls, as admin-bff's
+     * {@code str(...).toLowerCase()} does, so the allowlist row and the account key agree —
+     * {@code AccountStore} itself lowercases the handle it keys on, so a mixed-case address
+     * that skipped this step would consult one allowlist row and create a DIFFERENT account.
+     *
+     * <p>The {@code Locale.ROOT} is not decoration: a JVM whose default locale is Turkish folds
+     * {@code I} to a dotless {@code ı}, so a default-locale {@code toLowerCase()} on this box
+     * would key a different account than admin-bff's.
+     */
+    @Test
+    void handle_isLowercased_beforeTheAllowlistLookup_andTheEnsure() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+
+        postGoogle("{\"email\":\"Alice@Example.TEST\"}").expectStatus().isOk();
+
+        verify(adminBff).allowlistCheck("google", EMAIL);
+        verify(adminBff).ensureAccount("google", EMAIL);
+    }
+
+    /**
+     * A SPACE-PADDED address is a 400 at the DTO, before the controller's own
+     * {@code trim()} ever runs — {@code RegisterEmailRequest.email} is {@code @Email}, and
+     * jakarta's {@code @Email} does not trim. <b>This is parity, not a gap:</b> admin-bff's
+     * {@code registerGoogle} takes the SAME {@code @Valid RegisterEmailRequest}, so it answers
+     * 400 for the same body. Pinned because the controller's defensive {@code trim()} makes it
+     * easy to assume otherwise (this test was written asserting 200 and was wrong).
+     */
+    @Test
+    void paddedEmail_is400_atTheDto_sameAsAdminBff() {
+        postGoogle("{\"email\":\"  alice@example.test  \"}").expectStatus().isBadRequest();
+        verify(adminBff, never()).allowlistCheck(anyString(), anyString());
+    }
+
+    // ── The invite gate ───────────────────────────────────────────────────────────────────
+
+    /** admin-bff: {@code ApiException.forbidden("email not invited by an admin")}, raised
+     *  BEFORE {@code ensureAccount} — an uninvited caller must never create a row. */
+    @Test
+    void google_notInvited_is403_andNeverEnsuresAnAccount() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(false));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isForbidden()
+                .expectBody().jsonPath("$.error").isEqualTo("email not invited by an admin");
+
+        verify(adminBff, never()).ensureAccount(anyString(), anyString());
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    @Test
+    void discord_notInvited_is403_andNeverEnsuresAnAccount() {
+        when(adminBff.allowlistCheck("discord", DISCORD_HANDLE)).thenReturn(Mono.just(false));
+
+        postDiscord("{\"username\":\"" + DISCORD_HANDLE + "\"}")
+                .expectStatus().isForbidden()
+                .expectBody().jsonPath("$.error")
+                .isEqualTo("discord username not invited by an admin");
+
+        verify(adminBff, never()).ensureAccount(anyString(), anyString());
+    }
+
+    // ── THE DECLARED DIVERGENCE: the restartOnboarding leg ────────────────────────────────
+
+    /**
+     * admin-bff's next call after {@code ensureAccount} is {@code store::restartOnboarding},
+     * which is {@code setComplete(a, false)} and nothing else. It is a NO-OP on every input but
+     * one: an account that is ALREADY {@code registrationComplete}. admin-bff's
+     * {@code /bff/internal/**} surface has no endpoint that can set that column back to false
+     * ({@code /accounts/{id}/complete} only sets it TRUE), so this class REFUSES that one input
+     * with 503 instead of minting a session whose {@code registrationComplete:true} would make
+     * the UI skip onboarding — the silent divergence a caller can see.
+     *
+     * <p>The refusal must land BEFORE the mint: the account is left exactly as it was and no
+     * session exists that could be used. Deleting the refusal (the mutation this pin defends)
+     * fails here with {@code 200 OK} and a real {@code createSession} call.
+     */
+    @Test
+    void google_alreadyCompleteAccount_is503_andNeverMintsASession() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, true)));
+        when(adminBff.createSession(anyString()))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
+                .expectBody().jsonPath("$.error")
+                .value(msg -> assertThat((String) msg)
+                        .contains("already completed registration")
+                        .contains("hugmesh/hugmesh-admin-bff-api#2 box 1"));
+
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    @Test
+    void discord_alreadyCompleteAccount_is503_andNeverMintsASession() {
+        when(adminBff.allowlistCheck("discord", DISCORD_HANDLE)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("discord", DISCORD_HANDLE))
+                .thenReturn(Mono.just(account(DISCORD_ID, "discord", DISCORD_HANDLE, true)));
+        when(adminBff.createSession(anyString()))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, DISCORD_ID)));
+
+        postDiscord("{\"username\":\"" + DISCORD_HANDLE + "\"}")
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    // ── Internal-hop failures ─────────────────────────────────────────────────────────────
+
+    /**
+     * admin-bff's {@code persistLocalpart} maps {@code AccountLocalpartService.CollisionException}
+     * to a 409. On this side the collision-check runs INSIDE admin-bff's
+     * {@code /accounts/ensure} ({@code withLocalpart}), so it arrives as a 409 over the wire —
+     * which must be re-raised as a 409 and not flattened into the opaque 500 a raw
+     * {@link WebClientResponseException} produces (it is not a
+     * {@code ResponseStatusException}).
+     */
+    @Test
+    void localpartCollisionFromAdminBff_is409_notAnOpaque500() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL)).thenReturn(Mono.error(
+                WebClientResponseException.create(409, "Conflict", HttpHeaders.EMPTY,
+                        new byte[0], null)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT);
+
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    /** Any other internal-hop failure is a 502, the same wrap the provision legs apply —
+     *  never a 200, and never a 500 that reads like a bug in this BFF. */
+    @Test
+    void internalHopFailure_is502_andNeverMintsASession() {
+        when(adminBff.allowlistCheck("google", EMAIL))
+                .thenReturn(Mono.error(new IllegalStateException("admin-bff internal client disabled")));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isEqualTo(HttpStatus.BAD_GATEWAY);
+
+        verify(adminBff, never()).ensureAccount(anyString(), anyString());
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    // ── Body validation, BEFORE any admin-bff call ────────────────────────────────────────
+
+    /** admin-bff's DTOs are {@code @NotBlank}/{@code @Email}; the same DTOs are reused here, so
+     *  a malformed body is a clean 400 and the invite gate is never even consulted. */
+    @Test
+    void blankEmail_is400_beforeAnyAdminBffCall() {
+        postGoogle("{\"email\":\"\"}").expectStatus().isBadRequest();
+        verify(adminBff, never()).allowlistCheck(anyString(), anyString());
+    }
+
+    @Test
+    void malformedEmail_is400_beforeAnyAdminBffCall() {
+        postGoogle("{\"email\":\"not-an-address\"}").expectStatus().isBadRequest();
+        verify(adminBff, never()).allowlistCheck(anyString(), anyString());
+    }
+
+    @Test
+    void blankDiscordUsername_is400_beforeAnyAdminBffCall() {
+        postDiscord("{\"username\":\"\"}").expectStatus().isBadRequest();
+        verify(adminBff, never()).allowlistCheck(anyString(), anyString());
+    }
+
+    // ── The bff_ cookie ───────────────────────────────────────────────────────────────────
+
+    /** admin-bff mints the opaque session cookie on register; so does user-bff's own
+     *  {@code POST /bff/register}. Gated on {@code app.session.cookie.enabled} exactly as
+     *  {@code SsoAuthController#emitAndSession} gates it. */
+    @Test
+    void cookieMode_mintsTheBffSessionCookie() {
+        when(cookies.enabled()).thenReturn(true);
+        when(cookies.mint(any(), eq(TOKEN)))
+                .thenReturn(ResponseCookie.from("bff_session", TOKEN).path("/").httpOnly(true).build());
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isOk()
+                .expectHeader().valueMatches("Set-Cookie", "bff_session=" + TOKEN + ".*");
+    }
+
+    /** Cookie mode OFF (the shipped default): no Set-Cookie, and the token still rides in the
+     *  body — the carrier hugmesh-generator's qemu seed script reads. */
+    @Test
+    void cookieModeOff_emitsNoSetCookie_butStillTheBodyToken() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isOk()
+                .expectHeader().doesNotExist("Set-Cookie")
+                .expectBody().jsonPath("$.token").isEqualTo(TOKEN);
+    }
+
+    // ── The account these paths create must be reachable by the session that follows ──────
+
+    /**
+     * The retraction on hugmesh-admin-bff-api#2 (2026-09-17) that applies to THIS issue: a
+     * {@code google:}/{@code discord:} session is exactly what these two handlers bring into
+     * existence, and {@code CanonicalIdentityResolver.ownAccountId} used to resolve such a
+     * principal to {@code casdoor:<handle>} and 401 every legacy-parity path. This pins the
+     * round trip end to end — take the {@code id} these handlers emit, build the synthetic
+     * principal EXACTLY as {@code BffSessionAuthenticationWebFilter.syntheticJwt} builds it for
+     * that account (including the {@code email}/{@code preferred_username} claim that used to
+     * win the derivation, and the EMPTY roles claim a not-yet-complete registration carries),
+     * and assert the resolver hands back the same id. A {@code casdoor:}-only pin rides a
+     * principal these paths never produce.
+     */
+    @Test
+    void theAccountsTheseHandlersCreate_resolveBackToThemselves_onTheBffCarrier() {
+        assertThat(CanonicalIdentityResolver.ownAccountId(
+                syntheticPrincipalFor(GOOGLE_ID, "google", EMAIL))).isEqualTo(GOOGLE_ID);
+        assertThat(CanonicalIdentityResolver.ownAccountId(
+                syntheticPrincipalFor(DISCORD_ID, "discord", DISCORD_HANDLE))).isEqualTo(DISCORD_ID);
+        // The third namespace, for contrast: a native-login account is keyed casdoor:<subject>
+        // and must resolve to ITSELF too — these register paths never create one (the provider
+        // is a literal), so it is pinned here only to prove the resolver is not google-shaped.
+        assertThat(CanonicalIdentityResolver.ownAccountId(
+                syntheticPrincipalFor("casdoor:bob", "casdoor", "bob"))).isEqualTo("casdoor:bob");
+    }
+
+    /** {@code BffSessionAuthenticationWebFilter.syntheticJwt}'s shape for a freshly registered
+     *  (therefore NOT registrationComplete, therefore empty-roles) account. */
+    private static Jwt syntheticPrincipalFor(String accountId, String provider, String handle) {
+        Jwt.Builder b = Jwt.withTokenValue(
+                        BffSessionAuthenticationWebFilter.SYNTHETIC_TOKEN_MARKER + accountId)
+                .header("typ", "bff-synthetic-principal")
+                .subject(accountId)
+                .claim("roles", List.of());
+        if ("google".equalsIgnoreCase(provider)) {
+            b.claim("email", handle);
+        } else {
+            b.claim("preferred_username", handle);
+        }
+        return b.build();
+    }
+}
