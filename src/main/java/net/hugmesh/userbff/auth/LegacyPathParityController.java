@@ -3,6 +3,8 @@ package net.hugmesh.userbff.auth;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -162,7 +164,7 @@ import java.util.Map;
  *       list that omits it is not exhaustive.</li>
  * </ol>
  *
- * <h2>The two REGISTER paths, and the one leg of them that REFUSES instead of lying</h2>
+ * <h2>The two REGISTER paths: what is reproduced, what is ruled, what is recorded</h2>
  *
  * <p>{@code POST /bff/register/google} and {@code POST /bff/register/discord} were held back
  * from the first revision of this class. Operator decision 40 (hugmesh-generator#347,
@@ -171,44 +173,57 @@ import java.util.Map;
  * accepted regression for two of them". They are served here now.
  *
  * <p>admin-bff's {@code AuthController#registerGoogle}/{@code registerDiscord} do six things.
- * user-bff can do four of them over the existing {@code /bff/internal/**} surface:
+ * user-bff does four of them over the existing {@code /bff/internal/**} surface:
  * {@code allowlistCheck} is the invite gate; {@code ensureAccount} both creates the row AND
  * persists the collision-checked localpart (admin-bff's {@code InternalAccountController
  * #ensureAccount} runs {@code withLocalpart} itself, so the 409 comes back over the wire);
  * {@code createSession} mints the opaque {@code bff_} token; the cookie is minted here.
- * <b>Two have NO internal endpoint at all</b>, measured on admin-bff {@code origin/main}
- * {@code 486288a} — {@code InternalAccountController} maps exactly
- * {@code /accounts/ensure}, {@code /accounts/{id}}, {@code /accounts/{id}/complete},
- * {@code /allowlist/{provider}/{handle}}, {@code /sessions}, {@code /sessions/{accountId}},
- * {@code /accounts/{id}/namespaces}, {@code /session/introspect}, {@code /custody/stamp} and
- * {@code /session/exchange}, and nothing on it can set {@code registration_complete} to
- * FALSE ({@code /complete} only ever sets it TRUE):
+ * The remaining two are the subject of two operator rulings on hugmesh-generator#347
+ * (2026-09-18, decisions 55 and 57):
  *
  * <ol>
- *   <li><b>{@code AccountStore.restartOnboarding(a)}</b> — {@code setComplete(a, false)} and
- *       nothing else (auth-core {@code AccountStore:259-272}, read at
- *       {@code hugmesh-auth-core}). It matters on exactly ONE input: a RE-registration of an
+ *   <li><b>{@code AccountStore.restartOnboarding(a)} — RULED, not reproduced: 409 (decision
+ *       57).</b> It is {@code setComplete(a, false)} and nothing else (auth-core
+ *       {@code AccountStore:259-272}) and matters on exactly ONE input: a RE-registration of an
  *       account that is ALREADY {@code registrationComplete}. A fresh registration creates the
  *       row with {@code false} and a re-registration of an incomplete account leaves it
  *       {@code false} ({@code ensureAccount} preserves {@code existing.registrationComplete()}),
  *       so on every other input {@code restartOnboarding} is a no-op and this class is exact
- *       parity. <b>On that one input this class REFUSES with 503</b> rather than issue a
- *       session and answer {@code registrationComplete: true} — which is the silent divergence
- *       a caller can see (the UI would skip onboarding). A refusal is what the caller gets
- *       TODAY from the 404, so no input is made worse; the account is left untouched and the
- *       caller can still sign in at {@code POST /bff/login}. The unblock is box 1 on
- *       hugmesh/hugmesh-admin-bff-api#2: {@code POST
- *       /bff/internal/accounts/{id}/restart-onboarding}. When it lands, delete the refusal and
- *       call it — nothing else in this leg changes.</li>
- *   <li><b>{@code UsageService.record(handle, roles, "register")}</b> — the registration usage
- *       row. admin-bff fires it as {@code usage.record(...).subscribe()}, i.e. fire-and-forget:
- *       its outcome never reaches the caller, so its absence is invisible on the wire and
- *       cannot be detected by any response assertion. <b>A registration performed through
- *       user-bff therefore does not appear in admin-bff's usage table.</b> Not recorded here,
- *       and NOT worked around: box 2 on hugmesh-admin-bff-api#2 is an operator ruling —
- *       <i>is a registration performed through user-bff supposed to appear in admin-bff's
- *       usage table at all?</i> — and inventing either answer is worse than declaring the gap.
- *       Note the status quo records nothing either: the path 404s on both lanes today.</li>
+ *       parity. admin-bff's {@code /bff/internal/**} surface still exposes nothing that can set
+ *       {@code registration_complete} back to FALSE (hugmesh-admin-bff-api#84, open; measured
+ *       on admin-bff {@code origin/main} {@code 86cdf79}). <b>On that one input this class
+ *       answers {@code 409 Conflict}</b> — the registration conflicts with an account that
+ *       already exists and has completed onboarding — leaves the account untouched, mints no
+ *       session and records no usage row; the caller can sign in at {@code POST /bff/login}.
+ *       Decision 57 chose 409 over the recommended "503 until #84 lands" (the 503 this class
+ *       carried between 2026-09-18 and this revision) and over holding the handlers. It is a
+ *       RULING, so this class does not promise that #84 replaces it; if the operator later
+ *       wants the restart reproduced, that is a new decision. Two things follow from it that a
+ *       caller can see: (a) admin-bff's own {@code AuthController} would instead reset the
+ *       account, mint a session AND record a {@code "register"} usage row for that input — the
+ *       usage-table divergence is declared under (2); (b) this 409 shares a status with the
+ *       localpart-collision 409 raised in {@link #asInternalHopFailure}, so its body names
+ *       "already completed registration" and decision 57 explicitly, and the tests assert on
+ *       the message rather than the status alone.</li>
+ *   <li><b>{@code UsageService.record(handle, roles, "register")} — RECORDED over the wire
+ *       (decision 55 = yes).</b> admin-bff's {@code emitAndSession} fires it as
+ *       {@code usage.record(handle, a.roles(), action).subscribe()} — fire-and-forget, BEFORE
+ *       the session mint, with the BARE handle (the lowercased email/username, not the
+ *       {@code provider:handle} id) and the account's own lowercase {@code roles}. Since
+ *       hugmesh-admin-bff-api PR #104 ({@code 86cdf79}) that call is reachable as
+ *       {@code POST /bff/internal/usage}, and {@link #register} calls it through
+ *       {@link AdminBffInternalClient#recordUsage} at the SAME point in the chain with the SAME
+ *       three arguments, and with the SAME semantics: subscribed detached from the response,
+ *       so a usage outage (admin-bff 5xx, a dropped connection, the produce blocking on
+ *       {@code max.block.ms}) is logged and never delays or fails the registration. The
+ *       roles list is forwarded VERBATIM from {@link AdminBffInternalClient.AccountView#roles()}
+ *       because that IS admin-bff's lowercase dialect; prefixing {@code ROLE_} here would make
+ *       admin-bff tag every event {@code user}. <b>The declared divergence:</b> the row is
+ *       recorded only when a registration is PERFORMED, i.e. on the success path; on the
+ *       already-complete input admin-bff records a {@code "register"} row and this class,
+ *       having refused with 409 under decision 57, records nothing. Not a dependency on #84:
+ *       the usage call sits after the already-complete gate, so whatever that gate does the
+ *       leg is unchanged.</li>
  * </ol>
  *
  * <h3>The register legs' OTHER declared divergences</h3>
@@ -283,16 +298,23 @@ public class LegacyPathParityController {
     /** The exact body the generator's mock-bff already answers {@code /bff/provision/*} with. */
     private static final Map<String, Object> OK = Map.of("ok", true);
 
+    private static final Logger log = LoggerFactory.getLogger(LegacyPathParityController.class);
+
     /**
-     * The one leg of {@code /bff/register/*} user-bff cannot reproduce — see the class doc.
-     * Worded so an operator reading a 503 body knows it is a MISSING CAPABILITY, not a
-     * transient outage, and knows the account was left untouched.
+     * The already-complete refusal of {@code /bff/register/*} — operator decision 57 on
+     * hugmesh-generator#347 (2026-09-18): a re-registration of an account that has ALREADY
+     * completed registration is a {@code 409 Conflict} with that existing account. Worded so
+     * it cannot be mistaken for the OTHER 409 on this path (the homeserver-localpart collision
+     * in {@link #asInternalHopFailure}), and so the reader knows the account was left untouched.
      */
-    private static final String RESTART_ONBOARDING_UNAVAILABLE =
-            "this account has already completed registration and user-bff cannot restart "
-                    + "onboarding (admin-bff exposes no internal restart-onboarding endpoint — "
-                    + "hugmesh/hugmesh-admin-bff-api#2 box 1). Nothing was changed; sign in at "
-                    + "/bff/login instead.";
+    private static final String ALREADY_REGISTERED_CONFLICT =
+            "this account already exists and has already completed registration "
+                    + "(decision 57: 409, not a restart of onboarding). Nothing was changed; "
+                    + "sign in at /bff/login instead.";
+
+    /** The {@code action} admin-bff's own register handlers record — {@code AuthController}
+     *  passes the literal {@code "register"} to {@code emitAndSession}. */
+    private static final String USAGE_ACTION_REGISTER = "register";
 
     private final AdminBffInternalClient adminBff;
     private final CanonicalIdentityResolver identity;
@@ -443,13 +465,16 @@ public class LegacyPathParityController {
      * generated clients already carry.
      *
      * <p>403 when the address is not invited; 409 on a homeserver-localpart collision;
-     * <b>503 when the account has already completed registration</b> (the one leg user-bff
-     * cannot reproduce — see the class doc); 502 when the internal hop to admin-bff fails.
+     * <b>409 when the account has already completed registration</b> (decision 57 — see the
+     * class doc; the two 409 bodies differ); 502 when the internal hop to admin-bff fails. A
+     * performed registration is recorded on admin-bff's usage table (decision 55), detached
+     * from the response.
      */
     @Operation(summary = "Invite-gated Google/email registration: ensure the account and mint a "
             + "bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a "
-            + "localpart collision; 503 for an already-complete account (user-bff cannot restart "
-            + "onboarding — admin-bff#2 box 1).",
+            + "localpart collision; 409 for an already-complete account (decision 57: conflict "
+            + "with the existing account, no restart of onboarding). Records a register usage "
+            + "row on admin-bff (decision 55), fire-and-forget.",
             operationId = "authRegisterGoogle")
     @PostMapping("/register/google")
     public Mono<ResponseEntity<Map<String, Object>>> registerGoogle(
@@ -464,8 +489,9 @@ public class LegacyPathParityController {
      */
     @Operation(summary = "Invite-gated Discord registration: ensure the account and mint a bff_ "
             + "session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart "
-            + "collision; 503 for an already-complete account (user-bff cannot restart onboarding "
-            + "— admin-bff#2 box 1).",
+            + "collision; 409 for an already-complete account (decision 57: conflict with the "
+            + "existing account, no restart of onboarding). Records a register usage row on "
+            + "admin-bff (decision 55), fire-and-forget.",
             operationId = "authRegisterDiscord")
     @PostMapping("/register/discord")
     public Mono<ResponseEntity<Map<String, Object>>> registerDiscord(
@@ -476,9 +502,11 @@ public class LegacyPathParityController {
 
     /**
      * The shared registration leg, in admin-bff's order: invite gate, ensure-the-account (which
-     * persists the collision-checked localpart on admin-bff's side), then mint. The
-     * already-complete refusal stands exactly where admin-bff's
-     * {@code .flatMap(store::restartOnboarding)} stands.
+     * persists the collision-checked localpart on admin-bff's side), the already-complete gate
+     * (409, decision 57 — standing exactly where admin-bff's
+     * {@code .flatMap(store::restartOnboarding)} stands), the usage row (decision 55 — standing
+     * exactly where admin-bff's {@code emitAndSession} fires {@code usage.record(...).subscribe()},
+     * i.e. before the mint and detached from it), then mint.
      *
      * <p>{@code handle} is trimmed + lowercased here, as admin-bff's {@code str(...).toLowerCase()}
      * does, so the allowlist lookup and the account key agree with the rows admin-bff writes.
@@ -494,14 +522,37 @@ public class LegacyPathParityController {
                         ? adminBff.ensureAccount(provider, handle)
                                 .onErrorMap(LegacyPathParityController::asInternalHopFailure)
                         : Mono.error(ApiException.forbidden(notInvitedMessage)))
-                .flatMap(account -> account.registrationComplete()
-                        // The ONE leg with no internal endpoint: refuse rather than hand back a
-                        // session whose registrationComplete:true makes the UI skip onboarding.
-                        ? Mono.<ResponseEntity<Map<String, Object>>>error(
-                                ApiException.serviceUnavailable(RESTART_ONBOARDING_UNAVAILABLE))
-                        : adminBff.createSession(account.id())
-                                .onErrorMap(LegacyPathParityController::asInternalHopFailure)
-                                .map(session -> emitAndSession(exchange, account, session)));
+                .flatMap(account -> {
+                    if (account.registrationComplete()) {
+                        // Decision 57: a re-registration of an already-complete account is a
+                        // CONFLICT with that account. No restart, no session, no usage row.
+                        return Mono.<ResponseEntity<Map<String, Object>>>error(
+                                ApiException.conflict(ALREADY_REGISTERED_CONFLICT));
+                    }
+                    recordRegistration(provider, handle, account);
+                    return adminBff.createSession(account.id())
+                            .onErrorMap(LegacyPathParityController::asInternalHopFailure)
+                            .map(session -> emitAndSession(exchange, account, session));
+                });
+    }
+
+    /**
+     * Decision 55: the registration usage row, over admin-bff's {@code POST /bff/internal/usage}
+     * — the same {@code (handle, account.roles(), "register")} triple admin-bff's own
+     * {@code emitAndSession} records, subscribed DETACHED from the response exactly as its
+     * {@code usage.record(...).subscribe()} is. A failure is logged (provider + the error, never
+     * the handle, which is an email address) and never reaches the caller: the account exists
+     * and the session is minted regardless. The two-consumer {@code subscribe} matters — a bare
+     * {@code subscribe()} would route the error to Reactor's {@code onErrorDropped} hook, which
+     * logs at ERROR with a stack trace on every admin-bff hiccup.
+     */
+    private void recordRegistration(String provider, String handle,
+                                    AdminBffInternalClient.AccountView account) {
+        adminBff.recordUsage(handle, account.roles(), USAGE_ACTION_REGISTER)
+                .subscribe(ignored -> { },
+                        e -> log.warn("[register/{}] usage row not recorded on admin-bff "
+                                + "(decision 55 leg is fire-and-forget; registration unaffected): {}",
+                                provider, String.valueOf(e)));
     }
 
     /**
@@ -510,8 +561,8 @@ public class LegacyPathParityController {
      * body, which is the shape {@link SsoAuthController#register} already emits and the shape
      * hugmesh-generator's {@code tests/qemu/seed-accounts.sh} reads ({@code .token}).
      * {@code registrationComplete} is necessarily {@code false} here — a {@code true} account
-     * was refused above — which is the same value admin-bff emits after its
-     * {@code restartOnboarding}.
+     * was refused with 409 above (decision 57) — which is the same value admin-bff emits after
+     * its {@code restartOnboarding}.
      */
     private ResponseEntity<Map<String, Object>> emitAndSession(
             ServerWebExchange exchange, AdminBffInternalClient.AccountView account,
@@ -533,7 +584,9 @@ public class LegacyPathParityController {
     /**
      * Map a failure of the {@code /bff/internal/**} hop onto the status the CALLER should see.
      * A {@code 409} is admin-bff's localpart-collision refusal and is re-raised as a {@code 409}
-     * (status parity with admin-bff's {@code ApiException.conflict}); anything else that is not
+     * (status parity with admin-bff's {@code ApiException.conflict}) — distinct in its BODY from
+     * the already-complete 409 of decision 57 ({@link #ALREADY_REGISTERED_CONFLICT}), which is
+     * raised by this class, not by the hop; anything else that is not
      * already status-carrying becomes a {@code 502}, the same wrap
      * {@link #asGatewayFailure} applies on the provision legs. Without this an internal
      * {@link WebClientResponseException} is not a {@link ResponseStatusException} and would

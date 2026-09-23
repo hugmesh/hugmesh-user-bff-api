@@ -423,6 +423,48 @@ public class AdminBffInternalClient {
                 .bodyToMono(SessionView.class);
     }
 
+    /**
+     * Record one usage event on admin-bff's OWN {@code UsageService} — admin-bff's
+     * {@code POST /bff/internal/usage} (decision 55, hugmesh-admin-bff-api#85, landed as PR
+     * #104 / {@code 86cdf79}). This is the leg that makes a registration performed through
+     * user-bff appear in admin-bff's usage table: admin-bff's {@code AuthController} records
+     * its own registrations as {@code usage.record(handle, account.roles(), "register")},
+     * and this endpoint is a straight pass-through to that same three-argument call.
+     *
+     * <p><b>The wire contract, as measured on admin-bff (PR #104's corrected block):</b>
+     * JSON body {@code {"handle", "roles", "action"}}; {@code handle} and {@code action} are
+     * {@code @NotBlank} (400 otherwise); {@code roles} is optional and MUST be admin-bff's
+     * LOWERCASE {@code Account.roles} dialect ({@code "user"}/{@code "admin"}) — a Spring
+     * {@code "ROLE_ADMIN"} spelling is silently tagged {@code user}, so the caller passes
+     * {@link AccountView#roles()} VERBATIM, which is exactly that dialect (admin-bff's
+     * {@code AccountOut.of} copies {@code a.roles()} unchanged). {@code 204} on a well-formed
+     * call, sent AFTER the usage write settles (Kafka produce, bounded by the producer's
+     * {@code max.block.ms}); a 5xx is retryable (an append — a retry can only add a duplicate
+     * row, never break one).
+     *
+     * <p>Errors PROPAGATE here, as on every other call in this client; whether the failure
+     * reaches the end user is the CALLER's policy. {@code LegacyPathParityController} fires it
+     * fire-and-forget (admin-bff's own {@code .subscribe()} idiom), so a usage outage never
+     * fails a registration. A null {@code roles} is sent as an empty list ({@code Map.of}
+     * refuses null values, and admin-bff treats omitted/null/empty identically). Fail-closed
+     * stub when the OIDC surface is dark, exactly like the other calls.
+     */
+    public Mono<Void> recordUsage(String handle, List<String> roles, String action) {
+        if (http == null) {
+            return stub("recordUsage");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("handle", handle);
+        body.put("roles", roles == null ? List.of() : List.copyOf(roles));
+        body.put("action", action);
+        return http.post().uri("/bff/internal/usage")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .toBodilessEntity()
+                .then();
+    }
+
     /** Revoke (delete) a session by its opaque token — the {@code /sessionOut} leg. */
     public Mono<Void> deleteSession(String token) {
         if (http == null) {

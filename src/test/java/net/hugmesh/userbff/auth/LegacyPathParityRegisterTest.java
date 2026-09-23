@@ -2,6 +2,7 @@ package net.hugmesh.userbff.auth;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.context.ApplicationContext;
@@ -27,8 +28,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -44,19 +47,28 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
  *
  * <p><b>These are PRE-AUTH paths</b>, so unlike the three legs pinned in
  * {@link LegacyPathParityControllerTest} there is no principal: every request here is
- * ANONYMOUS and travels the REAL {@link SecurityConfig} prod chain, which makes each 200/403/503
+ * ANONYMOUS and travels the REAL {@link SecurityConfig} prod chain, which makes each 200/403/409
  * below simultaneously a pin that the two exact {@code permitAll} entries are in place. A
  * missing {@code permitAll} would surface as a 401 and fail every test in this class.
  * {@link net.hugmesh.userbff.config.SecurityConfigSsoPathRulesTest} pins the negative half (a
  * sibling under {@code /bff/register/**} is NOT permitted).
  *
- * <p><b>The one deliberate divergence is pinned here, not merely documented:</b>
- * {@code alreadyCompleteAccount_is503_andNeverMintsASession} (both legs). admin-bff calls
- * {@code AccountStore.restartOnboarding} at that exact point; admin-bff's
- * {@code /bff/internal/**} surface exposes no endpoint that can set
- * {@code registration_complete} back to FALSE, so this class refuses rather than hand back a
- * session whose {@code registrationComplete:true} makes the UI skip onboarding. See the
- * controller's class doc and hugmesh/hugmesh-admin-bff-api#2 box 1.
+ * <p><b>The two operator rulings are pinned here, not merely documented</b> (hugmesh-generator#347,
+ * 2026-09-18):
+ * <ul>
+ *   <li><b>Decision 57 = 409.</b> {@code alreadyCompleteAccount_is409_andNeverMintsASession}
+ *       (both legs). admin-bff calls {@code AccountStore.restartOnboarding} at that exact
+ *       point; this class answers a {@code 409 Conflict} with the existing, already-onboarded
+ *       account instead — no restart, no session, no usage row. The body is asserted, not just
+ *       the status, because the localpart-collision leg is ALSO a 409.</li>
+ *   <li><b>Decision 55 = yes.</b> A performed registration is recorded on admin-bff's usage
+ *       table through {@code AdminBffInternalClient#recordUsage} with admin-bff's own triple —
+ *       bare handle, the account's verbatim roles, {@code "register"} — fired BEFORE the mint
+ *       and detached from it, so a usage failure never fails the caller. The wire shape and the
+ *       end-to-end detachment against a stub admin-bff are pinned in
+ *       {@link LegacyPathParityRegisterUsageWireTest}; the mock-level pins here cover the
+ *       arguments, the ordering and every path that must NOT record.</li>
+ * </ul>
  */
 @WebFluxTest(controllers = LegacyPathParityController.class)
 @Import({SecurityConfig.class, CanonicalIdentityResolver.class, ApiExceptionHandler.class})
@@ -83,6 +95,11 @@ class LegacyPathParityRegisterTest {
         // Cookie mode OFF is the SHIPPED default (app.session.cookie.enabled=false), so it is
         // the default posture here; cookieMode_mintsTheBffCookie below flips it explicitly.
         when(cookies.enabled()).thenReturn(false);
+        // The decision-55 usage leg is fire-and-forget: the controller subscribes to whatever
+        // Mono the client hands back, so an UNSTUBBED mock (null) would NPE inside the chain
+        // and turn every happy path below into a 500. Stub it green by default; the usage
+        // tests further down override it per case.
+        when(adminBff.recordUsage(anyString(), anyList(), anyString())).thenReturn(Mono.empty());
     }
 
     /** An account view as admin-bff's internal {@code AccountOut} deserialises after
@@ -217,23 +234,26 @@ class LegacyPathParityRegisterTest {
         verify(adminBff, never()).ensureAccount(anyString(), anyString());
     }
 
-    // ── THE DECLARED DIVERGENCE: the restartOnboarding leg ────────────────────────────────
+    // ── DECISION 57: the restartOnboarding leg is a 409 ─────────────────────────────────
 
     /**
      * admin-bff's next call after {@code ensureAccount} is {@code store::restartOnboarding},
      * which is {@code setComplete(a, false)} and nothing else. It is a NO-OP on every input but
      * one: an account that is ALREADY {@code registrationComplete}. admin-bff's
      * {@code /bff/internal/**} surface has no endpoint that can set that column back to false
-     * ({@code /accounts/{id}/complete} only sets it TRUE), so this class REFUSES that one input
-     * with 503 instead of minting a session whose {@code registrationComplete:true} would make
-     * the UI skip onboarding — the silent divergence a caller can see.
+     * (hugmesh-admin-bff-api#84 is open), and operator decision 57 ruled that input a
+     * {@code 409 Conflict} with the existing account — against the recommended "503 until #84
+     * lands", which is what this class answered between 2026-09-18 and this revision.
      *
-     * <p>The refusal must land BEFORE the mint: the account is left exactly as it was and no
-     * session exists that could be used. Deleting the refusal (the mutation this pin defends)
-     * fails here with {@code 200 OK} and a real {@code createSession} call.
+     * <p>The refusal must land BEFORE the mint AND before the usage row: the account is left
+     * exactly as it was, no session exists that could be used, and admin-bff's usage table
+     * gets no {@code "register"} row for a registration that was not performed. The body is
+     * asserted because {@code localpartCollisionFromAdminBff_is409_notAnOpaque500} is also a
+     * 409 — a status-only pin could not tell the two apart. Reverting the production line to
+     * {@code serviceUnavailable} (the mutation this pin defends) fails here on the status.
      */
     @Test
-    void google_alreadyCompleteAccount_is503_andNeverMintsASession() {
+    void google_alreadyCompleteAccount_is409_andNeverMintsASession() {
         when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
         when(adminBff.ensureAccount("google", EMAIL))
                 .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, true)));
@@ -241,17 +261,19 @@ class LegacyPathParityRegisterTest {
                 .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
 
         postGoogle("{\"email\":\"" + EMAIL + "\"}")
-                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody().jsonPath("$.error")
                 .value(msg -> assertThat((String) msg)
                         .contains("already completed registration")
-                        .contains("hugmesh/hugmesh-admin-bff-api#2 box 1"));
+                        .contains("decision 57")
+                        .doesNotContain("localpart"));
 
         verify(adminBff, never()).createSession(anyString());
+        verify(adminBff, never()).recordUsage(anyString(), anyList(), anyString());
     }
 
     @Test
-    void discord_alreadyCompleteAccount_is503_andNeverMintsASession() {
+    void discord_alreadyCompleteAccount_is409_andNeverMintsASession() {
         when(adminBff.allowlistCheck("discord", DISCORD_HANDLE)).thenReturn(Mono.just(true));
         when(adminBff.ensureAccount("discord", DISCORD_HANDLE))
                 .thenReturn(Mono.just(account(DISCORD_ID, "discord", DISCORD_HANDLE, true)));
@@ -259,9 +281,90 @@ class LegacyPathParityRegisterTest {
                 .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, DISCORD_ID)));
 
         postDiscord("{\"username\":\"" + DISCORD_HANDLE + "\"}")
-                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody().jsonPath("$.error")
+                .value(msg -> assertThat((String) msg).contains("already completed registration"));
 
         verify(adminBff, never()).createSession(anyString());
+        verify(adminBff, never()).recordUsage(anyString(), anyList(), anyString());
+    }
+
+    // ── DECISION 55: the usage row ────────────────────────────────────────────────────────
+
+    /**
+     * admin-bff's {@code emitAndSession(email, a, "register", …)} records
+     * {@code usage.record(handle, a.roles(), action)} — the BARE lowercased handle (not the
+     * {@code google:} id), the account's roles VERBATIM (admin-bff's lowercase dialect, which
+     * its usage endpoint requires — {@code "ROLE_ADMIN"} would be tagged {@code user}), and the
+     * literal {@code "register"}. Same triple here, same position: BEFORE the session mint.
+     */
+    @Test
+    void google_performedRegistration_recordsAdminBffsOwnUsageTriple_beforeTheMint() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+
+        postGoogle("{\"email\":\"Alice@Example.TEST\"}").expectStatus().isOk();
+
+        InOrder order = inOrder(adminBff);
+        order.verify(adminBff).recordUsage(EMAIL, List.of("user", "matrix", "mastodon"), "register");
+        order.verify(adminBff).createSession(GOOGLE_ID);
+    }
+
+    @Test
+    void discord_performedRegistration_recordsTheUsageTriple_underTheBareHandle() {
+        when(adminBff.allowlistCheck("discord", DISCORD_HANDLE)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("discord", DISCORD_HANDLE))
+                .thenReturn(Mono.just(account(DISCORD_ID, "discord", DISCORD_HANDLE, false)));
+        when(adminBff.createSession(DISCORD_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, DISCORD_ID)));
+
+        postDiscord("{\"username\":\"" + DISCORD_HANDLE + "\"}").expectStatus().isOk();
+
+        verify(adminBff).recordUsage(DISCORD_HANDLE, List.of("user", "matrix", "mastodon"), "register");
+    }
+
+    /**
+     * admin-bff fires the row as {@code .subscribe()} — its outcome never reaches the caller.
+     * Same here: a usage failure (admin-bff 5xx, dropped connection, a produce blocking on
+     * {@code max.block.ms}) is logged and the registration completes with its session. Turning
+     * the detached subscribe into a {@code .then(...)} that propagates (the mutation this pin
+     * defends) fails here with a 502.
+     */
+    @Test
+    void usageRowFailure_neverFailsTheRegistration_sessionStillMinted() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+        when(adminBff.recordUsage(anyString(), anyList(), anyString())).thenReturn(Mono.error(
+                WebClientResponseException.create(500, "Internal Server Error", HttpHeaders.EMPTY,
+                        new byte[0], null)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.token").isEqualTo(TOKEN);
+
+        verify(adminBff).createSession(GOOGLE_ID);
+    }
+
+    /** A registration that was NOT performed records nothing — the uninvited 403 and the
+     *  localpart-collision 409 (the already-complete 409 is pinned above). */
+    @Test
+    void refusedRegistrations_recordNoUsageRow() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(false));
+        postGoogle("{\"email\":\"" + EMAIL + "\"}").expectStatus().isForbidden();
+
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL)).thenReturn(Mono.error(
+                WebClientResponseException.create(409, "Conflict", HttpHeaders.EMPTY,
+                        new byte[0], null)));
+        postGoogle("{\"email\":\"" + EMAIL + "\"}").expectStatus().isEqualTo(HttpStatus.CONFLICT);
+
+        verify(adminBff, never()).recordUsage(anyString(), anyList(), anyString());
     }
 
     // ── Internal-hop failures ─────────────────────────────────────────────────────────────
