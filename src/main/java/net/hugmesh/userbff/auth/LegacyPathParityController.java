@@ -545,10 +545,19 @@ public class LegacyPathParityController {
      * and the session is minted regardless. The two-consumer {@code subscribe} matters — a bare
      * {@code subscribe()} would route the error to Reactor's {@code onErrorDropped} hook, which
      * logs at ERROR with a stack trace on every admin-bff hiccup.
+     *
+     * <p>{@link Mono#defer} matters too: this method runs inside the registration chain's
+     * {@code flatMap} lambda, so an exception thrown while the client BUILDS its Mono (e.g. a
+     * {@code NullPointerException} from {@code List.copyOf} on a roles list carrying a null
+     * element) would otherwise escape into the response chain and turn a performed
+     * registration into a 500. Deferred, that throw becomes an error signal of the detached
+     * subscription and takes the same WARN path. Both properties, and that a usage call that
+     * never answers does not delay the response, are pinned in
+     * {@code LegacyPathParityRegisterTest}.
      */
     private void recordRegistration(String provider, String handle,
                                     AdminBffInternalClient.AccountView account) {
-        adminBff.recordUsage(handle, account.roles(), USAGE_ACTION_REGISTER)
+        Mono.defer(() -> adminBff.recordUsage(handle, account.roles(), USAGE_ACTION_REGISTER))
                 .subscribe(ignored -> { },
                         e -> log.warn("[register/{}] usage row not recorded on admin-bff "
                                 + "(decision 55 leg is fire-and-forget; registration unaffected): {}",

@@ -1,8 +1,13 @@
 package net.hugmesh.userbff.auth;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.context.ApplicationContext;
@@ -24,6 +29,8 @@ import net.hugmesh.userbff.hsproxy.HsTokenCustody;
 import net.hugmesh.userbff.hsproxy.ServiceTokenBroker;
 import net.hugmesh.userbff.web.ApiExceptionHandler;
 
+import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -349,6 +356,123 @@ class LegacyPathParityRegisterTest {
                 .expectBody().jsonPath("$.token").isEqualTo(TOKEN);
 
         verify(adminBff).createSession(GOOGLE_ID);
+    }
+
+    /**
+     * DETACHED means the response never WAITS on the usage call, not merely that its error is
+     * swallowed. Since hugmesh-admin-bff-api PR #104 admin-bff answers
+     * {@code POST /bff/internal/usage} only once its write has settled — the Kafka produce,
+     * bounded by the producer's {@code max.block.ms} on a broker outage — and the admin-bff
+     * {@code WebClient} sets no response timeout, so a chain that AWAITED the call and then
+     * swallowed its error ({@code recordUsage(...).onErrorResume(e -> Mono.empty())
+     * .then(createSession)}) would pass every error-path pin above while holding each
+     * registration for the full produce stall. A usage call that NEVER answers must still let
+     * the registration complete, well inside the 3 s the client waits here.
+     */
+    @Test
+    void usageCallThatNeverAnswers_neverDelaysTheRegistration() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+        when(adminBff.recordUsage(anyString(), anyList(), anyString())).thenReturn(Mono.never());
+
+        client.mutate().responseTimeout(Duration.ofSeconds(3)).build()
+                .post().uri("/bff/register/google")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{\"email\":\"" + EMAIL + "\"}")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.token").isEqualTo(TOKEN);
+
+        verify(adminBff).recordUsage(EMAIL, List.of("user", "matrix", "mastodon"), "register");
+        verify(adminBff).createSession(GOOGLE_ID);
+    }
+
+    /**
+     * The usage call is made inside the registration chain's {@code flatMap} lambda, so an
+     * exception thrown while the client BUILDS its Mono — not an error signal, a plain throw,
+     * e.g. {@code List.copyOf} meeting a null roles element — would escape into the response
+     * chain as a 500 unless the call is deferred. It must take the same never-fails path as
+     * an error signal.
+     */
+    @Test
+    void usageCallThatThrowsSynchronously_neverFailsTheRegistration() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID))
+                .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+        when(adminBff.recordUsage(anyString(), anyList(), anyString()))
+                .thenThrow(new NullPointerException("synchronous throw while building the usage call"));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.token").isEqualTo(TOKEN);
+
+        verify(adminBff).createSession(GOOGLE_ID);
+    }
+
+    /**
+     * What a usage failure LEAVES BEHIND: exactly one WARN (not an ERROR, not a silent
+     * trace/debug) naming the provider, and never the handle — for the Google leg that is the
+     * person's email address, which does not belong in a log line. Captured with a logback
+     * {@link ListAppender} on the controller's own logger; the error consumer runs inside the
+     * request (the stub's error is synchronous), so the event is there before
+     * {@code exchange()} returns. Both the synchronous-throw and the error-signal shapes are
+     * covered, because they reach the WARN by different routes.
+     */
+    @Test
+    void usageFailure_isLoggedOnceAtWarn_withTheProvider_neverTheHandle() {
+        Logger controllerLog = (Logger) LoggerFactory.getLogger(LegacyPathParityController.class);
+        ListAppender<ILoggingEvent> captured = new ListAppender<>();
+        captured.start();
+        controllerLog.addAppender(captured);
+        try {
+            when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+            when(adminBff.ensureAccount("google", EMAIL))
+                    .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+            when(adminBff.createSession(GOOGLE_ID))
+                    .thenReturn(Mono.just(new AdminBffInternalClient.SessionView(TOKEN, GOOGLE_ID)));
+            when(adminBff.recordUsage(anyString(), anyList(), anyString())).thenReturn(Mono.error(
+                    WebClientResponseException.create(500, "Internal Server Error",
+                            HttpHeaders.EMPTY, new byte[0], null)));
+
+            postGoogle("{\"email\":\"" + EMAIL + "\"}").expectStatus().isOk();
+
+            List<ILoggingEvent> usageEvents = captured.list.stream()
+                    .filter(e -> e.getFormattedMessage().contains("usage row not recorded"))
+                    .toList();
+            assertThat(usageEvents).as("usage-failure log events").hasSize(1);
+            ILoggingEvent event = usageEvents.get(0);
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("[register/google]");
+            assertThat(captured.list).as("every event this controller logged")
+                    .allSatisfy(e -> {
+                        assertThat(e.getLevel()).isNotEqualTo(Level.ERROR);
+                        assertThat(e.getFormattedMessage()).doesNotContainIgnoringCase(EMAIL);
+                        assertThat(Arrays.deepToString(e.getArgumentArray()))
+                                .doesNotContainIgnoringCase(EMAIL);
+                    });
+
+            // The synchronous-throw route reaches the same single WARN.
+            captured.list.clear();
+            when(adminBff.recordUsage(anyString(), anyList(), anyString()))
+                    .thenThrow(new NullPointerException("synchronous throw while building the usage call"));
+            postGoogle("{\"email\":\"" + EMAIL + "\"}").expectStatus().isOk();
+            List<ILoggingEvent> afterThrow = captured.list.stream()
+                    .filter(e -> e.getFormattedMessage().contains("usage row not recorded"))
+                    .toList();
+            assertThat(afterThrow).as("usage-failure events after a synchronous throw").hasSize(1);
+            assertThat(afterThrow.get(0).getLevel()).isEqualTo(Level.WARN);
+            assertThat(afterThrow.get(0).getFormattedMessage())
+                    .contains("[register/google]").doesNotContainIgnoringCase(EMAIL);
+            assertThat(Arrays.deepToString(afterThrow.get(0).getArgumentArray()))
+                    .doesNotContainIgnoringCase(EMAIL);
+        } finally {
+            controllerLog.detachAppender(captured);
+            captured.stop();
+        }
     }
 
     /** A registration that was NOT performed records nothing — the uninvited 403 and the
