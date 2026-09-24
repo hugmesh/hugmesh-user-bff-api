@@ -20,6 +20,7 @@ import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import net.hugmesh.authcore.config.SessionCookieService;
 import net.hugmesh.userbff.config.SecurityConfig;
@@ -247,6 +248,33 @@ class LegacyPathParityRegisterUsageWireTest {
                 .expectBody().jsonPath("$.token").isEqualTo(TOKEN);
 
         assertThat(adminBff.sessionMints()).hasSize(1);
+    }
+
+    /**
+     * The failure of the detached usage call is CONSUMED by the controller's error callback (a
+     * WARN), not dropped: a bare {@code subscribe()} would hand it to Reactor's
+     * {@code onErrorDropped} hook as an {@code ErrorCallbackNotImplemented}, which Reactor logs
+     * at ERROR with a full stack trace on every admin-bff hiccup. Pinned for both failure
+     * shapes (an admin-bff 5xx and a dropped connection) by installing a capturing hook for the
+     * duration of the request.
+     */
+    @Test
+    void usageFailure_isHandledByTheController_neverReachesReactorsOnErrorDropped() {
+        List<Throwable> dropped = new CopyOnWriteArrayList<>();
+        Hooks.onErrorDropped(dropped::add);
+        try {
+            adminBff.usageStatus = HttpStatus.INTERNAL_SERVER_ERROR;
+            postGoogle(EMAIL).expectStatus().isOk();
+
+            adminBff.usageStatus = HttpStatus.NO_CONTENT;
+            adminBff.usageTransportFailure = new IOException("connection reset by peer");
+            postDiscord(DISCORD_HANDLE).expectStatus().isOk();
+
+            assertThat(adminBff.usageCalls()).hasSize(2);
+            assertThat(dropped).as("errors routed to Reactor's onErrorDropped hook").isEmpty();
+        } finally {
+            Hooks.resetOnErrorDropped();
+        }
     }
 
     /** Decision 57 on the wire: the already-complete input is a 409 and admin-bff sees NO usage
