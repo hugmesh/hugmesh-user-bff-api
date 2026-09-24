@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
@@ -473,6 +474,27 @@ class LegacyPathParityRegisterTest {
             controllerLog.detachAppender(captured);
             captured.stop();
         }
+    }
+
+    /**
+     * A session mint that FAILS after the usage row was fired (a 502 to the caller) must not
+     * fire a second row: exactly one {@code recordUsage} per request that reached the mint,
+     * whatever the mint does. admin-bff's own chain calls {@code usage.record} once, before
+     * {@code store.newSession}, and never again on the error path.
+     */
+    @Test
+    void mintFailure_is502_andTheUsageRowIsFiredExactlyOnce() {
+        when(adminBff.allowlistCheck("google", EMAIL)).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount("google", EMAIL))
+                .thenReturn(Mono.just(account(GOOGLE_ID, "google", EMAIL, false)));
+        when(adminBff.createSession(GOOGLE_ID)).thenReturn(Mono.error(
+                WebClientResponseException.create(500, "Internal Server Error", HttpHeaders.EMPTY,
+                        new byte[0], null)));
+
+        postGoogle("{\"email\":\"" + EMAIL + "\"}")
+                .expectStatus().isEqualTo(HttpStatus.BAD_GATEWAY);
+
+        verify(adminBff, times(1)).recordUsage(anyString(), anyList(), anyString());
     }
 
     /** A registration that was NOT performed records nothing — the uninvited 403 and the
