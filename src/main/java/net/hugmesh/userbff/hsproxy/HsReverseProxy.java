@@ -112,28 +112,32 @@ public class HsReverseProxy {
         // building the upstream request (so a hostile path never touches the mTLS leg).
         // Deferred into the reactive chain so a bad path surfaces as a 400 Mono.error
         // (never an unconsumed token / mTLS leg) regardless of the caller's wiring.
-        return Mono.defer(() -> {
-            requireSafePath(upstreamPath);
+        return Mono.defer(() -> guardedForward(exchange, upstreamPath, loadToken, remint));
+    }
 
-            ServerHttpRequest req = exchange.getRequest();
-            String query = req.getURI().getRawQuery();
-            // Build a path-ONLY relative URI: UriComponentsBuilder.fromPath() never parses
-            // an authority, so even a path that somehow slipped the guard cannot set a host.
-            // The request path value + raw query are already URL-encoded → build(true).
-            URI relativeUpstream = UriComponentsBuilder.fromPath(upstreamPath)
-                    .query(query == null || query.isBlank() ? null : query)
-                    .build(true)
-                    .toUri();
-            String fullPath = relativeUpstream.toString();
+    /** The deferred body of {@link #forward}: the SSRF guard, then the token load and relay. */
+    private Mono<Void> guardedForward(ServerWebExchange exchange, String upstreamPath,
+                                      Mono<String> loadToken, Mono<String> remint) {
+        requireSafePath(upstreamPath);
 
-            // Load the native token (first-use lazy mint on empty), forward the request,
-            // and refresh-on-401 if needed.
-            boolean bodyMethod = BODY_METHODS.contains(req.getMethod());
-            return loadToken
-                    .switchIfEmpty(Mono.defer(() -> firstUseMint(remint)))
-                    .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
-                            .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint, bodyMethod)));
-        });
+        ServerHttpRequest req = exchange.getRequest();
+        String query = req.getURI().getRawQuery();
+        // Build a path-ONLY relative URI: UriComponentsBuilder.fromPath() never parses
+        // an authority, so even a path that somehow slipped the guard cannot set a host.
+        // The request path value + raw query are already URL-encoded → build(true).
+        URI relativeUpstream = UriComponentsBuilder.fromPath(upstreamPath)
+                .query(query == null || query.isBlank() ? null : query)
+                .build(true)
+                .toUri();
+        String fullPath = relativeUpstream.toString();
+
+        // Load the native token (first-use lazy mint on empty), forward the request,
+        // and refresh-on-401 if needed.
+        boolean bodyMethod = BODY_METHODS.contains(req.getMethod());
+        return loadToken
+                .switchIfEmpty(Mono.defer(() -> firstUseMint(remint)))
+                .flatMap(nativeToken -> exchangeAndRelay(exchange, fullPath, nativeToken)
+                        .flatMap(relayed -> handleRelayResult(relayed, exchange, fullPath, remint, bodyMethod)));
     }
 
     /**
