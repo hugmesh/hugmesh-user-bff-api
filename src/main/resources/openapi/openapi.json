@@ -1521,7 +1521,7 @@
     "/bff/register/google" : {
       "post" : {
         "tags" : [ "Legacy path parity" ],
-        "summary" : "Invite-gated Google/email registration: ensure the account and mint a bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart collision; 503 for an already-complete account (user-bff cannot restart onboarding — admin-bff#2 box 1).",
+        "summary" : "Invite-gated Google/email registration: ensure the account and mint a bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart collision; 409 for an already-complete account (decision 57: conflict with the existing account, no restart of onboarding). Records a register usage row on admin-bff (decision 55), fire-and-forget.",
         "operationId" : "authRegisterGoogle",
         "requestBody" : {
           "content" : {
@@ -1553,7 +1553,7 @@
     "/bff/register/discord" : {
       "post" : {
         "tags" : [ "Legacy path parity" ],
-        "summary" : "Invite-gated Discord registration: ensure the account and mint a bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart collision; 503 for an already-complete account (user-bff cannot restart onboarding — admin-bff#2 box 1).",
+        "summary" : "Invite-gated Discord registration: ensure the account and mint a bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart collision; 409 for an already-complete account (decision 57: conflict with the existing account, no restart of onboarding). Records a register usage row on admin-bff (decision 55), fire-and-forget.",
         "operationId" : "authRegisterDiscord",
         "requestBody" : {
           "content" : {
