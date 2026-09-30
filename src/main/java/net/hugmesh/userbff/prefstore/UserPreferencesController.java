@@ -1,6 +1,7 @@
 package net.hugmesh.userbff.prefstore;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -71,6 +72,9 @@ public class UserPreferencesController {
     /** PUT body: upsert one durable preference (key + value), both bounded/validated.
      *  For {@code media.poison.default} the value must be a {@link MediaPoisonMode}
      *  token ({@code off|low|medium|high}); anything else is a 400. */
+    // Distinct OpenAPI name: two nested records both called PreferenceUpsert collapsed into ONE
+    // components schema, so one endpoint's generated client type described the other's body.
+    @Schema(name = "UserPreferenceUpsert")
     public record PreferenceUpsert(
             @NotBlank
             @Size(max = 128)

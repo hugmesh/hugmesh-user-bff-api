@@ -121,6 +121,20 @@ class OpenApiSpecDumpTest extends PostgresTestSupport {
                 .as("MediaPoisonMode enum must be exactly the user-facing vocabulary")
                 .containsExactly("off", "low", "medium", "high");
 
+        // Two controllers each declare a nested record PreferenceUpsert with DIFFERENT shapes;
+        // unnamed they collapsed into one schema and one PUT body was typed as the other's.
+        JsonNode schemas = tree.path("components").path("schemas");
+        assertThat(schemas.has("PreferenceUpsert"))
+                .as("the ambiguous PreferenceUpsert schema name must not come back").isFalse();
+        assertThat(fieldNames(schemas.path("NotificationPreferenceUpsert").path("properties")))
+                .containsExactlyInAnyOrder("category", "enabled");
+        assertThat(fieldNames(schemas.path("UserPreferenceUpsert").path("properties")))
+                .containsExactlyInAnyOrder("key", "value");
+        assertThat(tree.path("paths").path("/bff/user/notification-preferences").path("put")
+                .path("requestBody").path("content").path("application/json").path("schema")
+                .path("$ref").asText())
+                .isEqualTo("#/components/schemas/NotificationPreferenceUpsert");
+
         // ASSERT BY DEFAULT; write only when explicitly asked. The inverse — write-and-pass by
         // default, assert behind an opt-in flag — is what let this contract rot: every
         // `./mvnw test` rewrote the file and went green, so drift was only ever visible to
@@ -142,5 +156,11 @@ class OpenApiSpecDumpTest extends PostgresTestSupport {
 
         Files.createDirectories(SPEC_PATH.getParent());
         Files.writeString(SPEC_PATH, stable, StandardCharsets.UTF_8);
+    }
+
+    private static List<String> fieldNames(JsonNode node) {
+        List<String> names = new ArrayList<>();
+        node.fieldNames().forEachRemaining(names::add);
+        return names;
     }
 }
