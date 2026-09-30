@@ -212,7 +212,33 @@ public class SecurityConfig {
         // through to .authenticated(). NOTE: /bff/me is deliberately NOT here — it stays
         // authenticated (matches admin-bff), falling through to the
         // anyExchange().authenticated() catch-all below.
-        ex.pathMatchers("/bff/login", "/bff/register", "/bff/session").permitAll();
+        //
+        // /bff/sessionOut (hugmesh-generator#549) MUST sit alongside /bff/session, not
+        // fall through to .authenticated(): it is the SAME operation (SsoAuthController
+        // aliases it to DELETE /bff/session) and must stay idempotent the same way — an
+        // ALREADY-logged-out caller (no cookie, or an expired one) has to reach the
+        // controller's own null-token 204, not a security-filter 401 first.
+        // BffSessionAuthenticationWebFilter passes an unresolvable/absent bff_ token
+        // through UNAUTHENTICATED rather than blocking it (see that filter's "Fail-closed
+        // posture" doc), so without this line the SECOND sign-out call (or a stale/absent
+        // cookie) would 401 at the chain and never reach the graceful branch that already
+        // exists for exactly that case.
+        ex.pathMatchers("/bff/login", "/bff/register", "/bff/session", "/bff/sessionOut").permitAll();
+        // INVITE-GATED SELF-REGISTRATION (LegacyPathParityController) — admin-bff
+        // AuthController parity for the two paths BOTH gateway route tables now send here
+        // (operator decisions 25 and 40 on hugmesh-generator#347). permitAll for the same
+        // reason /bff/register is: registration is PRE-AUTHENTICATION by definition — the
+        // caller has no account and therefore no token. The gate that actually decides who
+        // may register is admin-bff's domain-scoped ALLOWLIST, read over the internal
+        // surface before any account is created; permitAll only exposes the route.
+        //
+        // EXACT paths, never a /bff/register/** subtree — and this is not style. admin-bff
+        // owns POST /bff/register/complete (AuthController, registration stage 2) under the
+        // same prefix, and a subtree here would make THAT path permitAll on this BFF too:
+        // stage 2 is an AUTHENTICATED mutation (it flips registrationComplete), so blanket-
+        // permitting the prefix would expose a sibling nobody decided to open. The same
+        // scoping discipline as the /bff/password-reset/* pair below.
+        ex.pathMatchers("/bff/register/google", "/bff/register/discord").permitAll();
         // ANONYMOUS PASSWORD RESET — the forgot-password legs, for a caller who by
         // definition has no session and no current password (PasswordResetController).
         // permitAll for the SAME reason /bff/login is: requiring the credential the

@@ -32,4 +32,14 @@ public record VnStickerEntity(
         @Column("created_at") Instant createdAt,
         @Column("body") byte[] body,
         @Column("content_type") String contentType) {
+    /** Defensive copy in: the array is caller-owned and mutable. */
+    public VnStickerEntity {
+        body = body == null ? null : body.clone();
+    }
+
+    /** Defensive copy out: never hand the stored array to a caller. */
+    @Override
+    public byte[] body() {
+        return body == null ? null : body.clone();
+    }
 }

@@ -108,38 +108,44 @@ public class HomeserverMediaClient {
     public Mono<Map<String, Object>> upload(String owner, String localpart, String platform,
                                             byte[] bytes, String filename, String contentType) {
         WebClient w = requireWired(platform);
-        return nativeToken(owner, localpart, platform).flatMap(token -> {
-            if ("matrix".equals(platform)) {
-                // Matrix: raw bytes, content-type carried, filename as a query param.
-                return w.post()
-                        .uri(uri -> uri.path("/_matrix/media/v3/upload")
-                                .queryParam("filename", filename == null ? "upload" : filename).build())
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                        .contentType(contentType == null ? MediaType.APPLICATION_OCTET_STREAM
-                                : MediaType.parseMediaType(contentType))
-                        .bodyValue(bytes)
-                        .retrieve()
-                        .bodyToMono(MAP_TYPE)
-                        .doOnSuccess(r -> log.info("[homeserver] matrix upload ok -> {}",
-                                r == null ? null : r.get("content_uri")));
-            }
-            // Mastodon/akkoma: multipart 'file'.
-            org.springframework.http.client.MultipartBodyBuilder mb =
-                    new org.springframework.http.client.MultipartBodyBuilder();
-            mb.part("file", new org.springframework.core.io.ByteArrayResource(bytes) {
-                @Override public String getFilename() { return filename == null ? "upload" : filename; }
-            }).contentType(contentType == null ? MediaType.APPLICATION_OCTET_STREAM
-                    : MediaType.parseMediaType(contentType));
+        return nativeToken(owner, localpart, platform).flatMap(token ->
+                uploadWithToken(w, token, platform, bytes, filename, contentType));
+    }
+
+    /** The {@link #upload} leg once the native token is resolved: Matrix raw bytes, or
+     *  Mastodon/akkoma multipart. */
+    private Mono<Map<String, Object>> uploadWithToken(WebClient w, String token, String platform,
+                                                      byte[] bytes, String filename, String contentType) {
+        if ("matrix".equals(platform)) {
+            // Matrix: raw bytes, content-type carried, filename as a query param.
             return w.post()
-                    .uri("/api/v2/media")
+                    .uri(uri -> uri.path("/_matrix/media/v3/upload")
+                            .queryParam("filename", filename == null ? "upload" : filename).build())
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                    .contentType(MediaType.MULTIPART_FORM_DATA)
-                    .bodyValue(mb.build())
+                    .contentType(contentType == null ? MediaType.APPLICATION_OCTET_STREAM
+                            : MediaType.parseMediaType(contentType))
+                    .bodyValue(bytes)
                     .retrieve()
                     .bodyToMono(MAP_TYPE)
-                    .doOnSuccess(r -> log.info("[homeserver] mastodon upload ok -> {}",
-                            r == null ? null : r.get("id")));
-        });
+                    .doOnSuccess(r -> log.info("[homeserver] matrix upload ok -> {}",
+                            r == null ? null : r.get("content_uri")));
+        }
+        // Mastodon/akkoma: multipart 'file'.
+        org.springframework.http.client.MultipartBodyBuilder mb =
+                new org.springframework.http.client.MultipartBodyBuilder();
+        mb.part("file", new org.springframework.core.io.ByteArrayResource(bytes) {
+            @Override public String getFilename() { return filename == null ? "upload" : filename; }
+        }).contentType(contentType == null ? MediaType.APPLICATION_OCTET_STREAM
+                : MediaType.parseMediaType(contentType));
+        return w.post()
+                .uri("/api/v2/media")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .bodyValue(mb.build())
+                .retrieve()
+                .bodyToMono(MAP_TYPE)
+                .doOnSuccess(r -> log.info("[homeserver] mastodon upload ok -> {}",
+                        r == null ? null : r.get("id")));
     }
 
     /**

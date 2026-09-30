@@ -13,6 +13,7 @@ import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
+import reactor.util.context.ContextView;
 import net.hugmesh.userbff.auth.AdminBffInternalClient;
 import net.hugmesh.userbff.config.BffSessionAuthenticationWebFilter;
 
@@ -88,7 +89,14 @@ public class FederationWebClientConfig {
      * pre-existing outcome, never an unauthenticated success or a leaked credential.
      */
     public static ExchangeFilterFunction bearerTokenForwardingFilter(AdminBffInternalClient adminBff) {
-        return (request, next) -> ReactiveSecurityContextHolder.getContext()
+        return (request, next) -> bearerRequest(adminBff, request)
+                .flatMap(next::exchange);
+    }
+
+    /** The request {@link #bearerTokenForwardingFilter} sends: carrying the caller's bearer,
+     *  or unchanged when there is none. */
+    private static Mono<ClientRequest> bearerRequest(AdminBffInternalClient adminBff, ClientRequest request) {
+        return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
                 .filter(auth -> auth instanceof JwtAuthenticationToken)
                 .map(auth -> ((JwtAuthenticationToken) auth).getToken().getTokenValue())
@@ -97,26 +105,30 @@ public class FederationWebClientConfig {
                         ? exchangedBearer(adminBff, request)
                         // Real Casdoor JWT: forward its token value verbatim.
                         : Mono.just(withBearer(request, tokenValue)))
-                .defaultIfEmpty(request)
-                .flatMap(next::exchange);
+                .defaultIfEmpty(request);
     }
 
     /** Swap the context-stashed raw {@code bff_} session for a custody JWT and attach it;
      *  fail-closed to NO bearer (never the raw token, never the marker) on any failure. */
     private static Mono<ClientRequest> exchangedBearer(AdminBffInternalClient adminBff, ClientRequest request) {
-        return Mono.deferContextual(ctx -> {
-            String bffToken = ctx.<String>getOrEmpty(BffSessionAuthenticationWebFilter.BFF_SESSION_TOKEN_CONTEXT_KEY)
-                    .orElse(null);
-            if (bffToken == null || bffToken.isBlank()) {
-                // Authenticated synthetic principal but no session token in context — should
-                // not happen (the bridge always stashes it), but send no bearer rather than
-                // guess: federation-api fail-closes with a 401.
-                return Mono.just(request);
-            }
-            return adminBff.exchangeSession(bffToken)
-                    .map(jwt -> withBearer(request, jwt))
-                    .onErrorReturn(request);
-        });
+        return Mono.deferContextual(ctx -> exchangedBearerInContext(adminBff, request, ctx));
+    }
+
+    /** The subscriber-context body of {@link #exchangedBearer}. */
+    private static Mono<ClientRequest> exchangedBearerInContext(AdminBffInternalClient adminBff,
+                                                                ClientRequest request,
+                                                                ContextView ctx) {
+        String bffToken = ctx.<String>getOrEmpty(BffSessionAuthenticationWebFilter.BFF_SESSION_TOKEN_CONTEXT_KEY)
+                .orElse(null);
+        if (bffToken == null || bffToken.isBlank()) {
+            // Authenticated synthetic principal but no session token in context — should
+            // not happen (the bridge always stashes it), but send no bearer rather than
+            // guess: federation-api fail-closes with a 401.
+            return Mono.just(request);
+        }
+        return adminBff.exchangeSession(bffToken)
+                .map(jwt -> withBearer(request, jwt))
+                .onErrorReturn(request);
     }
 
     private static ClientRequest withBearer(ClientRequest request, String token) {

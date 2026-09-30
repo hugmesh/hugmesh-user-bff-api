@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +44,8 @@ import java.util.Map;
  * client. The proxy uses it to inject the homeserver-native bearer and nothing more.
  */
 @Service
+@SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+        justification = "Spring constructor injection: the container owns this singleton collaborator and it is never mutated after construction; a defensive copy of a bean is meaningless (not caller-owned mutable data).")
 public class ServiceTokenBroker {
 
     private static final Logger log = LoggerFactory.getLogger(ServiceTokenBroker.class);
@@ -315,27 +318,30 @@ public class ServiceTokenBroker {
         tokenBody.put("client_secret", app.path("client_secret").asText());
         tokenBody.put("scope", MASTODON_SCOPES);
         return postJson(mastodon, "/oauth/token", tokenBody)
-                .flatMap(tok -> {
-                    if (!tok.hasNonNull("access_token")) {
-                        return Mono.error(new IllegalStateException(
-                                "mastodon mint: client_credentials grant returned no app token"));
-                    }
-                    Map<String, Object> reg = new LinkedHashMap<>();
-                    reg.put("username", user);
-                    reg.put("email", email);
-                    reg.put("password", svcPassword);
-                    reg.put("agreement", true);
-                    reg.put("locale", "en");
-                    return mastodon.post().uri("/api/v1/accounts")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .header("Authorization", "Bearer " + tok.path("access_token").asText())
-                            .bodyValue(reg)
-                            .exchangeToMono(resp -> resp.statusCode().is5xxServerError()
-                                    ? resp.createException().flatMap(e -> Mono.<String>error(e))
-                                    : resp.bodyToMono(String.class))
-                            .flatMap(ServiceTokenBroker::parseJson)
-                            .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
-                });
+                .flatMap(tok -> mastodonCreateAccount(tok, user, email));
+    }
+
+    /** The {@link #mastodonRegister} leg after the app token: {@code POST /api/v1/accounts}. */
+    private Mono<JsonNode> mastodonCreateAccount(JsonNode tok, String user, String email) {
+        if (!tok.hasNonNull("access_token")) {
+            return Mono.error(new IllegalStateException(
+                    "mastodon mint: client_credentials grant returned no app token"));
+        }
+        Map<String, Object> reg = new LinkedHashMap<>();
+        reg.put("username", user);
+        reg.put("email", email);
+        reg.put("password", svcPassword);
+        reg.put("agreement", true);
+        reg.put("locale", "en");
+        return mastodon.post().uri("/api/v1/accounts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + tok.path("access_token").asText())
+                .bodyValue(reg)
+                .exchangeToMono(resp -> resp.statusCode().is5xxServerError()
+                        ? resp.createException().flatMap(e -> Mono.<String>error(e))
+                        : resp.bodyToMono(String.class))
+                .flatMap(ServiceTokenBroker::parseJson)
+                .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
     }
 
     /** Extract access/refresh/expiry from the Mastodon OAuth response and persist the token. */

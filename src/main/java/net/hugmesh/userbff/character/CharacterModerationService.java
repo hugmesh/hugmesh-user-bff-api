@@ -115,18 +115,22 @@ public class CharacterModerationService {
                              Supplier<Mono<T>> reread,
                              String kind, String id, String status, Long findingId, String reviewer) {
         return Mono.defer(update)
-                .flatMap(rows -> {
-                    if (rows != null && rows > 0) {
-                        log.info("[character-moderation] {} id={} flipped to {} (findingId={}, reviewer={})",
-                                kind, id, status, findingId, reviewer);
-                        return reread.get();
-                    }
-                    // 0 rows: unknown id OR already-resolved (not PENDING). Idempotent no-op.
-                    log.info("[character-moderation] {} id={} NO-OP (not PENDING / unknown) "
-                                    + "target={} findingId={} reviewer={}",
-                            kind, id, status, findingId, reviewer);
-                    return Mono.empty();
-                });
+                .flatMap(rows -> afterFlip(rows, reread, kind, id, status, findingId, reviewer));
+    }
+
+    /** The {@link #flip} leg after the update: re-read on a flipped row, EMPTY on a no-op. */
+    private <T> Mono<T> afterFlip(Integer rows, Supplier<Mono<T>> reread,
+                                  String kind, String id, String status, Long findingId, String reviewer) {
+        if (rows != null && rows > 0) {
+            log.info("[character-moderation] {} id={} flipped to {} (findingId={}, reviewer={})",
+                    kind, id, status, findingId, reviewer);
+            return reread.get();
+        }
+        // 0 rows: unknown id OR already-resolved (not PENDING). Idempotent no-op.
+        log.info("[character-moderation] {} id={} NO-OP (not PENDING / unknown) "
+                        + "target={} findingId={} reviewer={}",
+                kind, id, status, findingId, reviewer);
+        return Mono.empty();
     }
 
     /** Enforce the resolved status is one of the two terminal flips; a 400 otherwise. */

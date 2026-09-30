@@ -6,7 +6,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.http.HttpMethod;
+import org.springframework.mock.http.client.reactive.MockClientHttpRequest;
+import java.net.URI;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -314,6 +319,77 @@ class AdminBffInternalClientTest {
                 .verifyComplete();
     }
 
+    // ── allowlistCheck: admin-bff's REAL wire shape, not this repo's idea of it ───────────
+
+    /**
+     * Defect 1 of hugmesh-user-bff-api#13, and the blocker
+     * {@code LegacyPathParityController}'s two {@code /bff/register/*} handlers named. This
+     * read the body as {@code bodyToMono(Boolean.class)}; admin-bff's
+     * {@code InternalAccountController#allowlist} returns {@code invited.map(b ->
+     * Map.of("invited", b))} — the JSON OBJECT {@code {"invited":true}} — so the decode threw
+     * {@code DecodingException: Cannot deserialize value of type java.lang.Boolean from Object
+     * value (token JsonToken.START_OBJECT)} and EVERY live call was a 500. It failed CLOSED, so
+     * it was never a bypass; it simply made the invite gate unevaluatable.
+     *
+     * <p>Driven with admin-bff's LITERAL response body through a stub {@code ExchangeFunction},
+     * not a Mockito stub of this repo's own idea of the contract — the defect is invisible to a
+     * mocked client by construction (the sibling {@code accountNamespaces} pins say the same).
+     */
+    @Test
+    void allowlistCheck_decodesAdminBffsInvitedObject_true() {
+        ExchangeFunction realShape = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"invited\":true}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(realShape).build());
+
+        StepVerifier.create(client.allowlistCheck("google", "alice@example.test"))
+                .expectNext(Boolean.TRUE)
+                .verifyComplete();
+    }
+
+    @Test
+    void allowlistCheck_decodesAdminBffsInvitedObject_false() {
+        ExchangeFunction realShape = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"invited\":false}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(realShape).build());
+
+        StepVerifier.create(client.allowlistCheck("discord", "dragoneer"))
+                .expectNext(Boolean.FALSE)
+                .verifyComplete();
+    }
+
+    /** Fails CLOSED, never null and never "true by absence": an admin-bff that ever omits the
+     *  key yields {@code false}, so a caller can never read "no such key" as "invited". */
+    @Test
+    void allowlistCheck_missingKey_isFalse_failsClosed() {
+        ExchangeFunction noKey = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json").body("{}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(noKey).build());
+
+        StepVerifier.create(client.allowlistCheck("google", "alice@example.test"))
+                .expectNext(Boolean.FALSE)
+                .verifyComplete();
+    }
+
+    /** An EMPTY 200 body (no JSON at all) completes empty out of the decoder; the
+     *  {@code defaultIfEmpty} floor must turn that into {@code false}, not an empty Mono that
+     *  would make the caller's {@code flatMap} silently skip the gate AND the registration. */
+    @Test
+    void allowlistCheck_emptyBody_isFalse_failsClosed() {
+        ExchangeFunction empty = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(empty).build());
+
+        StepVerifier.create(client.allowlistCheck("google", "alice@example.test"))
+                .expectNext(Boolean.FALSE)
+                .verifyComplete();
+    }
+
     @Test
     void config_whenEnabled_buildsLiveClient_andAppliesMtlsConnector() {
         // mtls.enabled=true but no keystore file present ⇒ FederationHttpClientSsl
@@ -329,5 +405,91 @@ class AdminBffInternalClientTest {
                 "http://admin-bff.test", "X-Internal-Token", "s3cr3t-internal");
 
         assertThat(client.enabled()).isTrue();
+    }
+
+    // ── decision 55: POST /bff/internal/usage ─────────────────────────────────────────────
+
+    /** Captures the JSON body of every request (non-blocking), answering a fixed status. */
+    static class BodyRecorder implements ExchangeFunction {
+        final List<ClientRequest> requests = new ArrayList<>();
+        final List<String> bodies = new ArrayList<>();
+        final HttpStatus status;
+        BodyRecorder(HttpStatus status) { this.status = status; }
+
+        @Override
+        public Mono<ClientResponse> exchange(ClientRequest request) {
+            requests.add(request);
+            MockClientHttpRequest sink = new MockClientHttpRequest(HttpMethod.POST, URI.create("http://admin-bff.test"));
+            return request.writeTo(sink, ExchangeStrategies.withDefaults())
+                    .then(Mono.defer(sink::getBodyAsString))
+                    .defaultIfEmpty("")
+                    .map(body -> {
+                        bodies.add(body);
+                        return ClientResponse.create(status).build();
+                    });
+        }
+    }
+
+    /**
+     * The wire shape admin-bff's {@code InternalAccountController#recordUsage} enforces
+     * (hugmesh-admin-bff-api PR #104, corrected contract): a JSON object with {@code handle},
+     * {@code roles} and {@code action}; {@code handle}/{@code action} {@code @NotBlank}, roles
+     * in admin-bff's LOWERCASE dialect, forwarded VERBATIM (no {@code ROLE_} prefixing — that
+     * spelling is silently tagged {@code user} on admin-bff's side). Answered 204, no body.
+     */
+    @Test
+    void liveClient_recordUsage_postsAdminBffsThreeArgumentBody_andCompletesOn204() {
+        BodyRecorder rec = new BodyRecorder(HttpStatus.NO_CONTENT);
+        WebClient http = WebClient.builder().baseUrl("http://admin-bff.test")
+                .defaultHeader("X-Internal-Token", "s3cr3t-internal").exchangeFunction(rec).build();
+        AdminBffInternalClient client = new AdminBffInternalClient(http);
+
+        StepVerifier.create(client.recordUsage("alice@example.test", List.of("user", "admin"), "register"))
+                .verifyComplete();
+
+        assertThat(rec.requests).hasSize(1);
+        ClientRequest req = rec.requests.get(0);
+        assertThat(req.method()).isEqualTo(HttpMethod.POST);
+        assertThat(req.url().getPath()).isEqualTo("/bff/internal/usage");
+        assertThat(req.headers().getContentType()).isEqualTo(org.springframework.http.MediaType.APPLICATION_JSON);
+        assertThat(req.headers().getFirst("X-Internal-Token")).isEqualTo("s3cr3t-internal");
+        assertThat(rec.bodies.get(0))
+                .isEqualTo("{\"handle\":\"alice@example.test\",\"roles\":[\"user\",\"admin\"],\"action\":\"register\"}");
+    }
+
+    /** admin-bff treats omitted/null/empty roles identically; a null on this side is sent as
+     *  {@code []} (a {@code Map.of} body would NPE on the null and never reach the wire). */
+    @Test
+    void liveClient_recordUsage_nullRoles_sentAsEmptyList() {
+        BodyRecorder rec = new BodyRecorder(HttpStatus.NO_CONTENT);
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(rec).build());
+
+        StepVerifier.create(client.recordUsage("dragoneer", null, "register")).verifyComplete();
+
+        assertThat(rec.bodies.get(0))
+                .isEqualTo("{\"handle\":\"dragoneer\",\"roles\":[],\"action\":\"register\"}");
+    }
+
+    /** A 5xx from admin-bff PROPAGATES out of the client (the fire-and-forget policy lives in
+     *  the controller, not here) — so a caller that composes it into its chain fails loudly,
+     *  and the register handler's detached subscribe is the ONLY thing keeping the caller green. */
+    @Test
+    void liveClient_recordUsage_5xx_propagatesAsAnError() {
+        BodyRecorder rec = new BodyRecorder(HttpStatus.INTERNAL_SERVER_ERROR);
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(rec).build());
+
+        StepVerifier.create(client.recordUsage("alice@example.test", List.of("user"), "register"))
+                .expectError(WebClientResponseException.InternalServerError.class)
+                .verify();
+    }
+
+    @Test
+    void disabledClient_recordUsage_failsClosed() {
+        AdminBffInternalClient stub = new AdminBffInternalClient(null);
+        StepVerifier.create(stub.recordUsage("alice@example.test", List.of("user"), "register"))
+                .expectError(IllegalStateException.class)
+                .verify();
     }
 }

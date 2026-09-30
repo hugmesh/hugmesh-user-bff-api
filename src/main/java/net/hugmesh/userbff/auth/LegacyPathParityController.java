@@ -2,24 +2,35 @@ package net.hugmesh.userbff.auth;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import net.hugmesh.authcore.config.SessionCookieService;
 import net.hugmesh.authcore.reserved.ReservedNames;
+import net.hugmesh.authcore.web.dto.RegisterDiscordRequest;
+import net.hugmesh.authcore.web.dto.RegisterEmailRequest;
 import net.hugmesh.commons.web.ApiException;
 import net.hugmesh.userbff.hsproxy.HsTokenCustody;
 import net.hugmesh.userbff.hsproxy.MintedToken;
 import net.hugmesh.userbff.hsproxy.ServiceTokenBroker;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -153,23 +164,132 @@ import java.util.Map;
  *       list that omits it is not exhaustive.</li>
  * </ol>
  *
- * <h2>The two paths that are NOT here</h2>
+ * <h2>The two REGISTER paths: what is reproduced, what is ruled, what is recorded</h2>
  *
- * <p>{@code POST /bff/register/google} and {@code POST /bff/register/discord} could not be
- * built faithfully from user-bff, which owns no account table: admin-bff's handlers also call
- * {@code AccountStore.restartOnboarding} (reset {@code registrationComplete} to false on a
- * RE-registration) and {@code UsageService.record(handle, roles, "register")}, and neither has
- * an endpoint on admin-bff's {@code /bff/internal/**} surface. A handler without them would
- * silently leave a re-registering account marked complete — a divergence a caller can see.
- * The exact internal-API additions needed are written as numbered boxes on
- * hugmesh/hugmesh-admin-bff-api#2.
+ * <p>{@code POST /bff/register/google} and {@code POST /bff/register/discord} were held back
+ * from the first revision of this class. Operator decision 40 (hugmesh-generator#347,
+ * 2026-09-17) then aligned the COMPOSE route table onto user-bff as well, so from that commit
+ * both paths 404 on BOTH lanes — the generator's own route file calls it "a deliberate,
+ * accepted regression for two of them". They are served here now.
+ *
+ * <p>admin-bff's {@code AuthController#registerGoogle}/{@code registerDiscord} do six things.
+ * user-bff does four of them over the existing {@code /bff/internal/**} surface:
+ * {@code allowlistCheck} is the invite gate; {@code ensureAccount} both creates the row AND
+ * persists the collision-checked localpart (admin-bff's {@code InternalAccountController
+ * #ensureAccount} runs {@code withLocalpart} itself, so the 409 comes back over the wire);
+ * {@code createSession} mints the opaque {@code bff_} token; the cookie is minted here.
+ * The remaining two are the subject of two operator rulings on hugmesh-generator#347
+ * (2026-09-18, decisions 55 and 57):
+ *
+ * <ol>
+ *   <li><b>{@code AccountStore.restartOnboarding(a)} — RULED, not reproduced: 409 (decision
+ *       57).</b> It is {@code setComplete(a, false)} and nothing else (auth-core
+ *       {@code AccountStore:259-272}) and matters on exactly ONE input: a RE-registration of an
+ *       account that is ALREADY {@code registrationComplete}. A fresh registration creates the
+ *       row with {@code false} and a re-registration of an incomplete account leaves it
+ *       {@code false} ({@code ensureAccount} preserves {@code existing.registrationComplete()}),
+ *       so on every other input {@code restartOnboarding} is a no-op and this class is exact
+ *       parity. admin-bff's {@code /bff/internal/**} surface still exposes nothing that can set
+ *       {@code registration_complete} back to FALSE (hugmesh-admin-bff-api#84, open; measured
+ *       on admin-bff {@code origin/main} {@code 86cdf79}). <b>On that one input this class
+ *       answers {@code 409 Conflict}</b> — the registration conflicts with an account that
+ *       already exists and has completed onboarding — leaves the account untouched, mints no
+ *       session and records no usage row; the caller can sign in at {@code POST /bff/login}.
+ *       Decision 57 chose 409 over the recommended "503 until #84 lands" (the 503 this class
+ *       carried between 2026-09-18 and this revision) and over holding the handlers. It is a
+ *       RULING, so this class does not promise that #84 replaces it; if the operator later
+ *       wants the restart reproduced, that is a new decision. Two things follow from it that a
+ *       caller can see: (a) admin-bff's own {@code AuthController} would instead reset the
+ *       account, mint a session AND record a {@code "register"} usage row for that input — the
+ *       usage-table divergence is declared under (2); (b) this 409 shares a status with the
+ *       localpart-collision 409 raised in {@link #asInternalHopFailure}, so its body names
+ *       "already completed registration" and decision 57 explicitly, and the tests assert on
+ *       the message rather than the status alone.</li>
+ *   <li><b>{@code UsageService.record(handle, roles, "register")} — RECORDED over the wire
+ *       (decision 55 = yes).</b> admin-bff's {@code emitAndSession} fires it as
+ *       {@code usage.record(handle, a.roles(), action).subscribe()} — fire-and-forget, BEFORE
+ *       the session mint, with the BARE handle (the lowercased email/username, not the
+ *       {@code provider:handle} id) and the account's own lowercase {@code roles}. Since
+ *       hugmesh-admin-bff-api PR #104 ({@code 86cdf79}) that call is reachable as
+ *       {@code POST /bff/internal/usage}, and {@link #register} calls it through
+ *       {@link AdminBffInternalClient#recordUsage} at the SAME point in the chain with the SAME
+ *       three arguments, and with the SAME semantics: subscribed detached from the response,
+ *       so a usage outage (admin-bff 5xx, a dropped connection, the produce blocking on
+ *       {@code max.block.ms}) is logged and never delays or fails the registration. The
+ *       roles list is forwarded VERBATIM from {@link AdminBffInternalClient.AccountView#roles()}
+ *       because that IS admin-bff's lowercase dialect; prefixing {@code ROLE_} here would make
+ *       admin-bff tag every event {@code user}. <b>The declared divergence:</b> the row is
+ *       recorded only when a registration is PERFORMED, i.e. on the success path; on the
+ *       already-complete input admin-bff records a {@code "register"} row and this class,
+ *       having refused with 409 under decision 57, records nothing. Not a dependency on #84:
+ *       the usage call sits after the already-complete gate, so whatever that gate does the
+ *       leg is unchanged.</li>
+ * </ol>
+ *
+ * <h3>The register legs' OTHER declared divergences</h3>
+ *
+ * <ol>
+ *   <li><b>No profile forward.</b> admin-bff calls {@code forwardProfile(a, displayName,
+ *       screenReaderName)}. Its {@code ProfileForwarder}'s user-bff leg is gated on
+ *       {@code profile.forward.enabled} (default FALSE) and its own javadoc says the user-bff
+ *       internal upsert "is wired in the deployment once the user-bff exposes the internal
+ *       upsert; until then the seam stays gated off" — user-bff exposes no such endpoint
+ *       ({@code ProfileController} is {@code /bff/user/profile}, owner-scoped and
+ *       authenticated). The independent Casdoor {@code display_name} leg needs
+ *       {@code casdoor.admin.enabled}. Writing the profile from here would mean driving
+ *       {@code ProfileService.save} (moderation + Casdoor sync + vanity-collision checks) from
+ *       a PRE-AUTH mutating handler, which is a new behaviour rather than a parity fix. The
+ *       names are accepted in the body (unchanged DTOs) and dropped, exactly as a deployment
+ *       with the gate off already drops them.</li>
+ *   <li><b>The response body carries no {@code status}/{@code until}/{@code reason}.</b>
+ *       admin-bff's {@code sessionOut} folds in {@code suspensions.statusFor(a.handle())}.
+ *       This emits the SAME body user-bff's own {@code POST /bff/register}
+ *       ({@code SsoAuthController#emitAndSession}) already emits — {@code token}, {@code id},
+ *       {@code provider}, {@code registrationComplete}, {@code roles} — so the two register
+ *       surfaces of this BFF agree with each other. Reaching admin-bff's suspension view would
+ *       cost a second internal hop ({@code /session/introspect}) on a pre-auth path and still
+ *       not carry {@code until}/{@code reason}, which that body does not contain. No caller
+ *       reads it: hugmesh-login-ui never calls these two paths at all (its {@code bff.service.ts}
+ *       comment: "the Casdoor account itself is created server-side by user-bff during
+ *       login/loginLocal, not by a client-initiated register call"), and the one script caller,
+ *       hugmesh-generator {@code tests/qemu/seed-accounts.sh:408,464}, reads {@code .token}
+ *       only.</li>
+ *   <li><b>The invite gate's DOMAIN is the deployment's own, never a forwarded token's.</b>
+ *       admin-bff resolves it with {@code RegistrationDomainResolver.forRegistration(auth)} —
+ *       the {@code app.tenancy.registration-domain} pin, ELSE a trusted forwarded token's
+ *       issuer brand, ELSE {@code fallback()}. The internal read this class uses resolves
+ *       {@code forInternalCaller(null)} = {@code fallback()} — the pin, else the deployment's
+ *       one known brand, else the fail-closed {@code NO_DOMAIN} sentinel. The two therefore
+ *       agree on every single-brand or pinned deployment and differ only on an UNPINNED
+ *       MULTI-BRAND one where the registering caller attached a trusted JWT: admin-bff would
+ *       gate on that token's brand, this fails CLOSED (no allowlist row matches ⇒ 403 "not
+ *       invited"). Deliberately not closed by sending a domain: the caller-chosen-domain shape
+ *       is the exact hole {@code RegistrationDomainResolver}'s security contract exists to
+ *       refuse, and user-bff naming a brand on a pre-auth caller's behalf re-opens it.</li>
+ *   <li><b>The 409 wording.</b> A homeserver-localpart collision comes back from the internal
+ *       {@code /accounts/ensure} hop as a {@code 409}, which is re-raised as a {@code 409} here
+ *       with this class's own message; admin-bff surfaces {@code
+ *       AccountLocalpartService.CollisionException}'s text. Same status, different prose —
+ *       admin-bff's body is not forwarded because it is an internal-hop payload.</li>
+ *   <li><b>The DARK posture is 500, not 503.</b> With {@code app.bff.oidc.enabled=false} the
+ *       {@link AdminBffInternalClient} is a fail-closed stub whose {@code IllegalStateException}
+ *       renders as 500. That is byte-for-byte what user-bff's existing {@code POST /bff/register}
+ *       already does on a dark deploy; no new gate is invented here, and no account or session
+ *       op is performed. (The {@code /provision/*} legs above DO have a 503 gate — that one
+ *       mirrors the D6 proxy controllers' brokering check, which has no analogue on a register
+ *       path.)</li>
+ *   <li><b>CSRF posture</b> — as for the provision legs above (divergence 7): user-bff disables
+ *       CSRF on both chains. admin-bff's exempt set already includes {@code /bff/register/**},
+ *       so for THESE two paths the two postures happen to agree.</li>
+ * </ol>
  *
  * @see SsoAuthController the OIDC-era login/register/session surface this sits beside
  * @see CanonicalIdentityResolver the single homeserver-identity policy
  */
 @Tag(name = "Legacy path parity", description =
         "admin-bff AuthController parity for the cluster-routed legacy user paths "
-                + "(/bff/me/namespaces, /bff/provision/matrix, /bff/provision/mastodon). "
+                + "(/bff/me/namespaces, /bff/provision/matrix, /bff/provision/mastodon, "
+                + "/bff/register/google, /bff/register/discord). "
                 + "Decision 25 on hugmesh-generator#347: parity first, then retire.")
 @RestController
 @RequestMapping("/bff")
@@ -178,10 +298,31 @@ public class LegacyPathParityController {
     /** The exact body the generator's mock-bff already answers {@code /bff/provision/*} with. */
     private static final Map<String, Object> OK = Map.of("ok", true);
 
+    private static final Logger log = LoggerFactory.getLogger(LegacyPathParityController.class);
+
+    /**
+     * The already-complete refusal of {@code /bff/register/*} — operator decision 57 on
+     * hugmesh-generator#347 (2026-09-18): a re-registration of an account that has ALREADY
+     * completed registration is a {@code 409 Conflict} with that existing account. Worded so
+     * it cannot be mistaken for the OTHER 409 on this path (the homeserver-localpart collision
+     * in {@link #asInternalHopFailure}), and so the reader knows the account was left untouched.
+     */
+    private static final String ALREADY_REGISTERED_CONFLICT =
+            "this account already exists and has already completed registration "
+                    + "(decision 57: 409, not a restart of onboarding). Nothing was changed; "
+                    + "sign in at /bff/login instead.";
+
+    /** The {@code action} admin-bff's own register handlers record — {@code AuthController}
+     *  passes the literal {@code "register"} to {@code emitAndSession}. */
+    private static final String USAGE_ACTION_REGISTER = "register";
+
     private final AdminBffInternalClient adminBff;
     private final CanonicalIdentityResolver identity;
     private final HsTokenCustody custody;
     private final ServiceTokenBroker broker;
+    /** Mints the opaque {@code bff_} session cookie — the same collaborator
+     *  {@link SsoAuthController} uses for {@code POST /bff/register}. */
+    private final SessionCookieService cookies;
     /** {@code app.hs-token.enabled} — the same gate the D6 proxy controllers read. */
     private final boolean hsTokenEnabled;
 
@@ -189,11 +330,13 @@ public class LegacyPathParityController {
                                       CanonicalIdentityResolver identity,
                                       HsTokenCustody custody,
                                       ServiceTokenBroker broker,
+                                      SessionCookieService cookies,
                                       @Value("${app.hs-token.enabled:false}") boolean hsTokenEnabled) {
         this.adminBff = adminBff;
         this.identity = identity;
         this.custody = custody;
         this.broker = broker;
+        this.cookies = cookies;
         this.hsTokenEnabled = hsTokenEnabled;
     }
 
@@ -283,21 +426,24 @@ public class LegacyPathParityController {
         return requireCompleteAccount(jwt)
                 .then(Mono.defer(() -> matrix ? identity.matrixLocalpart(jwt)
                         : identity.mastodonLocalpart(jwt)))
-                .flatMap(localpart -> {
-                    // Defence in depth, mirroring admin-bff: a reserved handle should already
-                    // have been refused at registration, but the mint creates a REAL homeserver
-                    // localpart, so re-check at the provision point.
-                    if (ReservedNames.isReserved(localpart)) {
-                        return Mono.error(ApiException.badRequest(
-                                "username '" + localpart + "' is reserved and cannot be provisioned"));
-                    }
-                    String owner = jwt.getSubject();
-                    Mono<MintedToken> mint = matrix
-                            ? broker.mintMatrix(owner, localpart)
-                            : broker.mintMastodon(owner, localpart);
-                    return mint.onErrorMap(LegacyPathParityController::asGatewayFailure);
-                })
+                .flatMap(localpart -> mintProvisioned(jwt, matrix, localpart))
                 .thenReturn(OK);
+    }
+
+    /** The {@link #provision} mint leg for one resolved localpart. */
+    private Mono<MintedToken> mintProvisioned(Jwt jwt, boolean matrix, String localpart) {
+        // Defence in depth, mirroring admin-bff: a reserved handle should already
+        // have been refused at registration, but the mint creates a REAL homeserver
+        // localpart, so re-check at the provision point.
+        if (ReservedNames.isReserved(localpart)) {
+            return Mono.error(ApiException.badRequest(
+                    "username '" + localpart + "' is reserved and cannot be provisioned"));
+        }
+        String owner = jwt.getSubject();
+        Mono<MintedToken> mint = matrix
+                ? broker.mintMatrix(owner, localpart)
+                : broker.mintMastodon(owner, localpart);
+        return mint.onErrorMap(LegacyPathParityController::asGatewayFailure);
     }
 
     /** Keep an error that already carries an HTTP status; map anything else to 502, which is
@@ -307,6 +453,169 @@ public class LegacyPathParityController {
             return e;
         }
         return ApiException.badGateway(String.valueOf(e));
+    }
+
+    // ── POST /bff/register/{google,discord} ───────────────────────────────────────────────
+
+    /**
+     * Invite-gated Google/email self-registration — admin-bff {@code AuthController#registerGoogle}
+     * parity. The invite namespace is {@code google} ({@code AccountStore.isEmailInvited}), the
+     * account is keyed {@code google:<email>}, and a fresh opaque {@code bff_} session is minted
+     * (cookie + body token) exactly as user-bff's own {@code POST /bff/register} does.
+     *
+     * <p>{@code operationId} is kept as admin-bff's {@code authRegisterGoogle} so an
+     * ng-openapi-gen client regenerated against THIS spec keeps the method name the existing
+     * generated clients already carry.
+     *
+     * <p>403 when the address is not invited; 409 on a homeserver-localpart collision;
+     * <b>409 when the account has already completed registration</b> (decision 57 — see the
+     * class doc; the two 409 bodies differ); 502 when the internal hop to admin-bff fails. A
+     * performed registration is recorded on admin-bff's usage table (decision 55), detached
+     * from the response.
+     */
+    @Operation(summary = "Invite-gated Google/email registration: ensure the account and mint a "
+            + "bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a "
+            + "localpart collision; 409 for an already-complete account (decision 57: conflict "
+            + "with the existing account, no restart of onboarding). Records a register usage "
+            + "row on admin-bff (decision 55), fire-and-forget.",
+            operationId = "authRegisterGoogle")
+    @PostMapping("/register/google")
+    public Mono<ResponseEntity<Map<String, Object>>> registerGoogle(
+            @Valid @RequestBody RegisterEmailRequest body, ServerWebExchange exchange) {
+        return register("google", body.email(), "email not invited by an admin", exchange);
+    }
+
+    /**
+     * Invite-gated Discord self-registration — admin-bff {@code AuthController#registerDiscord}
+     * parity. See {@link #registerGoogle}; the invite namespace is {@code discord}
+     * ({@code AccountStore.isDiscordInvited}) and the account is keyed {@code discord:<username>}.
+     */
+    @Operation(summary = "Invite-gated Discord registration: ensure the account and mint a bff_ "
+            + "session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart "
+            + "collision; 409 for an already-complete account (decision 57: conflict with the "
+            + "existing account, no restart of onboarding). Records a register usage row on "
+            + "admin-bff (decision 55), fire-and-forget.",
+            operationId = "authRegisterDiscord")
+    @PostMapping("/register/discord")
+    public Mono<ResponseEntity<Map<String, Object>>> registerDiscord(
+            @Valid @RequestBody RegisterDiscordRequest body, ServerWebExchange exchange) {
+        return register("discord", body.username(), "discord username not invited by an admin",
+                exchange);
+    }
+
+    /**
+     * The shared registration leg, in admin-bff's order: invite gate, ensure-the-account (which
+     * persists the collision-checked localpart on admin-bff's side), the already-complete gate
+     * (409, decision 57 — standing exactly where admin-bff's
+     * {@code .flatMap(store::restartOnboarding)} stands), the usage row (decision 55 — standing
+     * exactly where admin-bff's {@code emitAndSession} fires {@code usage.record(...).subscribe()},
+     * i.e. before the mint and detached from it), then mint.
+     *
+     * <p>{@code handle} is trimmed + lowercased here, as admin-bff's {@code str(...).toLowerCase()}
+     * does, so the allowlist lookup and the account key agree with the rows admin-bff writes.
+     * {@link Locale#ROOT} is explicit: a Turkish default locale folds {@code I} to a dotless
+     * {@code ı} and would key a DIFFERENT account than admin-bff's JVM.
+     */
+    private Mono<ResponseEntity<Map<String, Object>>> register(
+            String provider, String rawHandle, String notInvitedMessage, ServerWebExchange exchange) {
+        String handle = rawHandle == null ? "" : rawHandle.trim().toLowerCase(Locale.ROOT);
+        return adminBff.allowlistCheck(provider, handle)
+                .onErrorMap(LegacyPathParityController::asInternalHopFailure)
+                .flatMap(invited -> Boolean.TRUE.equals(invited)
+                        ? adminBff.ensureAccount(provider, handle)
+                                .onErrorMap(LegacyPathParityController::asInternalHopFailure)
+                        : Mono.error(ApiException.forbidden(notInvitedMessage)))
+                .flatMap(account -> sessionForNewAccount(provider, handle, account, exchange));
+    }
+
+    /** The {@link #register} leg after ensure-the-account: the already-complete gate, the
+     *  usage row, then the session mint. */
+    private Mono<ResponseEntity<Map<String, Object>>> sessionForNewAccount(
+            String provider, String handle, AdminBffInternalClient.AccountView account,
+            ServerWebExchange exchange) {
+        if (account.registrationComplete()) {
+            // Decision 57: a re-registration of an already-complete account is a
+            // CONFLICT with that account. No restart, no session, no usage row.
+            return Mono.<ResponseEntity<Map<String, Object>>>error(
+                    ApiException.conflict(ALREADY_REGISTERED_CONFLICT));
+        }
+        recordRegistration(provider, handle, account);
+        return adminBff.createSession(account.id())
+                .onErrorMap(LegacyPathParityController::asInternalHopFailure)
+                .map(session -> emitAndSession(exchange, account, session));
+    }
+
+    /**
+     * Decision 55: the registration usage row, over admin-bff's {@code POST /bff/internal/usage}
+     * — the same {@code (handle, account.roles(), "register")} triple admin-bff's own
+     * {@code emitAndSession} records, subscribed DETACHED from the response exactly as its
+     * {@code usage.record(...).subscribe()} is. A failure is logged (provider + the error, never
+     * the handle, which is an email address) and never reaches the caller: the account exists
+     * and the session is minted regardless. The two-consumer {@code subscribe} matters — a bare
+     * {@code subscribe()} would route the error to Reactor's {@code onErrorDropped} hook, which
+     * logs at ERROR with a stack trace on every admin-bff hiccup.
+     *
+     * <p>{@link Mono#defer} matters too: this method runs inside the registration chain's
+     * {@code flatMap} lambda, so an exception thrown while the client BUILDS its Mono (e.g. a
+     * {@code NullPointerException} from {@code List.copyOf} on a roles list carrying a null
+     * element) would otherwise escape into the response chain and turn a performed
+     * registration into a 500. Deferred, that throw becomes an error signal of the detached
+     * subscription and takes the same WARN path. Both properties, and that a usage call that
+     * never answers does not delay the response, are pinned in
+     * {@code LegacyPathParityRegisterTest}.
+     */
+    private void recordRegistration(String provider, String handle,
+                                    AdminBffInternalClient.AccountView account) {
+        Mono.defer(() -> adminBff.recordUsage(handle, account.roles(), USAGE_ACTION_REGISTER))
+                .subscribe(ignored -> { },
+                        e -> log.warn("[register/{}] usage row not recorded on admin-bff "
+                                + "(decision 55 leg is fire-and-forget; registration unaffected): {}",
+                                provider, String.valueOf(e)));
+    }
+
+    /**
+     * admin-bff {@code emitAndSession} parity for the two register legs: mint the opaque
+     * {@code bff_} cookie (when {@code app.session.cookie.enabled}) AND keep the token in the
+     * body, which is the shape {@link SsoAuthController#register} already emits and the shape
+     * hugmesh-generator's {@code tests/qemu/seed-accounts.sh} reads ({@code .token}).
+     * {@code registrationComplete} is necessarily {@code false} here — a {@code true} account
+     * was refused with 409 above (decision 57) — which is the same value admin-bff emits after
+     * its {@code restartOnboarding}.
+     */
+    private ResponseEntity<Map<String, Object>> emitAndSession(
+            ServerWebExchange exchange, AdminBffInternalClient.AccountView account,
+            AdminBffInternalClient.SessionView session) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("token", session.token());
+        body.put("id", account.id());
+        body.put("provider", account.provider());
+        body.put("registrationComplete", account.registrationComplete());
+        body.put("roles", account.roles());
+        ResponseEntity.BodyBuilder builder = ResponseEntity.ok();
+        if (cookies.enabled()) {
+            builder.header("Set-Cookie",
+                    cookies.mint(exchange.getRequest(), session.token()).toString());
+        }
+        return builder.body(body);
+    }
+
+    /**
+     * Map a failure of the {@code /bff/internal/**} hop onto the status the CALLER should see.
+     * A {@code 409} is admin-bff's localpart-collision refusal and is re-raised as a {@code 409}
+     * (status parity with admin-bff's {@code ApiException.conflict}) — distinct in its BODY from
+     * the already-complete 409 of decision 57 ({@link #ALREADY_REGISTERED_CONFLICT}), which is
+     * raised by this class, not by the hop; anything else that is not
+     * already status-carrying becomes a {@code 502}, the same wrap
+     * {@link #asGatewayFailure} applies on the provision legs. Without this an internal
+     * {@link WebClientResponseException} is not a {@link ResponseStatusException} and would
+     * surface as an opaque 500.
+     */
+    private static Throwable asInternalHopFailure(Throwable e) {
+        if (e instanceof WebClientResponseException.Conflict) {
+            return ApiException.conflict("registration conflicts with an existing account "
+                    + "(the homeserver localpart for this handle is already taken)");
+        }
+        return asGatewayFailure(e);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────

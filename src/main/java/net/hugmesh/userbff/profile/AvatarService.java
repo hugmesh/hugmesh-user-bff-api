@@ -63,29 +63,35 @@ public class AvatarService {
         //    is never persisted. Bytes are never logged — only the policy verdict.
         // 1) upload to the homeserver media repo (stub-gated) -> mxc:// URL;
         // 2) persist the mxc:// onto the owner's avatar_url; 3) return the mxc://.
-        return moderation.moderate(bytes).flatMap(verdict -> {
-            if (verdict.blocks()) {
-                log.info("[avatar] BLOCKED by content policy: action={} class={} confidence={} owner={}",
-                        verdict.action(), verdict.classification(), verdict.confidence(), owner);
-                // A3 producer: file the blocked image into the federation @system findings
-                // queue so a moderator can review it (held). BEST-EFFORT — the image is
-                // blocked regardless; a federation outage must not change the user-facing
-                // 422, so a file failure is logged and swallowed. The caller's bearer is
-                // forwarded by FederationApiClient, so federation derives subject = owner.
-                return fileHeldFinding(owner, verdict)
-                        .then(Mono.<String>error(ApiException.unprocessable(
-                                "profile picture blocked by content policy")));
-            }
-            // The MODERATED bytes are persisted alongside the homeserver ref, in the
-            // same statement (022). Until they were, this service uploaded to a
-            // stub-gated homeserver client and then DISCARDED the pixels, so the row
-            // held `mxc://stub.invalid/<uuid-of-owner>` — a ref to no image — and
-            // every avatar rendered broken. `contentType` here is the SNIFFED type
-            // the controller resolved, never the client-declared header.
-            return matrixMedia.upload(owner, bytes, contentType)
-                    .flatMap(mxc -> repo.updateAvatarUrl(owner, mxc, domain, bytes, contentType)
-                            .thenReturn(mxc));
-        });
+        return moderation.moderate(bytes).flatMap(verdict ->
+                storeUnlessBlocked(verdict, owner, bytes, contentType, domain));
+    }
+
+    /** The {@link #uploadAndStore} leg after moderation: 422 on a blocking verdict, else
+     *  upload + store. */
+    private Mono<String> storeUnlessBlocked(ModerationVerdict verdict, String owner, byte[] bytes,
+                                            String contentType, String domain) {
+        if (verdict.blocks()) {
+            log.info("[avatar] BLOCKED by content policy: action={} class={} confidence={} owner={}",
+                    verdict.action(), verdict.classification(), verdict.confidence(), owner);
+            // A3 producer: file the blocked image into the federation @system findings
+            // queue so a moderator can review it (held). BEST-EFFORT — the image is
+            // blocked regardless; a federation outage must not change the user-facing
+            // 422, so a file failure is logged and swallowed. The caller's bearer is
+            // forwarded by FederationApiClient, so federation derives subject = owner.
+            return fileHeldFinding(owner, verdict)
+                    .then(Mono.<String>error(ApiException.unprocessable(
+                            "profile picture blocked by content policy")));
+        }
+        // The MODERATED bytes are persisted alongside the homeserver ref, in the
+        // same statement (022). Until they were, this service uploaded to a
+        // stub-gated homeserver client and then DISCARDED the pixels, so the row
+        // held `mxc://stub.invalid/<uuid-of-owner>` — a ref to no image — and
+        // every avatar rendered broken. `contentType` here is the SNIFFED type
+        // the controller resolved, never the client-declared header.
+        return matrixMedia.upload(owner, bytes, contentType)
+                .flatMap(mxc -> repo.updateAvatarUrl(owner, mxc, domain, bytes, contentType)
+                        .thenReturn(mxc));
     }
 
     /**
