@@ -1,6 +1,7 @@
 package net.hugmesh.userbff.notification;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -54,6 +55,9 @@ public class NotificationPreferenceController {
     /** PUT body: upsert one category preference. {@code category} is a bounded
      *  alnum/hyphen token (the service rejects anything outside the known vocabulary);
      *  {@code enabled} is required so the toggle state is never ambiguous. */
+    // Distinct OpenAPI name: two nested records both called PreferenceUpsert collapsed into ONE
+    // components schema, so one endpoint's generated client type described the other's body.
+    @Schema(name = "NotificationPreferenceUpsert")
     public record PreferenceUpsert(
             @NotBlank
             @Size(max = 64)

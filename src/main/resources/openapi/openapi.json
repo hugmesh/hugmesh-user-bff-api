@@ -170,7 +170,7 @@
           "content" : {
             "application/json" : {
               "schema" : {
-                "$ref" : "#/components/schemas/PreferenceUpsert"
+                "$ref" : "#/components/schemas/UserPreferenceUpsert"
               }
             }
           },
@@ -222,7 +222,7 @@
           "content" : {
             "application/json" : {
               "schema" : {
-                "$ref" : "#/components/schemas/PreferenceUpsert"
+                "$ref" : "#/components/schemas/NotificationPreferenceUpsert"
               }
             }
           },
@@ -2748,7 +2748,7 @@
           }
         }
       },
-      "PreferenceUpsert" : {
+      "UserPreferenceUpsert" : {
         "required" : [ "key" ],
         "type" : "object",
         "properties" : {
@@ -2762,6 +2762,21 @@
             "maxLength" : 1024,
             "minLength" : 0,
             "type" : "string"
+          }
+        }
+      },
+      "NotificationPreferenceUpsert" : {
+        "required" : [ "category", "enabled" ],
+        "type" : "object",
+        "properties" : {
+          "category" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "pattern" : "^[a-z][a-z-]{0,63}$",
+            "type" : "string"
+          },
+          "enabled" : {
+            "type" : "boolean"
           }
         }
       },
