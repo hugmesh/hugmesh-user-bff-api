@@ -1,5 +1,6 @@
 package net.hugmesh.userbff.meshdevice;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,6 +33,8 @@ import net.hugmesh.userbff.auth.AdminBffInternalClient;
  * stay owner-gated as before; moderation revocation is mod-tooling's job).
  */
 @Component
+@SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+        justification = "Spring constructor injection: the container owns this singleton collaborator and it is never mutated after construction; a defensive copy of a bean is meaningless (not caller-owned mutable data).")
 public class MeshClaimCapabilityGate {
 
     /** The admin-bff {@code domain_capability.capability} key this gate consults. */

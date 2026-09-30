@@ -73,7 +73,18 @@ public class UserProfileRepository {
     }
 
     /** Stored avatar pixels + the SNIFFED type recorded at save. */
-    public record AvatarBody(byte[] bytes, String contentType) { }
+    public record AvatarBody(byte[] bytes, String contentType) {
+        /** Defensive copy in: the array is caller-owned and mutable. */
+        public AvatarBody {
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
+        /** Defensive copy out: never hand the stored array to a caller. */
+        @Override
+        public byte[] bytes() {
+            return bytes == null ? null : bytes.clone();
+        }
+    }
 
     /**
      * Stored avatar pixels + sniffed type resolved by the 023 SERVE HANDLE, carrying
@@ -85,7 +96,18 @@ public class UserProfileRepository {
      * @param owner  the subject the avatar belongs to (never echoed on the wire).
      * @param domain the brand the row lives in.
      */
-    public record AvatarBodyForRef(byte[] bytes, String contentType, String owner, String domain) { }
+    public record AvatarBodyForRef(byte[] bytes, String contentType, String owner, String domain) {
+        /** Defensive copy in: the array is caller-owned and mutable. */
+        public AvatarBodyForRef {
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
+        /** Defensive copy out: never hand the stored array to a caller. */
+        @Override
+        public byte[] bytes() {
+            return bytes == null ? null : bytes.clone();
+        }
+    }
 
     /**
      * The avatar bytes behind a 023 serve handle, or EMPTY when the handle is unknown

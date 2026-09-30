@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +44,8 @@ import java.util.Map;
  * client. The proxy uses it to inject the homeserver-native bearer and nothing more.
  */
 @Service
+@SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+        justification = "Spring constructor injection: the container owns this singleton collaborator and it is never mutated after construction; a defensive copy of a bean is meaningless (not caller-owned mutable data).")
 public class ServiceTokenBroker {
 
     private static final Logger log = LoggerFactory.getLogger(ServiceTokenBroker.class);

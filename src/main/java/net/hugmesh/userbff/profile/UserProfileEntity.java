@@ -46,4 +46,14 @@ public record UserProfileEntity(
         @Column("avatar_ref") String avatarRef,
         @Column("domain") String domain,
         @Column("updated_at") Instant updatedAt) {
+    /** Defensive copy in: the array is caller-owned and mutable. */
+    public UserProfileEntity {
+        avatarBody = avatarBody == null ? null : avatarBody.clone();
+    }
+
+    /** Defensive copy out: never hand the stored array to a caller. */
+    @Override
+    public byte[] avatarBody() {
+        return avatarBody == null ? null : avatarBody.clone();
+    }
 }
