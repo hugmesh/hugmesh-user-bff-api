@@ -123,5 +123,16 @@ public class CharacterAvatarService {
     }
 
     /** Pixels + the MIME type to serve them as (already allowlist-checked). */
-    public record AvatarBody(byte[] bytes, String contentType) { }
+    public record AvatarBody(byte[] bytes, String contentType) {
+        /** Defensive copy in: the array is caller-owned and mutable. */
+        public AvatarBody {
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
+        /** Defensive copy out: never hand the stored array to a caller. */
+        @Override
+        public byte[] bytes() {
+            return bytes == null ? null : bytes.clone();
+        }
+    }
 }

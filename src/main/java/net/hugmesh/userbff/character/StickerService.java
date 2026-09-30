@@ -102,23 +102,28 @@ public class StickerService {
         // 1) upload to the homeserver media repo (stub-gated) -> mxc:// URL;
         // 2) persist the mxc:// + expression, status=PENDING (owner + domain scoped);
         // 3) best-effort file the held @system finding so a moderator reviews the sticker.
-        return moderation.moderate(bytes).flatMap(verdict -> {
-            if (verdict.blocks()) {
-                log.info("[sticker] BLOCKED by content policy: action={} class={} confidence={} "
-                                + "owner={} expression={}",
-                        verdict.action(), verdict.classification(), verdict.confidence(), owner, expression);
-                // A3 producer: file the blocked sticker into the federation @system findings
-                // queue (held). BEST-EFFORT — the sticker is blocked regardless; a federation
-                // outage must not change the 422, so a file failure is logged and swallowed.
-                return fileBlockedFinding(owner, verdict)
-                        .then(Mono.<VnSticker>error(ApiException.unprocessable(
-                                "character sticker blocked by content policy")));
-            }
-            return matrixMedia.upload(owner, bytes, contentType)
-                    .flatMap(mxc -> repo.save(owner, domain, expression, mxc, STATUS_PENDING,
-                            bytes, contentType))
-                    .flatMap(sticker -> captureFinding(owner, sticker).thenReturn(sticker));
-        });
+        return moderation.moderate(bytes).flatMap(verdict ->
+                storeUnlessBlocked(verdict, owner, domain, expression, bytes, contentType));
+    }
+
+    /** The {@link #save} leg after moderation: 422 on a blocking verdict, else upload + store. */
+    private Mono<VnSticker> storeUnlessBlocked(ModerationVerdict verdict, String owner, String domain,
+                                               String expression, byte[] bytes, String contentType) {
+        if (verdict.blocks()) {
+            log.info("[sticker] BLOCKED by content policy: action={} class={} confidence={} "
+                            + "owner={} expression={}",
+                    verdict.action(), verdict.classification(), verdict.confidence(), owner, expression);
+            // A3 producer: file the blocked sticker into the federation @system findings
+            // queue (held). BEST-EFFORT — the sticker is blocked regardless; a federation
+            // outage must not change the 422, so a file failure is logged and swallowed.
+            return fileBlockedFinding(owner, verdict)
+                    .then(Mono.<VnSticker>error(ApiException.unprocessable(
+                            "character sticker blocked by content policy")));
+        }
+        return matrixMedia.upload(owner, bytes, contentType)
+                .flatMap(mxc -> repo.save(owner, domain, expression, mxc, STATUS_PENDING,
+                        bytes, contentType))
+                .flatMap(sticker -> captureFinding(owner, sticker).thenReturn(sticker));
     }
 
     /** All of the caller's stickers in their domain, newest first (own data only). */
@@ -136,6 +141,16 @@ public class StickerService {
 
     /** The served sticker image: the stored moderated pixels + the sniffed MIME type. */
     public record StickerBody(byte[] bytes, String contentType) {
+        /** Defensive copy in: the array is caller-owned and mutable. */
+        public StickerBody {
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
+        /** Defensive copy out: never hand the stored array to a caller. */
+        @Override
+        public byte[] bytes() {
+            return bytes == null ? null : bytes.clone();
+        }
     }
 
     /**

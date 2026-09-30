@@ -85,20 +85,28 @@ public class ConnectedClientsService {
         Flux<ConnectedClient> audited = repo.listForOwner(owner, domain);
         Flux<ConnectedClient> live = Flux.fromIterable(clientsByPlatform.values())
                 .filter(c -> roles.contains(externalClientRoleFor(c.platform())))
-                .flatMap(c -> localpartFor.apply(c.platform())
-                        .onErrorResume(e -> {
-                            log.warn("[connected-clients] could not resolve {} localpart for {}; "
-                                            + "live merge for that platform skipped: {}",
-                                    c.platform(), owner, e.toString());
-                            return Mono.empty();
-                        })
-                        .flatMapMany(lp -> c.list(lp, bearer)
-                                .onErrorResume(e -> {
-                                    log.warn("[connected-clients] best-effort {} live list for {} failed: {}",
-                                            c.platform(), owner, e.toString());
-                                    return Flux.empty();
-                                })));
+                .flatMap(c -> liveClients(c, localpartFor, owner, bearer));
         return audited.concatWith(live);
+    }
+
+    /** One platform's best-effort live read for {@link #list}: a localpart-resolution or
+     *  live-list failure degrades to an empty stream for that platform. */
+    private static Flux<ConnectedClient> liveClients(HomeserverClientsClient c,
+                                                     Function<String, Mono<String>> localpartFor,
+                                                     String owner, String bearer) {
+        return localpartFor.apply(c.platform())
+                .onErrorResume(e -> {
+                    log.warn("[connected-clients] could not resolve {} localpart for {}; "
+                                    + "live merge for that platform skipped: {}",
+                            c.platform(), owner, e.toString());
+                    return Mono.empty();
+                })
+                .flatMapMany(lp -> c.list(lp, bearer)
+                        .onErrorResume(e -> {
+                            log.warn("[connected-clients] best-effort {} live list for {} failed: {}",
+                                    c.platform(), owner, e.toString());
+                            return Flux.empty();
+                        }));
     }
 
     /** Back-compat overload — scopes to the platform {@code default} domain. */

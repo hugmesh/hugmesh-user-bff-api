@@ -9,9 +9,6 @@
     "url" : ""
   } ],
   "tags" : [ {
-    "name" : "Legacy path parity",
-    "description" : "admin-bff AuthController parity for the cluster-routed legacy user paths (/bff/me/namespaces, /bff/provision/matrix, /bff/provision/mastodon). Decision 25 on hugmesh-generator#347: parity first, then retire."
-  }, {
     "name" : "Character-parts",
     "description" : "The caller's OWN user-drawn character parts (owner = JWT subject). SVG is server-sanitized before storage and reviewed by a moderator."
   }, {
@@ -65,6 +62,9 @@
   }, {
     "name" : "Mesh-devices",
     "description" : "The caller's OWN claimed Meshtastic LoRa radio node ids (owner = JWT subject). Node ids are globally unique — one owner per radio."
+  }, {
+    "name" : "Legacy path parity",
+    "description" : "admin-bff AuthController parity for the cluster-routed legacy user paths (/bff/me/namespaces, /bff/provision/matrix, /bff/provision/mastodon, /bff/register/google, /bff/register/discord). Decision 25 on hugmesh-generator#347: parity first, then retire."
   }, {
     "name" : "Notification preferences",
     "description" : "Per-category notification preferences (owner = JWT subject, domain-scoped). account-restriction is forced-on / un-silenceable."
@@ -1474,6 +1474,18 @@
         }
       }
     },
+    "/bff/sessionOut" : {
+      "post" : {
+        "tags" : [ "SSO auth" ],
+        "summary" : "Alias of DELETE /bff/session for the POST /bff/sessionOut clients actually call. Revoke the caller's session and expire the bff_ cookie. 503 when the SSO surface is dark.",
+        "operationId" : "sessionOutLegacyAlias",
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
     "/bff/register" : {
       "post" : {
         "tags" : [ "SSO auth" ],
@@ -1484,6 +1496,70 @@
             "application/json" : {
               "schema" : {
                 "$ref" : "#/components/schemas/RegisterEmailRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/register/google" : {
+      "post" : {
+        "tags" : [ "Legacy path parity" ],
+        "summary" : "Invite-gated Google/email registration: ensure the account and mint a bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart collision; 409 for an already-complete account (decision 57: conflict with the existing account, no restart of onboarding). Records a register usage row on admin-bff (decision 55), fire-and-forget.",
+        "operationId" : "authRegisterGoogle",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterEmailRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/register/discord" : {
+      "post" : {
+        "tags" : [ "Legacy path parity" ],
+        "summary" : "Invite-gated Discord registration: ensure the account and mint a bff_ session. admin-bff AuthController parity. 403 when not invited; 409 on a localpart collision; 409 for an already-complete account (decision 57: conflict with the existing account, no restart of onboarding). Records a register usage row on admin-bff (decision 55), fire-and-forget.",
+        "operationId" : "authRegisterDiscord",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterDiscordRequest"
               }
             }
           },
@@ -3245,6 +3321,28 @@
             "minLength" : 0,
             "type" : "string",
             "format" : "email"
+          },
+          "displayName" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "screenReaderName" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "pattern" : "[\\x20-\\x7E]*",
+            "type" : "string"
+          }
+        }
+      },
+      "RegisterDiscordRequest" : {
+        "required" : [ "username" ],
+        "type" : "object",
+        "properties" : {
+          "username" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
           },
           "displayName" : {
             "maxLength" : 255,

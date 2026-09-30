@@ -121,19 +121,25 @@ public class SsoAuthController {
         String state = Pkce.randomState();
         return casdoorLogin.login(req.username(), req.password(), state, pkce.challenge(),
                         redirectUri, req.mfaPasscode(), req.mfaType())
-                .flatMap(result -> switch (result.kind()) {
-                    // Credentials verified → redeem the one-time code via the SHARED completion
-                    // (exchange → provision → custody → bff_ cookie). No token reaches the browser.
-                    case CODE -> completion.complete(result.code(), pkce.verifier(), redirectUri, exchange)
-                            .map(c -> ResponseEntity.ok((Object)
-                                    new LoginResult(c.registrationComplete(), c.status(), false)));
-                    // Second factor required → challenge the caller. NO session, NO cookie.
-                    case MFA_REQUIRED -> Mono.just(ResponseEntity.ok((Object)
-                            new MfaChallenge(true, result.mfaTypes())));
-                    // Bad password / disabled user / wrong passcode → 401, no session.
-                    case ERROR -> Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).body((Object)
-                            new LoginError("invalid_credentials", result.message())));
-                });
+                .flatMap(result -> loginOutcome(result, pkce, exchange));
+    }
+
+    /** Map one Casdoor {@code /api/login} outcome to the {@link #login} response. */
+    private Mono<ResponseEntity<Object>> loginOutcome(CasdoorLoginClient.CasdoorLoginResult result,
+                                                      Pkce pkce, ServerWebExchange exchange) {
+        return switch (result.kind()) {
+            // Credentials verified → redeem the one-time code via the SHARED completion
+            // (exchange → provision → custody → bff_ cookie). No token reaches the browser.
+            case CODE -> completion.complete(result.code(), pkce.verifier(), redirectUri, exchange)
+                    .map(c -> ResponseEntity.ok((Object)
+                            new LoginResult(c.registrationComplete(), c.status(), false)));
+            // Second factor required → challenge the caller. NO session, NO cookie.
+            case MFA_REQUIRED -> Mono.just(ResponseEntity.ok((Object)
+                    new MfaChallenge(true, result.mfaTypes())));
+            // Bad password / disabled user / wrong passcode → 401, no session.
+            case ERROR -> Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).body((Object)
+                    new LoginError("invalid_credentials", result.message())));
+        };
     }
 
     @Operation(summary = "Email-provider registration: ensure the account. "
@@ -162,6 +168,22 @@ public class SsoAuthController {
             return Mono.just(ResponseEntity.noContent().build());
         }
         return adminBff.deleteSession(token).thenReturn(expireCookie());
+    }
+
+    /**
+     * {@code POST /bff/sessionOut} — the LEGACY path host-shell and login-ui actually call
+     * (hugmesh-generator#549: the fe route tables now send it here instead of admin-bff's
+     * broken same-named endpoint, which read the token from a header a browser never sends
+     * and could not expire the cookie). A pure alias of {@link #sessionOut(ServerWebExchange)}
+     * so there is exactly ONE implementation of "revoke this session" to keep correct —
+     * decision 25 (legacy paths reach parity in user-bff) applied to sign-out.
+     */
+    @Operation(summary = "Alias of DELETE /bff/session for the POST /bff/sessionOut clients "
+            + "actually call. Revoke the caller's session and expire the bff_ cookie. "
+            + "503 when the SSO surface is dark.")
+    @PostMapping("/sessionOut")
+    public Mono<ResponseEntity<Void>> sessionOutLegacyAlias(ServerWebExchange exchange) {
+        return sessionOut(exchange);
     }
 
     @Operation(summary = "The caller's account view (from admin-bff). Authenticated. "

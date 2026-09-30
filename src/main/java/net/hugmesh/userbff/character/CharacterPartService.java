@@ -81,19 +81,23 @@ public class CharacterPartService {
         }
         // Deferred so the synchronous sanitize step (and its fail-closed 422) is delivered
         // as a reactive error on subscribe — the WebFlux-idiomatic surfacing of the 422.
-        return Mono.defer(() -> {
-            // 1) AUTHORITATIVE sanitize BEFORE storage. The sanitizer fails closed on bad
-            //    input (InvalidSvgException) — we never echo unparseable input back and we
-            //    never persist raw client XML. Map the fail-closed exception to a clean 422.
-            String safeSvg = sanitizeOr422(dirtySvg);
-            // 2) persist the SANITIZED svg, status=PENDING (owner + domain scoped), then
-            // 3) best-effort file the held @system finding (passing the row id as the
-            //    finding subjectRef) and write the returned finding id back onto the row.
-            //    The whole capture leg is fail-soft — a federation outage must not fail the
-            //    save (the part stays PENDING and a moderator can still resolve it by id).
-            return repo.save(owner, domain, name, safeSvg, STATUS_PENDING, headArchetype)
-                    .flatMap(part -> captureFinding(owner, part).thenReturn(part));
-        });
+        return Mono.defer(() -> sanitizeAndStore(owner, domain, name, headArchetype, dirtySvg));
+    }
+
+    /** The deferred body of {@link #savePart}: sanitize, persist PENDING, capture the finding. */
+    private Mono<VnCharacterPart> sanitizeAndStore(String owner, String domain, String name,
+                                                   String headArchetype, String dirtySvg) {
+        // 1) AUTHORITATIVE sanitize BEFORE storage. The sanitizer fails closed on bad
+        //    input (InvalidSvgException) — we never echo unparseable input back and we
+        //    never persist raw client XML. Map the fail-closed exception to a clean 422.
+        String safeSvg = sanitizeOr422(dirtySvg);
+        // 2) persist the SANITIZED svg, status=PENDING (owner + domain scoped), then
+        // 3) best-effort file the held @system finding (passing the row id as the
+        //    finding subjectRef) and write the returned finding id back onto the row.
+        //    The whole capture leg is fail-soft — a federation outage must not fail the
+        //    save (the part stays PENDING and a moderator can still resolve it by id).
+        return repo.save(owner, domain, name, safeSvg, STATUS_PENDING, headArchetype)
+                .flatMap(part -> captureFinding(owner, part).thenReturn(part));
     }
 
     /** All of the caller's parts in their domain, newest first (own data only). */
