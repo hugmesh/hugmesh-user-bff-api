@@ -530,32 +530,18 @@ class LegacyPathParityControllerTest {
     }
 
     /**
-     * PINS A RESIDUAL {@link CanonicalIdentityResolver} ASYMMETRY that this lane deliberately did
-     * NOT close, filed as hugmesh-user-bff-api#14. It is NOT the defect the provider pins above
-     * cover: {@code ownAccountId} is now synthetic-principal-aware (it honours the {@code sub},
-     * which IS the account id, for every provider), but {@code resolveOwnAccount} — a DIFFERENT
-     * branch, taken only when the {@code localpart} claim is ABSENT — still derives its key from
-     * {@code SUBJECT_CLAIMS} and so probes {@code casdoor:<email-or-preferred_username>}, i.e.
-     * {@code casdoor:alice@example.test} for this {@code google:} account. No account is keyed
-     * under that, so the caller gets the resolver's 401 ("no registered account for this token's
-     * OWN identity") rather than the 409 the raw-JWT carrier above gets.
-     *
-     * <p><b>Exactly how narrow this is.</b> It is reachable ONLY when the account row's
-     * {@code account.localpart} is blank — {@code BffSessionAuthenticationWebFilter} stamps the
-     * claim whenever it is not, so on this carrier "claim absent" and "persisted blank" are the
-     * same condition — AND the account is in a non-{@code casdoor:} namespace. Both the 401 here
-     * and the 409 there are FAIL-CLOSED refusals: the localpart is blank either way, so no mint
-     * is reachable down either branch and this is a status/message difference, not a security or
-     * availability hole. It is left alone because {@code resolveOwnAccount} is shared by five
-     * other mint/custody/revoke call sites and re-pointing it is a change to the shared identity
-     * policy, not a parity fix — the operator's call, recorded on the issue.
+     * hugmesh-user-bff-api#14: for a {@code bff_} session the synthetic principal's {@code sub} IS
+     * the account id, so when the {@code localpart} claim is absent (account row's localpart blank)
+     * {@code resolveOwnAccount} must look up THAT account -- not probe {@code casdoor:<email>},
+     * which no {@code google:} account is keyed under. The refusal is the same 409 "no persisted
+     * homeserver localpart yet" a {@code casdoor:} account gets, not a misleading 401. Still fail
+     * closed: nothing is minted.
      */
     @Test
-    void provisionMatrix_sessionCarrier_blankLocalpartClaim_is401_theResidualResolverKeyMiss() {
+    void provisionMatrix_sessionCarrier_blankLocalpartClaim_is409_notTheResolverKeyMiss() {
         when(adminBff.getAccount(eq(ACCOUNT_ID)))
                 .thenReturn(Mono.just(account(true, "", "")));
-        // The key resolveOwnAccount actually probes on this carrier (SUBJECT_CLAIMS-derived from
-        // the email claim the filter stamps) — no such account. user-bff-api#14.
+        // The key the OLD resolveOwnAccount probed (SUBJECT_CLAIMS-derived) -- no such account.
         when(adminBff.getAccount(eq("casdoor:" + HANDLE))).thenReturn(Mono.error(
                 WebClientResponseException.create(404, "Not Found", null, null, null)));
 
@@ -563,7 +549,7 @@ class LegacyPathParityControllerTest {
                         "ROLE_USER", "ROLE_MATRIX"))
                 .post().uri("/bff/provision/matrix")
                 .exchange()
-                .expectStatus().isUnauthorized();
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT);
         verify(broker, never()).mintMatrix(anyString(), anyString());
     }
 }
