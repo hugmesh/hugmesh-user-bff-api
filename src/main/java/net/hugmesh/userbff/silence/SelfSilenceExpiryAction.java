@@ -1,5 +1,6 @@
 package net.hugmesh.userbff.silence;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -37,6 +38,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Exposes {@link #lastSuccessAt()} (a poll-able gauge) for monitoring.
  */
 @Component
+@SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+        justification = "Spring constructor injection: the container owns this singleton collaborator and it is never mutated after construction; a defensive copy of a bean is meaningless (not caller-owned mutable data).")
 public class SelfSilenceExpiryAction {
 
     private static final Logger log = LoggerFactory.getLogger(SelfSilenceExpiryAction.class);

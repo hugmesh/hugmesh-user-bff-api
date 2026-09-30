@@ -1,5 +1,6 @@
 package net.hugmesh.userbff.hsproxy;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -47,6 +48,8 @@ import java.util.function.BiFunction;
  * <p>The native token is NEVER returned to the caller (it only ever rides the OUTBOUND
  * Authorization header) and NEVER logged.
  */
+@SuppressFBWarnings(value = "EI_EXPOSE_REP2",
+        justification = "Spring constructor injection: the container owns this singleton collaborator and it is never mutated after construction; a defensive copy of a bean is meaningless (not caller-owned mutable data).")
 public class HsReverseProxy {
 
     /** Hop-by-hop + identity headers we never forward inbound→upstream. The inbound

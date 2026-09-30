@@ -128,6 +128,17 @@
       <artifactId>commons-text</artifactId>
       <version>1.13.0</version>
     </dependency>
+    <!-- Compile-time only (CLASS retention, absent from the runtime/native image): the
+         @SuppressFBWarnings annotation for the few justified EI_EXPOSE_REP2 constructor
+         injection sites. Pinned to the spotbugs-maven-plugin's own SpotBugs version.
+         A repo-local excludeFilterFiles entry was tried first and does NOT work: the
+         plugin passes each filter as a separate -exclude and SpotBugs honours only one. -->
+    <dependency>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-annotations</artifactId>
+      <version>4.9.8</version>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
   <build><plugins>
     <!-- The spring-boot, native and surefire (bytebuddy-experimental argLine)

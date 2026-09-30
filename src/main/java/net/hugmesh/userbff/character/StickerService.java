@@ -141,6 +141,16 @@ public class StickerService {
 
     /** The served sticker image: the stored moderated pixels + the sniffed MIME type. */
     public record StickerBody(byte[] bytes, String contentType) {
+        /** Defensive copy in: the array is caller-owned and mutable. */
+        public StickerBody {
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
+        /** Defensive copy out: never hand the stored array to a caller. */
+        @Override
+        public byte[] bytes() {
+            return bytes == null ? null : bytes.clone();
+        }
     }
 
     /**
