@@ -21,6 +21,7 @@ import net.hugmesh.authcore.web.dto.RegisterEmailRequest;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -150,13 +151,67 @@ public class SsoAuthController {
         // Gate the account-provisioning entrypoint on the allowlist so an unlisted email cannot
         // self-provision an account + session via /register (this is a permitAll, mutating
         // surface). 403 BEFORE ensureAccount when not allowed; fail-closed.
-        return adminBff.allowlistCheck("email", req.email())
+        //
+        // hugmesh-user-bff-api#13, defect 2. Two DIFFERENT keys are in play and must not be
+        // conflated: the INVITE row is keyed by email under admin-bff's "google" allowlist
+        // namespace (admin-bff's allowlist switch knows only google/discord; "email" answers
+        // 400 "unknown provider"), while the ACCOUNT is keyed casdoor:<subject> (operator
+        // decision: matches native login, whose subject is the id_token's email claim first).
+        String email = req.email() == null ? "" : req.email().trim().toLowerCase(Locale.ROOT);
+        if (email.isEmpty()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "email is required"));
+        }
+        return adminBff.allowlistCheck(INVITE_NAMESPACE, email)
                 .flatMap(allowed -> Boolean.TRUE.equals(allowed)
-                        ? adminBff.ensureAccount("email", req.email())
+                        ? adminBff.ensureAccount("casdoor", casdoorHandle(email))
                         : Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN,
                                 "not allowed to register")))
+                // An already-complete account is NOT re-registerable: this endpoint is
+                // unauthenticated at the BFF, so minting a session for an existing complete
+                // account would hand its session to anyone who knows an invited email.
+                .flatMap(account -> account.registrationComplete()
+                        ? Mono.<AdminBffInternalClient.AccountView>error(new ResponseStatusException(
+                                HttpStatus.CONFLICT,
+                                "registration conflicts with an existing account; sign in instead"))
+                        : Mono.just(account))
                 .flatMap(account -> adminBff.createSession(account.id())
                         .map(session -> emitAndSession(exchange, account, session)));
+    }
+
+    /** admin-bff's allowlist namespace that holds email invites ({@code isEmailInvited}). */
+    static final String INVITE_NAMESPACE = "google";
+
+    /**
+     * The {@code handle} for {@code ensureAccount("casdoor", ...)}. admin-bff decodes that
+     * handle as an id_token when it has exactly three dot-separated parts, so a bare address
+     * like {@code first.last@example.com} (two dots) would be misread as a JWT and rejected
+     * 400. Those (and only those) are wrapped in an UNSIGNED envelope carrying just the
+     * {@code email} claim, which admin-bff resolves to the same {@code casdoor:<email>} key
+     * a real id_token with that email claim yields. Every other address goes bare.
+     */
+    static String casdoorHandle(String email) {
+        if (email.split("\\.").length != 3) {
+            return email;
+        }
+        java.util.Base64.Encoder b64 = java.util.Base64.getUrlEncoder().withoutPadding();
+        java.nio.charset.Charset utf8 = java.nio.charset.StandardCharsets.UTF_8;
+        String header = b64.encodeToString("{\"alg\":\"none\"}".getBytes(utf8));
+        String claims = b64.encodeToString(("{\"email\":" + jsonString(email) + "}").getBytes(utf8));
+        return header + "." + claims + ".x";
+    }
+
+    private static String jsonString(String v) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char c : v.toCharArray()) {
+            if (c == '"' || c == '\\') {
+                sb.append('\\').append(c);
+            } else if (c < 0x20) {
+                sb.append(String.format("\\u%04x", (int) c));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
     }
 
     @Operation(summary = "Revoke the caller's session (sessionOut) and expire the bff_ cookie. "

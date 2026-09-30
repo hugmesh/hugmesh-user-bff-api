@@ -54,8 +54,8 @@ class SsoAuthControllerTest {
     @Test
     void register_delegatesAllowlistEnsureAndSession() {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.allowlistCheck(eq("email"), eq("alice@example.test"))).thenReturn(Mono.just(true));
-        when(adminBff.ensureAccount(eq("email"), eq("alice@example.test"))).thenReturn(Mono.just(ACCOUNT));
+        when(adminBff.allowlistCheck(eq("google"), eq("alice@example.test"))).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount(eq("casdoor"), eq("alice@example.test"))).thenReturn(Mono.just(ACCOUNT));
         when(adminBff.createSession("acc-1")).thenReturn(Mono.just(SESSION));
 
         client(adminBff, false).post().uri("/bff/register")
@@ -65,8 +65,11 @@ class SsoAuthControllerTest {
                 .expectStatus().isOk()
                 .expectBody().jsonPath("$.token").isEqualTo("bff_opaque");
 
-        verify(adminBff).allowlistCheck("email", "alice@example.test");
-        verify(adminBff).ensureAccount("email", "alice@example.test");
+        // #13 defect 2: invite looked up under admin-bff's "google" namespace, account keyed casdoor:.
+        verify(adminBff).allowlistCheck("google", "alice@example.test");
+        verify(adminBff).ensureAccount("casdoor", "alice@example.test");
+        verify(adminBff, never()).allowlistCheck(eq("email"), anyString());
+        verify(adminBff, never()).ensureAccount(eq("email"), anyString());
     }
 
     /**
@@ -76,7 +79,7 @@ class SsoAuthControllerTest {
     @Test
     void register_notAllowlisted_is403_andNeverProvisions() {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.allowlistCheck(eq("email"), eq("blocked@example.test"))).thenReturn(Mono.just(false));
+        when(adminBff.allowlistCheck(eq("google"), eq("blocked@example.test"))).thenReturn(Mono.just(false));
 
         client(adminBff, false).post().uri("/bff/register")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -84,9 +87,73 @@ class SsoAuthControllerTest {
                 .exchange()
                 .expectStatus().isForbidden();
 
-        verify(adminBff).allowlistCheck("email", "blocked@example.test");
+        verify(adminBff).allowlistCheck("google", "blocked@example.test");
         verify(adminBff, never()).ensureAccount(anyString(), anyString());
         verify(adminBff, never()).createSession(anyString());
+    }
+
+    @Test
+    void register_twoDotEmail_isWrappedSoAdminBffDoesNotMisreadItAsAJwt() throws Exception {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(adminBff.allowlistCheck(eq("google"), eq("first.last@example.test"))).thenReturn(Mono.just(true));
+        org.mockito.ArgumentCaptor<String> handle = org.mockito.ArgumentCaptor.forClass(String.class);
+        when(adminBff.ensureAccount(eq("casdoor"), handle.capture())).thenReturn(Mono.just(ACCOUNT));
+        when(adminBff.createSession("acc-1")).thenReturn(Mono.just(SESSION));
+
+        client(adminBff, false).post().uri("/bff/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"email\":\" First.Last@Example.test \"}")
+                .exchange().expectStatus().isOk();
+
+        String[] parts = handle.getValue().split("\\.");
+        org.junit.jupiter.api.Assertions.assertEquals(3, parts.length);
+        String claims = new String(java.util.Base64.getUrlDecoder().decode(parts[1]),
+                java.nio.charset.StandardCharsets.UTF_8);
+        org.junit.jupiter.api.Assertions.assertEquals("{\"email\":\"first.last@example.test\"}", claims);
+    }
+
+    @Test
+    void register_alreadyCompleteAccount_is409_andMintsNoSession() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(adminBff.allowlistCheck(eq("google"), eq("alice@example.test"))).thenReturn(Mono.just(true));
+        when(adminBff.ensureAccount(eq("casdoor"), eq("alice@example.test"))).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView(
+                        "casdoor:alice@example.test", "casdoor", "alice@example.test", true,
+                        List.of("user"), "alice")));
+
+        client(adminBff, false).post().uri("/bff/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"email\":\"alice@example.test\"}")
+                .exchange().expectStatus().isEqualTo(409);
+
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    @Test
+    void register_allowlistError_failsClosed_andNeverProvisions() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        when(adminBff.allowlistCheck(anyString(), anyString()))
+                .thenReturn(Mono.error(new IllegalStateException("admin-bff down")));
+
+        client(adminBff, false).post().uri("/bff/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"email\":\"alice@example.test\"}")
+                .exchange().expectStatus().is5xxServerError();
+
+        verify(adminBff, never()).ensureAccount(anyString(), anyString());
+        verify(adminBff, never()).createSession(anyString());
+    }
+
+    @Test
+    void register_blankEmail_is400_andCallsNothing() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+
+        client(adminBff, false).post().uri("/bff/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"email\":\"   \"}")
+                .exchange().expectStatus().isBadRequest();
+
+        verify(adminBff, never()).allowlistCheck(anyString(), anyString());
     }
 
     @Test
