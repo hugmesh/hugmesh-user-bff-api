@@ -265,17 +265,20 @@ public class MeshDeviceService {
     public Mono<MeshDeviceEntity> restore(String id, String domain, String moderator) {
         String mod = requireModerator(moderator);
         return repo.restoreWhereRevoked(id, domain)
-                .flatMap(rows -> {
-                    if (rows > 0) {
-                        log.info("[mesh-device] device {} RESTORED by moderator {}", id, mod);
-                        return repo.findForModeration(id, domain);
-                    }
-                    return repo.findForModeration(id, domain)
-                            .flatMap(d -> Mono.<MeshDeviceEntity>error(ApiException.conflict(
-                                    "mesh device is not revoked — nothing to restore")))
-                            .switchIfEmpty(Mono.error(ApiException.notFound(
-                                    "no such mesh device")));
-                });
+                .flatMap(rows -> afterRestore(rows, id, domain, mod));
+    }
+
+    /** The {@link #restore} leg after the CAS: re-read on a restored row, else 409 / 404. */
+    private Mono<MeshDeviceEntity> afterRestore(Integer rows, String id, String domain, String mod) {
+        if (rows > 0) {
+            log.info("[mesh-device] device {} RESTORED by moderator {}", id, mod);
+            return repo.findForModeration(id, domain);
+        }
+        return repo.findForModeration(id, domain)
+                .flatMap(d -> Mono.<MeshDeviceEntity>error(ApiException.conflict(
+                        "mesh device is not revoked — nothing to restore")))
+                .switchIfEmpty(Mono.error(ApiException.notFound(
+                        "no such mesh device")));
     }
 
     /** The acting moderator's identity must be present and fit {@code revoked_by}

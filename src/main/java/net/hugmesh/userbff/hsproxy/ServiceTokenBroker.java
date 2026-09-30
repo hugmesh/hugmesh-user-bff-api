@@ -315,27 +315,30 @@ public class ServiceTokenBroker {
         tokenBody.put("client_secret", app.path("client_secret").asText());
         tokenBody.put("scope", MASTODON_SCOPES);
         return postJson(mastodon, "/oauth/token", tokenBody)
-                .flatMap(tok -> {
-                    if (!tok.hasNonNull("access_token")) {
-                        return Mono.error(new IllegalStateException(
-                                "mastodon mint: client_credentials grant returned no app token"));
-                    }
-                    Map<String, Object> reg = new LinkedHashMap<>();
-                    reg.put("username", user);
-                    reg.put("email", email);
-                    reg.put("password", svcPassword);
-                    reg.put("agreement", true);
-                    reg.put("locale", "en");
-                    return mastodon.post().uri("/api/v1/accounts")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .header("Authorization", "Bearer " + tok.path("access_token").asText())
-                            .bodyValue(reg)
-                            .exchangeToMono(resp -> resp.statusCode().is5xxServerError()
-                                    ? resp.createException().flatMap(e -> Mono.<String>error(e))
-                                    : resp.bodyToMono(String.class))
-                            .flatMap(ServiceTokenBroker::parseJson)
-                            .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
-                });
+                .flatMap(tok -> mastodonCreateAccount(tok, user, email));
+    }
+
+    /** The {@link #mastodonRegister} leg after the app token: {@code POST /api/v1/accounts}. */
+    private Mono<JsonNode> mastodonCreateAccount(JsonNode tok, String user, String email) {
+        if (!tok.hasNonNull("access_token")) {
+            return Mono.error(new IllegalStateException(
+                    "mastodon mint: client_credentials grant returned no app token"));
+        }
+        Map<String, Object> reg = new LinkedHashMap<>();
+        reg.put("username", user);
+        reg.put("email", email);
+        reg.put("password", svcPassword);
+        reg.put("agreement", true);
+        reg.put("locale", "en");
+        return mastodon.post().uri("/api/v1/accounts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + tok.path("access_token").asText())
+                .bodyValue(reg)
+                .exchangeToMono(resp -> resp.statusCode().is5xxServerError()
+                        ? resp.createException().flatMap(e -> Mono.<String>error(e))
+                        : resp.bodyToMono(String.class))
+                .flatMap(ServiceTokenBroker::parseJson)
+                .switchIfEmpty(Mono.fromSupplier(JsonNodeFactory.instance::objectNode));
     }
 
     /** Extract access/refresh/expiry from the Mastodon OAuth response and persist the token. */

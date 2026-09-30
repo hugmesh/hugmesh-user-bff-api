@@ -426,21 +426,24 @@ public class LegacyPathParityController {
         return requireCompleteAccount(jwt)
                 .then(Mono.defer(() -> matrix ? identity.matrixLocalpart(jwt)
                         : identity.mastodonLocalpart(jwt)))
-                .flatMap(localpart -> {
-                    // Defence in depth, mirroring admin-bff: a reserved handle should already
-                    // have been refused at registration, but the mint creates a REAL homeserver
-                    // localpart, so re-check at the provision point.
-                    if (ReservedNames.isReserved(localpart)) {
-                        return Mono.error(ApiException.badRequest(
-                                "username '" + localpart + "' is reserved and cannot be provisioned"));
-                    }
-                    String owner = jwt.getSubject();
-                    Mono<MintedToken> mint = matrix
-                            ? broker.mintMatrix(owner, localpart)
-                            : broker.mintMastodon(owner, localpart);
-                    return mint.onErrorMap(LegacyPathParityController::asGatewayFailure);
-                })
+                .flatMap(localpart -> mintProvisioned(jwt, matrix, localpart))
                 .thenReturn(OK);
+    }
+
+    /** The {@link #provision} mint leg for one resolved localpart. */
+    private Mono<MintedToken> mintProvisioned(Jwt jwt, boolean matrix, String localpart) {
+        // Defence in depth, mirroring admin-bff: a reserved handle should already
+        // have been refused at registration, but the mint creates a REAL homeserver
+        // localpart, so re-check at the provision point.
+        if (ReservedNames.isReserved(localpart)) {
+            return Mono.error(ApiException.badRequest(
+                    "username '" + localpart + "' is reserved and cannot be provisioned"));
+        }
+        String owner = jwt.getSubject();
+        Mono<MintedToken> mint = matrix
+                ? broker.mintMatrix(owner, localpart)
+                : broker.mintMastodon(owner, localpart);
+        return mint.onErrorMap(LegacyPathParityController::asGatewayFailure);
     }
 
     /** Keep an error that already carries an HTTP status; map anything else to 502, which is
@@ -522,18 +525,24 @@ public class LegacyPathParityController {
                         ? adminBff.ensureAccount(provider, handle)
                                 .onErrorMap(LegacyPathParityController::asInternalHopFailure)
                         : Mono.error(ApiException.forbidden(notInvitedMessage)))
-                .flatMap(account -> {
-                    if (account.registrationComplete()) {
-                        // Decision 57: a re-registration of an already-complete account is a
-                        // CONFLICT with that account. No restart, no session, no usage row.
-                        return Mono.<ResponseEntity<Map<String, Object>>>error(
-                                ApiException.conflict(ALREADY_REGISTERED_CONFLICT));
-                    }
-                    recordRegistration(provider, handle, account);
-                    return adminBff.createSession(account.id())
-                            .onErrorMap(LegacyPathParityController::asInternalHopFailure)
-                            .map(session -> emitAndSession(exchange, account, session));
-                });
+                .flatMap(account -> sessionForNewAccount(provider, handle, account, exchange));
+    }
+
+    /** The {@link #register} leg after ensure-the-account: the already-complete gate, the
+     *  usage row, then the session mint. */
+    private Mono<ResponseEntity<Map<String, Object>>> sessionForNewAccount(
+            String provider, String handle, AdminBffInternalClient.AccountView account,
+            ServerWebExchange exchange) {
+        if (account.registrationComplete()) {
+            // Decision 57: a re-registration of an already-complete account is a
+            // CONFLICT with that account. No restart, no session, no usage row.
+            return Mono.<ResponseEntity<Map<String, Object>>>error(
+                    ApiException.conflict(ALREADY_REGISTERED_CONFLICT));
+        }
+        recordRegistration(provider, handle, account);
+        return adminBff.createSession(account.id())
+                .onErrorMap(LegacyPathParityController::asInternalHopFailure)
+                .map(session -> emitAndSession(exchange, account, session));
     }
 
     /**
