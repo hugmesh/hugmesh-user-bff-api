@@ -250,13 +250,24 @@ public class CanonicalIdentityResolver {
      * provider-namespace account -- the whole point of the fix.
      */
     private Mono<AdminBffInternalClient.AccountView> resolveOwnAccount(Jwt jwt) {
-        String subject = subjectOf(jwt);
-        if (subject == null) {
+        String accountId;
+        if (isSyntheticSessionPrincipal(jwt)) {
+            // A bff_ session's synthetic Jwt: its sub IS the account id, for every provider
+            // (user-bff-api#14). Never re-derive a casdoor: key from the email claim.
+            accountId = jwt.getSubject();
+            if (accountId == null || accountId.isBlank()) {
+                accountId = null;
+            }
+        } else {
+            String subject = subjectOf(jwt);
+            accountId = subject == null ? null : idFor(CASDOOR, subject);
+        }
+        if (accountId == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                     "no identity claim on token (email/preferred_username/sub all absent) -- "
                             + "cannot resolve the caller's own account (fail-closed)"));
         }
-        return adminBff.getAccount(idFor(CASDOOR, subject))
+        return adminBff.getAccount(accountId)
                 .onErrorResume(WebClientResponseException.NotFound.class, e -> Mono.empty())
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                         "no registered account for this token's OWN identity "

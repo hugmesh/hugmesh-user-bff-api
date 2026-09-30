@@ -120,15 +120,10 @@ import java.util.Map;
  *   <li><b>No self-heal of a blank persisted localpart.</b> admin-bff's {@code provision} calls
  *       {@code AccountLocalpartService.resolveAndPersist} when {@code account.localpart} is
  *       blank and then mints; user-bff owns no account table, so {@link
- *       CanonicalIdentityResolver} FAILS CLOSED instead — 409 on a raw Casdoor JWT carrier, and
- *       on a {@code bff_} carrier 409 for a {@code casdoor:} account but 401 for a
- *       {@code google:}/{@code discord:} one, because the resolver's {@code resolveOwnAccount}
- *       branch (taken only when the {@code localpart} claim is absent) still derives its key
- *       from {@code SUBJECT_CLAIMS}. That residual asymmetry is filed as
- *       hugmesh-user-bff-api#14 and deliberately NOT closed here — {@code resolveOwnAccount} is
- *       shared by five other mint/custody/revoke call sites, so re-pointing it is a change to
- *       the shared identity policy rather than a parity fix. Both outcomes are fail-closed
- *       refusals with no mint down either branch, and both are pinned in
+ *       CanonicalIdentityResolver} FAILS CLOSED instead — 409 "no persisted homeserver
+ *       localpart yet" on a raw Casdoor JWT carrier and, since hugmesh-user-bff-api#14, on a
+ *       {@code bff_} carrier for every provider (the resolver keys that carrier off its
+ *       {@code sub}, which IS the account id). No mint down either branch, and both are pinned in
  *       {@code LegacyPathParityControllerTest}. Unreachable on the cluster lane in practice:
  *       {@code POST /bff/login} routes here and its {@code ensureAccount} hop makes admin-bff
  *       persist the localpart on EVERY sign-in, so a caller holding a session holds a
