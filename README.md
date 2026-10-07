@@ -1,7 +1,7 @@
 # hugmesh-user-bff-api
 
-Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with the
-(later) `hugmesh-user-ui`. Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
+Spring **user BFF** — the `ROLE_USER`-floor backend-for-frontend paired with
+`hugmesh-user-ui` (its own repo). Reactive WebFlux + R2DBC + Liquibase + Casdoor JWT
 resource-server + springdoc + Spring Native, scaffolded from the
 `hugmesh-admin-bff-api` template (same stack, same conventions). Java 25 LTS,
 Spring Boot 4.0.7 / Spring Cloud 2025.1.2.
