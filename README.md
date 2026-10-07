@@ -4,8 +4,7 @@ Spring **user BFF**: the `ROLE_USER`-floor backend-for-frontend paired with
 `hugmesh-user-ui` (its own repo). It is reactive WebFlux + R2DBC + Liquibase + a Casdoor
 JWT resource server + springdoc + Spring Native, scaffolded from the
 `hugmesh-admin-bff-api` template (same stack, same conventions). Java 25 LTS,
-Spring Boot 4.0.7 / Spring Cloud 2025.1.2. It has one job: let a signed-in user read and
-change their own data, and nobody else's.
+Spring Boot 4.0.7 / Spring Cloud 2025.1.2.
 
 ## Where it sits
 
@@ -254,7 +253,8 @@ avatarUrl`.
   vanity username comes from the **token**, never the body, so the reserved-name guard
   can't be bypassed. The order is the `bff_` session's Casdoor login-name claim, then
   `preferred_username`, then `name`, then the subject. Any candidate that holds `:` or `@`
-  is skipped, and a save is a 400 when none qualifies.
+  is skipped. A vanity save, a password change or an email change is a 400 when none
+  qualifies.
 - `DELETE /bff/user/profile` — delete my profile.
 - `POST /bff/user/profile/avatar` — upload my profile picture (multipart `file`,
   `image/*` only, 5 MB cap). The bytes are magic-byte-sniffed, then edge-AI moderated
@@ -723,7 +723,8 @@ durable `UserPreferencesController`.
 > deliver path stays dark unless a caller is switched on. The caller exists:
 > `hugmesh-actions` has `UserNotificationClient` (`net.hugmesh.actions.notify`), created
 > only when `app.actions.notify.enabled=true`, and that repo's `application.yml` does not
-> set it. Whether any cluster sets it is not verified. The SSE wiring itself is ✅ shipped.
+> set it, and the `hugmesh-generator` cluster manifests set no notify, reconciler,
+> capability-gate or gateway-revocation flag either. The SSE wiring itself is ✅ shipped.
 
 ### Real-time SSE stream ✅ shipped
 `GET /bff/user/notifications/events` is a **server-sent event stream** (`text/event-stream`)
@@ -971,7 +972,8 @@ release workflow, in GitHub Packages. There are three resolution paths, and **no
 sit in git**:
 
 - **Local dev:** `mvn install` the shared artifacts into `~/.m2`. A plain
-  `./mvnw test` then resolves them locally and never touches the remote.
+  `./mvnw test` then resolves them locally and never touches the remote (this is how the
+  build was verified green).
 - **CI / Docker:** the committed [`settings.xml`](settings.xml) declares the
   `gitlab-maven` group registry, authenticated by the GitLab `CI_JOB_TOKEN`
   (`${env.CI_JOB_TOKEN}`, injected by GitLab, never committed). The
@@ -1084,14 +1086,15 @@ Spring Native: `native` profile + native-maven-plugin, surefire `argLine
 JSON-bound DTOs plus swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps
 Postgres/H2 timestamp types → `Instant` deterministically (JVM + native).
 Data access: Spring Data R2DBC reactive repositories (`*R2dbcRepository`). Derived queries
-cover the plain cases. A static `@Query` SQL constant is used where a statement needs a
-server-side value (`now()`, a generated id) or an owner and domain predicate.
+cover the plain cases. A static `@Query` SQL constant (18 files under `src/main/java`) is
+used where a statement needs a server-side value (`now()`, a generated id) or an explicit
+owner and domain predicate, such as `ConnectedClientAuditR2dbcRepository#revokeScoped`.
 
 ## Build / test
 
-- `./mvnw test` — needs a Docker daemon: 20 test classes extend `PostgresTestSupport`
-  (a real Postgres through Testcontainers), and the repository slices use the H2 in-memory
-  `TestDatabaseConfig`. Coverage:
+- `./mvnw test` — green. It needs a Docker daemon: 20 test classes extend
+  `PostgresTestSupport` (a real Postgres through Testcontainers), and the repository
+  slices use the H2 in-memory `TestDatabaseConfig`. Coverage:
   - the Casdoor authorities converter;
   - ROLE_USER + spec role-gating (`@WebFluxTest`);
   - repository slices over H2-PG-compat with the REAL Liquibase changelog
@@ -1129,7 +1132,7 @@ CI is **GitLab** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
 in-cluster GitLab. GitHub has one workflow,
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs on manual
 dispatch only and pushes the image to GHCR (see *Resolving the private org artifacts*).
-The GitLab pipeline has five stages:
+GitHub Actions is billing-blocked. The GitLab pipeline has five stages:
 
 1. **`test`**: `./mvnw -B -s settings.xml verify` on `maven:3.9-eclipse-temurin-25` with a
    `docker:27-dind` service. A clean-tree check then fails the job if the build rewrote a
@@ -1255,8 +1258,9 @@ merge requests.
 
 State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or landing) ·
 🔭 planned (design-complete, no code here). The section was last refreshed against
-`f63e30f` (#130). The claims below were rechecked against `origin/main` at `247e3fb` on
-2026-10-07. See `git log --oneline -40` for the full recent history.
+`f63e30f` (#130). On 2026-10-07 the file paths, routes, flags, versions and counts below
+were rechecked against `origin/main` at `247e3fb`; the PR and issue numbers were not.
+See `git log --oneline -40` for the full recent history.
 
 - ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.7 / Spring Cloud
   2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–023, incl. DB-generated UUID

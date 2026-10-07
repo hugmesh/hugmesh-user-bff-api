@@ -24,7 +24,7 @@ Two independent layers defend this BFF.
 2. **Mutual TLS — the API-to-API trust boundary (transport layer).** In-cluster,
    the TLS handshake **requires a client certificate that chains to the cluster CA
    truststore**. Only services deployed and signed by our Vault/ESO PKI process hold
-   such a certificate. A random pod, an external client, or anything not issued by
+   such a certificate. A random pod, an `io`/external client, or anything not issued by
    our PKI presents no chaining cert. The server rejects its handshake before it
    reads any HTTP, so that caller cannot read or call this API at all.
 
@@ -85,9 +85,9 @@ existing tests run unchanged. `client-auth` maps to Netty's `ClientAuth`:
 `none → NONE`, `want → OPTIONAL`, `need → REQUIRE`. WebFlux/Netty reads these
 properties directly; the server side needs no custom `SslContext`/`HttpServer` bean.
 
-## Deployment: shipped (two copies, now drifted)
+## Deployment: shipped (dual-homed in this repo + hugmesh-generator)
 
-Enforcement is **already on** in both manifests. The authoritative copy is the
+The two manifests have drifted (see below). Enforcement is **already on** in both. The authoritative copy is the
 one in `hugmesh-generator` (`specs/cluster/manifests/user-bff-api/deployment.yaml`).
 A GitOps-pilot copy lives here in [`deploy/deployment.yaml`](deploy/deployment.yaml).
 It was added for the Forgejo-cutover pilot; [`hugmesh-deploy.yaml`](hugmesh-deploy.yaml)
