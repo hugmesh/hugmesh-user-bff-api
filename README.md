@@ -1157,9 +1157,10 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   Casdoor full-object-validates and rejects `Display name cannot be empty`; with it
   all other user fields are preserved). Auth: both the service client-credential
   Basic auth and the caller's own bearer work for the caller's own user; a user
-  bearer against another user gets `Unauthorized operation`. Still deferred before
-  flipping the flag in-cluster: the `send-verification-code`/`verify-code` email
-  hardening flow and the production credential wiring.
+  bearer against another user gets `Unauthorized operation`. Still deferred: the
+  `send-verification-code`/`verify-code` email hardening flow. The cluster manifest
+  already wires the credentials (`CASDOOR_ACCOUNT_CLIENT_ID=app-user-bff` and an optional
+  `user-bff-oidc` Secret key for the client secret).
 - **AI-cloak media-proxy ships DARK** (`app.media.poisoning.enabled=false`) until
   the round-trip survival gate is verified on a real GPU cluster. The heavy-tier
   worker is optional; the lean fallback never *forces* posting to block.
