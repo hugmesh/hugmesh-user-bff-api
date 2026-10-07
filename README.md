@@ -32,7 +32,7 @@ mod BFF. It talks to:
 ```mermaid
 flowchart LR
     LoginUI["login-ui<br/>(native username/password form → POST /bff/login)"]:::planned
-    UI["hugmesh-user-ui<br/>(later; ng-openapi-gen)"]:::planned
+    UI["hugmesh-user-ui<br/>(own repo; ng-openapi-gen)"]:::planned
     GW["hugmesh gateway<br/>(Casdoor-JWT RS + bff_→JWT swap + route-access gate)"]
     Casdoor["Casdoor IdP<br/>(SSO / JWT issuer)"]
 
@@ -66,20 +66,22 @@ flowchart LR
     classDef gated stroke-dasharray:2,stroke:#b58900;
 ```
 
-In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed grey nodes are 🔭
-planned or built/landing elsewhere (`login-ui`, `hugmesh-user-ui`, the
-`hugmesh-actions` reconciler, and the mesh↔Matrix bridge — the `mesh-devices` internal
-mapping/status-writeback receiver is ✅ shipped here, but no bridge exists yet to call
-it); the amber-dashed nodes are ✅-shipped-but-**gated**
+In the diagram: solid nodes/edges are ✅ shipped on `main`; dashed grey nodes are
+built in other repos (`login-ui`, `hugmesh-user-ui`, the `hugmesh-actions` reconciler,
+and the mesh↔Matrix bridge under `hugmesh-generator` `specs/cluster/manifests/meshbridge`).
+The `mesh-devices` internal mapping/status-writeback receiver is ✅ shipped here, and the
+bridge manifest points at it (`MESHBRIDGE_USERBFF_MESH_DEVICES_URL`); the amber-dashed nodes are ✅-shipped-but-**gated**
 stub-seams — the homeserver leg (off by default) and the admin-bff `/bff/internal`
 leg (the client + `BffSessionAuthenticationWebFilter` + `CanonicalIdentityResolver` are
 all real, always-registered code, but every call fail-closed-stubs unless
-`app.bff.oidc.enabled=true`).
+`app.bff.oidc.enabled=true`; the `hugmesh-generator` cluster manifest sets it to `true`).
 
 ## Auth model / SSO relocation 🚧
 
 The platform's auth is being consolidated this cycle, and this BFF is the new home
-for the user-facing slice of it. Ground truth as of 2026-06-25:
+for the user-facing slice of it. Checked against `origin/main` on 2026-10-07 (the
+in-cluster values below come from the `hugmesh-generator` manifest
+`specs/cluster/manifests/user-bff-api/deployment.yaml`, not from a live cluster):
 
 - **Casdoor is the SSO IdP, and it is NEVER browser-exposed.** Native login is the
   **sole** browser login entry, terminating server-side in this BFF so the user's
@@ -89,8 +91,8 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
   - **Native login (`POST /bff/login`) — the headline model.** The browser posts only
     `{username, password}`. This BFF generates a PKCE pair + `state` **server-side**,
     verifies the credentials by POSTing to the **internal** Casdoor `/api/login`
-    (`CasdoorLoginClient`, pointed at `app.bff.oidc.login-base`, e.g.
-    `http://casdoor:8000` — the in-cluster base, never the browser-facing issuer), and
+    (`CasdoorLoginClient`, pointed at `app.bff.oidc.login-base`, default
+    `http://casdoor.hugmesh-pki.svc.cluster.local:8000` — the in-cluster base, never the browser-facing issuer), and
     on success redeems the returned one-time authorization `code` for tokens. No Casdoor
     redirect ever reaches the browser.
 
@@ -140,13 +142,15 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
 > completion path (`OidcLoginCompletionService`) native login uses, the `bff_` session
 > custody (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
 > admin-bff `/bff/internal` account/session client (`AdminBffInternalClient`), and
-> the `hugmesh-auth-core` adoption. 🚧 What genuinely remains is the **live
-> flag-flip** (gating off `app.bff.oidc.enabled` / `app.bff.custody-key` /
-> `app.internal.token`, wiring `app.bff.oidc.login-base` to the in-cluster Casdoor,
-> pinning the admin-bff #112 contract + the cross-repo egress NetworkPolicy) and
-> **SSO e2e**. Until that flip, login stays operationally owned by admin-bff: the
-> `/bff/login` (native) + `/bff/register` routes exist but 503 / are inert while the
-> flags are off.
+> the `hugmesh-auth-core` adoption. The code defaults stay off: `app.bff.oidc.enabled`
+> is `false`, and `app.bff.custody-key` and `app.internal.token` are empty. With the
+> flags off, the `/bff/login` (native) + `/bff/register` routes exist but 503. The
+> `hugmesh-generator` cluster manifest flips them: it sets `APP_BFF_OIDC_ENABLED=true`,
+> `APP_BFF_OIDC_LOGIN_BASE` and `APP_BFF_OIDC_ISSUER` to the in-cluster Casdoor, and
+> `APP_SESSION_COOKIE_ENABLED=true`, and it reads `APP_BFF_CUSTODY_KEY` and
+> `INTERNAL_TOKEN` from Secrets. The copy in this repo's `deploy/deployment.yaml`
+> still sets `APP_BFF_OIDC_ENABLED=false`. 🚧 SSO end-to-end proof on a live cluster
+> is not verified here.
 
 ### Native-login session bridge — `BffSessionAuthenticationWebFilter` ✅ shipped
 
@@ -192,6 +196,30 @@ already gated off by default); `SessionsService` uses the same resolver so
 `/bff/user/sessions` lists/revokes only the caller's own rows regardless of how they
 authenticated.
 
+### Other public and parity routes ✅ shipped
+
+Four more groups of routes live next to `/bff/login`.
+
+- **Session end:** `DELETE /bff/session` revokes the session; `POST /bff/sessionOut` is the
+  same operation (public, so a second sign-out reaches the controller instead of a 401);
+  `GET /bff/me` returns the caller's account view (authenticated); `GET /bff/session`
+  returns the same view (public, cookie-authenticated).
+- **Password reset (`PasswordResetController`):** `POST /bff/password-reset/request` takes
+  `{username}` and always answers 202 with a fixed body for a well-formed request, whether
+  or not the account exists. `POST /bff/password-reset/confirm` takes
+  `{username, code, newPassword}`; 200 means Casdoor wrote the credential, and a refused
+  code or password is one 400 that names neither. Both routes answer 503 while
+  `casdoor.password-reset.enabled=false` (the default; the cluster manifest sets
+  `CASDOOR_PASSWORD_RESET_ENABLED=false` too). Both paths are public by exact path.
+- **Invite-gated registration (`LegacyPathParityController`):** `POST /bff/register/google`
+  and `POST /bff/register/discord` (public by exact path; 403 when not invited, 409 on a
+  localpart collision or an already-complete account).
+- **Parity with admin-bff's `AuthController`, because the cluster gateway routes these
+  paths here:** `GET /bff/me/namespaces`, and `POST /bff/provision/matrix` and
+  `POST /bff/provision/mastodon` (`ROLE_MATRIX` / `ROLE_MASTODON`; the homeserver token
+  stays in custody and the body carries no `access_token`; 403 before registration
+  completes, 502 on a mint failure, 503 when brokering is not configured).
+
 ## The core invariant: owner-enforcement
 
 **Every endpoint operates ONLY on the caller's OWN data.** The owner is ALWAYS the
@@ -218,11 +246,17 @@ avatarUrl`.
   then subject — NOT the body, so the reserved-name guard can't be bypassed).
 - `DELETE /bff/user/profile` — delete my profile.
 - `POST /bff/user/profile/avatar` — upload my profile picture (multipart `file`,
-  `image/*` only, 5 MB cap). The bytes go to the tuwunel media repository via
-  `MatrixMediaClient` and the resulting `mxc://` URL is persisted onto
-  `user_profile.avatar_url`; the column is server-derived and a profile save never
-  clears it. STUB-GATED by `avatar.matrix.enabled` (default false — a deterministic
-  `mxc://stub.invalid/<id>` is returned so avatar storage works + ships dark).
+  `image/*` only, 5 MB cap). The bytes are magic-byte-sniffed, then edge-AI moderated
+  when `app.vision.moderation.enabled` is on (default off; a blocked image is a 422 and a
+  held `profile-avatar` finding is filed). Then they go to
+  the tuwunel media repository via `MatrixMediaClient` and the resulting `mxc://` URL is
+  persisted onto `user_profile.avatar_url`; the moderated bytes and their sniffed type
+  are stored too (`avatar_body` / `avatar_content_type`, changelog 022). The column is
+  server-derived and a profile save never clears it. STUB-GATED by `avatar.matrix.enabled`
+  (default false — a deterministic `mxc://stub.invalid/<id>` is returned so avatar storage
+  works + ships dark).
+- `GET /bff/user/profile/avatar/body` — serve MY stored profile picture (the sniffed
+  content type, `no-store`); 404 when I have none.
 - `POST /bff/user/profile/password` — change my **Casdoor** password.
 - `POST /bff/user/profile/email` — change my **Casdoor** email.
 
@@ -304,7 +338,11 @@ end-to-end with no broader service credential.
 
 - `GET /bff/user/cards` → federation `GET /api/federation/bundles/mine`.
 - `GET /bff/user/cards/{slug}` → federation `GET /api/federation/bundles/slug/{slug}`.
+- `GET /bff/user/cards/{slug}/body` — the card's current entry-file bytes
+  (octet-stream), for editor pre-fill; federation-api enforces the owner.
 - `PUT /bff/user/cards/{slug}` (octet-stream) → federation `PUT /api/federation/bundles/{slug}`.
+- `DELETE /bff/user/cards/{slug}` — delete my current bundle for the slug (204); federation-api
+  enforces the owner (a non-owner gets 404).
 
 ### Self-block + recommend-instance-block — `BlockController` (`/bff/user`)
 Own R2DBC `user_block` table (`user_id, target, platform {matrix|mastodon|internal},
@@ -380,7 +418,8 @@ authorities converter — no converter change.
 - `GET /bff/user/connected-clients` — my connected apps + device sessions.
 - `DELETE /bff/user/connected-clients/{id}` — revoke one of mine: write the
   **per-credential** gateway revocation key `hs:<platform>:<localpart>:<appId|deviceId>`
-  first (`RevocationWriter`), best-effort homeserver delete, then stamp `revoked_at`.
+  first (`RevocationWriter`; its `POST /api/gateway/revocations` call is off until
+  `gateway.revocation.enabled=true`), best-effort homeserver delete, then stamp `revoked_at`.
 
 Both the live homeserver read and the revocation-key write resolve `<localpart>`
 **per platform** via `CanonicalIdentityResolver` (claim-first, else the caller's own
@@ -456,7 +495,7 @@ until the survival gate is verified on a real GPU cluster.
 Two owner-scoped, moderation-queued surfaces backing the VN/character-studio feature, plus
 the internal receiver that resolves a queued item once a moderator acts. Own R2DBC tables
 `vn_character_part` (016) and `vn_sticker_pack` (017); 018 adds the `finding_id` back-link
-column to both.
+column to both; 020 adds `body` / `content_type` to `vn_sticker_pack`.
 
 **Drawn parts — `CharacterPartController` (`/bff/user/character/parts`)** — a user-drawn SVG
 part (e.g. a hairstyle/outfit layer). `ROLE_USER` floor.
@@ -475,12 +514,16 @@ PNG snapshot of the character rig at a canonical expression (Phase B1; mirrors t
 upload path). `ROLE_USER` floor.
 - `POST /bff/user/character/stickers` — multipart `file` (PNG) + `expression`. The client
   `Content-Type` is never trusted: bytes are magic-byte-sniffed (`ImageSniffer`, which
-  deliberately rejects SVG — the stored-XSS gap), capped at 1 MB, edge-AI moderated (a
-  blocked sticker is a 422), uploaded to the homeserver media repo, then stored
-  `status=PENDING` + a moderation finding filed. There is deliberately **no BFF serve
-  endpoint** — a sticker's pixels live on the homeserver (`mxc://`) and are fetched
-  direct-to-homeserver by the Matrix client, never proxied through this BFF.
+  deliberately rejects SVG — the stored-XSS gap), capped at 1 MB, edge-AI moderated when
+  `app.vision.moderation.enabled` is on (a blocked sticker is a 422), uploaded to the homeserver media repo, then stored
+  `status=PENDING` (with the pixels, changelog 020) + a moderation finding filed. The Matrix
+  client fetches the pixels direct-to-homeserver (`mxc://`).
 - `GET /bff/user/character/stickers` — list MY stickers (newest first).
+- `GET /bff/user/character/stickers/{slug}/body` — serve a sticker's stored pixels
+  (`slug` = the row id the list returns). **Not owner-scoped**, on purpose: an `ACTIVE`
+  sticker has to render in other users' posts. A `PENDING` sticker serves to its owner
+  only, a `REJECTED` one never serves, and every miss is a uniform 404. `Cache-Control:
+  no-store`, `nosniff`, `default-src 'none'`.
 
 **VN character avatar — `CharacterAvatarController` (`/bff/user/character/avatar`)** — the
 profile picture as a forum-post sprite, served to the READERS of a post. `ROLE_USER` floor.
@@ -530,8 +573,9 @@ subject — the same account-takeover-by-collision fix the D6 proxy mints apply)
 (`/bff/user/internal/character/{parts,stickers}/{id}/moderation`)** — **SERVICE-PRINCIPAL
 ONLY** (same `/bff/user/internal/**` gate as the notifications deliver endpoint: `ROLE_SERVICE`
 exclusively, not even SUPERADMIN). The ONLY production flipper of a row's `status` from
-`PENDING` to `ACTIVE`/`REJECTED`, called by the admin-bff moderation reconciler (a later PR)
-when a moderator resolves the filed finding. The flip is PENDING-guarded and idempotent — a
+`PENDING` to `ACTIVE`/`REJECTED`, called by the admin-bff moderation reconciler
+(`UserBffCharacterModerationClient` in `hugmesh-admin-bff-api`, which stays off until
+`character-moderation.reconciler.enabled` is set) when a moderator resolves the filed finding. The flip is PENDING-guarded and idempotent — a
 second resolve, or a resolve of an unknown/already-resolved id, flips zero rows and is a 404;
 an invalid `status` (not `ACTIVE`/`REJECTED`) is a 400.
 
@@ -541,8 +585,9 @@ homeserver client APIs **through the per-pod mTLS proxy sidecars**, so the user-
 never holds homeserver credentials: the BFF injects a server-held homeserver-native
 token brokered by `ServiceTokenBroker` (the reactive port of admin-bff's broker —
 register-then-login for Matrix, password-grant for Mastodon; the minted token is
-AES-encrypted into the `hs_service_token` custody store and its SHA-256 hash written
-to the gateway revocation filter). The homeserver service-account password
+AES-encrypted into the `hs_service_token` custody store; its SHA-256 hash is written to
+the gateway `hs_tokens` registry only when `app.hs-token.registry.enabled` is on, which is
+the default-off setting). The homeserver service-account password
 (`app.hs-token.svc-password` / `APP_HS_TOKEN_SVC_PASSWORD`) has an **empty default** —
 `ServiceTokenBroker` still wires at boot either way, but a blank password refuses every
 mint with a `503` (fail-closed at request time, not a context-start crash; see
@@ -596,7 +641,7 @@ external channels that build on top.
   default 50).
 - `POST /bff/user/notifications/{id}/read` — mark ONE of my own notifications read; an
   id that is not my own owner+domain row is a **404** (no cross-user mark).
-- `GET /bff/user/notifications/events` — real-time SSE stream of new in-app notifications for the caller (`text/event-stream`). Backed by `SseNotificationBus` (per-user `Sinks.Many` registry); the `InternalNotificationDeliveryService` emits into the bus on every successful `POST /bff/user/internal/notifications` write. Client should reconnect on close; the server closes the stream after a 4-minute idle window (`SSE_TIMEOUT`). Owner-enforced (JWT subject). ✅ shipped.
+- `GET /bff/user/notifications/events` — real-time SSE stream of new in-app notifications for the caller (`text/event-stream`). Backed by `SseNotificationBus` (per-user `Sinks.Many` registry); the `InternalNotificationDeliveryService` emits into the bus on every successful `POST /bff/user/internal/notifications` write. Client should reconnect on close; the server closes the stream after a 4-minute timeout (`SSE_TIMEOUT`). Owner-enforced (JWT subject). ✅ shipped.
 
 **Per-category preferences — `NotificationPreferenceController`
 (`/bff/user/notification-preferences`)** (`ROLE_USER` floor) — MIRRORS the durable
@@ -647,14 +692,14 @@ external channels that build on top.
   rather than silently seeding nothing. Set `APP_TEST_SEED_ENABLED=true` only in the
   e2e/dev profile — it must stay off in production.
 
-> **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is still dark in normal operation — nothing writes `user_notifications` yet outside tests, so the SSE stream emits only when the `hugmesh-actions` reconciler (separate repo, later PR) starts calling the internal deliver endpoint. The SSE wiring itself is ✅ shipped.
+> **SHIPS DARK (in-app floor MVP):** the read/mark-read inbox + per-category prefs + the SERVICE-only deliver endpoint + the SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus`) are all on `main` and wired, but the deliver path is dark unless a caller is switched on. The caller exists: `hugmesh-actions` has `UserNotificationClient` (`net.hugmesh.actions.notify`), created only when `app.actions.notify.enabled=true`, which that repo's `application.yml` does not set. I did not check whether any cluster sets it, so the SSE stream emits only where it is. The SSE wiring itself is ✅ shipped.
 
 ### Real-time SSE stream ✅ shipped
 `GET /bff/user/notifications/events` — a **server-sent event stream** (`text/event-stream`)
 for real-time in-app notification push. `ROLE_USER` floor, owner-enforced (owner = JWT
-subject). Merged in #72; ships DARK in the sense that nothing writes `user_notifications`
-in normal operation yet (see the in-app-floor MVP note above), but the SSE wiring itself is
-live on `main`.
+subject). Merged in #72; ships DARK in the sense that the only writer (`hugmesh-actions`, behind
+`app.actions.notify.enabled`) is off by default (see the in-app-floor MVP note above), but the
+SSE wiring itself is live on `main`.
 
 - **Wire protocol:** events carry `{id, category, title, body}` as JSON. The connection
   has a **4-minute server-side timeout**; the client is expected to reconnect
@@ -665,12 +710,11 @@ live on `main`.
 - **`InternalNotificationDeliveryService`** — after writing the `user_notifications` DB
   row, publishes the notification event onto the caller's `SseNotificationBus` sink so
   all active SSE connections for that user receive it immediately.
-- **Host-shell consumption:** the `hugmesh-user-ui` host shell consumes this stream
-  via **bearer-fetch SSE** (native `fetch()` + `ReadableStream` line-by-line parsing),
-  **NOT** the browser's native `EventSource` API — `EventSource` cannot send an
-  `Authorization` header, so it cannot carry the `bff_` session token. The bearer-fetch
-  pattern (`fetch(url, { headers: { Authorization: ... } })` + a `ReadableStream`
-  reader) is the required approach for any authenticated SSE endpoint.
+- **UI consumption:** `hugmesh-user-ui` (`src/app/notifications.service.ts`) consumes this
+  stream with `fetch(..., { credentials: 'include' })` and a `ReadableStream` line parser,
+  **NOT** the browser's native `EventSource` API. The stream authenticates with the
+  HttpOnly `bff_` session cookie; the browser holds no bearer token to attach. It
+  reconnects after a fixed backoff when the server closes the stream.
 
 ### Mesh devices — `MeshDeviceController` (`/bff/user/mesh-devices`) ✅ shipped
 Owner-scoped Meshtastic **LoRa radio claims** — a user registers a radio's node id under
@@ -683,7 +727,11 @@ globally UNIQUE — one owner per radio, across every user and brand, active or 
   (with state + reason) and the bridge-reported LoRa status fields.
 - `POST /bff/user/mesh-devices` — claim a node id (accepts `a1b2c3d4` / `!A1B2C3D4`,
   normalized to canonical `!`+lowercase before storage; optional `label`). A node id already
-  registered by anyone, any domain, active or revoked, is a **409**.
+  registered by anyone, any domain, active or revoked, is a **409**. When
+  `app.mesh-device.capability-gate.enabled=true` (default `false`), a claim also needs
+  admin-bff to report the `user-mesh-devices` capability granted and enabled for the
+  caller's domain; otherwise it is a **403**, and an unreachable admin-bff denies too. An
+  unscoped SUPERADMIN bypasses the gate, and existing rows are never affected.
 - `PUT /bff/user/mesh-devices/{id}/visibility` — who may see the device's LoRa status
   (`private|friends|channels`); frozen (**409**) on a revoked row.
 - `DELETE /bff/user/mesh-devices/{id}` — release my claim (a foreign/unknown id is a
@@ -701,8 +749,9 @@ yet is omitted, never a fabricated candidate); `POST /bff/user/internal/mesh-dev
 is the batch LoRa telemetry write-back (`{updated, ignored}`, fail-soft per element —
 unknown/revoked node ids are counted `ignored`, never an error).
 
-The same controller carries the **moderation** surface that `hugmesh-mod-bff-api` drives
-(`/bff/mod/mesh-devices/**` → here). It is the ONLY writer of the `state` /
+The same controller carries the **moderation** surface meant for `hugmesh-mod-bff-api`
+(`/bff/mod/mesh-devices/**` → here). I found no mesh-device code in mod-bff's `origin/main`,
+so I know of no caller yet. It is the ONLY writer of the `state` /
 `revoked_by` / `revoked_at` / `revoke_reason` columns 019 shipped:
 
 | Endpoint | Contract |
@@ -725,12 +774,12 @@ payload. Revoking does not free the radio: the row keeps occupying the globally-
 | Concern | Destination |
 | --- | --- |
 | Profile fields (incl. screenReaderName), home-guide prefs, durable user preferences, self-block rows, self-silence rows, media-poison decisions, connected-client audit, in-app notifications + per-category prefs, VN-character parts + expression stickers | **own R2DBC tables** (`user_profile`, `user_preference`, `user_preferences_store`, `user_block`, `self_silence`, `media_poison_decision`, `connected_client_audit`, `user_notifications`, `notification_preference`, `vn_character_part`, `vn_sticker_pack`) |
-| Mesh-device claims (Meshtastic LoRa node id → owner, + status visibility, bridge-reported LoRa status, moderation state) | **own R2DBC table** (`mesh_device`, 019 — `node_id` globally UNIQUE, one owner per radio). Exported to the mesh↔Matrix bridge (active rows only, node id → Matrix localpart via the admin-bff account read), status-updated by it, and moderated (revoke/restore CAS) by hugmesh-mod-bff-api — all three through the SERVICE-only `/bff/user/internal/mesh-devices` surface |
+| Mesh-device claims (Meshtastic LoRa node id → owner, + status visibility, bridge-reported LoRa status, moderation state) | **own R2DBC table** (`mesh_device`, 019 — `node_id` globally UNIQUE, one owner per radio). Exported to the mesh↔Matrix bridge (active rows only, node id → Matrix localpart via the admin-bff account read), status-updated by it, and moderated (revoke/restore CAS) through the SERVICE-only `/bff/user/internal/mesh-devices` surface. The bridge (`hugmesh-generator` `specs/cluster/manifests/meshbridge`) polls the mapping; no mod-bff caller found |
 | Account / session data for the relocated login/session surfaces | **`hugmesh-admin-bff-api` `/bff/internal`** (mTLS + `X-Internal-Token`; data stays in `admin-bff-db`) |
 | Password / email change | **Casdoor IdP** (`CasdoorUserClient`) — never stored here |
 | Cards (federation bundles) + instance-block recommendation + (later) self-silence federation hide | **hugmesh-federation-api** (reactive `FederationApiClient`, forwarded JWT) |
 | External mute/block push, self-silence directory hide, connected-client list/revoke, media upload | **Matrix (tuwunel)** / **Mastodon (Akkoma)** clients via the gateway mTLS proxy (STUBBED/gated) |
-| Homeserver-token revocation keys | **gateway revocation list** (`RevocationWriter`, gated stub-seam until the gateway write endpoint ships) |
+| Homeserver-token revocation keys | **gateway revocation list** (`RevocationWriter`; `POST /api/gateway/revocations` exists in `hugmesh-gateway` `GatewayRevocationController`, but the writer stays a gated stub until `gateway.revocation.enabled=true`) |
 
 ## Clients
 
@@ -776,6 +825,11 @@ payload. Revoking does not free the radio: the row keeps occupying the globally-
   Matrix account-data GET/PUT, used only by `StickerPackRegistrationService` to
   read-modify-write the owner's MSC2545 `im.ponies.user_emotes` sticker pack. Gated by
   `sticker.matrix.register.enabled` (default false).
+- `CasdoorLoginClient` (native login credential check against the internal Casdoor
+  `/api/login`), `CasdoorPasswordResetClient` (the two reset legs), `SessionsInternalClient`
+  (list/revoke of `bff_` sessions at admin-bff, gated by `app.sessions.management.enabled`,
+  default `true`) and `EdgeAiAnalysisClient` (image moderation for the avatar and sticker
+  paths, gated by `app.vision.moderation.enabled`, default `false`).
 - `AdminBffInternalClient` — the service-to-service client to admin-bff's `/bff/internal`
   surface (account/session ensure/get/create/delete, session introspect/exchange,
   custody-stamp, allowlist check). Wired unconditionally but fail-closed-stubbed
@@ -795,7 +849,8 @@ every authenticated principal; `roles` (string or `{name}`) → `ROLE_<UPPER>`;
 plus the per-surface platform / external-client role gates above).
 Profile/spec gating is profile-split: under `dev`/`test` the OpenAPI spec + Swagger
 UI are public (so `gen:fetch` can curl `/v3/api-docs` tokenless); in prod they need
-`ROLE_ADMIN`. Actuator health/info are public for probes.
+`ROLE_ADMIN` or `ROLE_SUPERADMIN`. Actuator health/info are public for probes, and so are the
+login, register, session and password-reset routes listed in [SECURITY.md](SECURITY.md).
 
 This BFF is the per-session JWT custodian behind the gateway's `bff_`-opaque-session
 model (see *Auth model / SSO relocation*): the browser holds only the opaque `bff_`
@@ -876,8 +931,8 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
 #### Resolving the private org artifacts
 
 `hugmesh-parent` / `hugmesh-commons` / `hugmesh-auth-core` are **not** on
-Maven Central — they live in the org GitLab Maven Package Registry. Two resolution
-paths, **no secrets in git**:
+Maven Central — they live in the org GitLab Maven Package Registry and, for the GitHub
+release workflow, in GitHub Packages. Three resolution paths, **no secrets in git**:
 
 - **Local dev:** the shared artifacts are `mvn install`ed into `~/.m2`, so a plain
   `./mvnw test` resolves them locally and never touches the remote (this is how the
@@ -889,8 +944,14 @@ paths, **no secrets in git**:
   with the token mounted as a **BuildKit secret** (`--mount=type=secret`, so it never
   lands in an image layer); `.gitlab-ci.yml` passes
   `--secret id=ci_job_token,env=CI_JOB_TOKEN` plus the `CI_API_V4_URL` /
-  `GITLAB_GROUP_ID` build-args, and the `test:` job passes the same env into the
-  build container.
+  `GITLAB_GROUP_ID` build-args, and the `test:` job passes `-s settings.xml` to `./mvnw`.
+- **GitHub release workflow:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
+  (manual `workflow_dispatch` only) builds the image and pushes it to
+  `ghcr.io/hugmesh/hugmesh-user-bff-api`. When the `packages_read_token` BuildKit secret is
+  mounted, the `Dockerfile` builds with `-s .github/maven-ci-settings.xml` (GitHub
+  Packages) instead of `settings.xml`. A preflight step fails by name unless the repository
+  secret `PACKAGES_READ_TOKEN` is set and `hugmesh-build-config`, `hugmesh-parent`,
+  `hugmesh-commons` and `hugmesh-auth-core` answer.
 
 ### API-to-API mTLS (PKI identity, both directions)
 In-cluster the deployment mounts a PKCS12 keystore (this service's Vault-PKI
@@ -903,7 +964,8 @@ BFF's client identity on its OUTBOUND federation-api calls (and is the same mech
 used for the admin-bff `/bff/internal` account/session leg — mTLS + `X-Internal-Token`)
 when the upstream flips its server-side client-auth to `need`. Both reuse one mounted
 `/stores` layout. Defaults keep local/dev/CI plaintext (`SSL_ENABLED=false`,
-client-auth `none`).
+client-auth `none`). The outbound half is off by default (`HUGMESH_MTLS_CLIENT_ENABLED=false`);
+only the `hugmesh-generator` manifest turns it on.
 
 ### Multi-tenancy / domain-scoping ✅ shipped
 The platform is multi-brand: one Casdoor per brand, so a token's
@@ -953,7 +1015,7 @@ admin-bff instance ↔ 1 Casdoor org). It is enforced live:
 
 Reactive WebFlux everywhere (Mono/Flux, reactive WebClient; no `.block()` /
 `Thread.sleep` on the event loop). R2DBC for all runtime data; JDBC only for the
-Liquibase migrations (`db/changelog`, **001–019**). 010 = domain-scoping (the
+Liquibase migrations (`db/changelog`, **001–023**). 010 = domain-scoping (the
 `domain` column on every owner-keyed table); 011 = `user_preferences_store` (the
 durable per-user/per-brand preferences table backing `/bff/user/preferences`,
 domain-first composite PK `(user_id, pref_key, domain)`); 012 = the notifications
@@ -970,19 +1032,26 @@ expression stickers, same status lifecycle + an `expression` CHECK); 018 = adds 
 `mesh_device` (claimed Meshtastic LoRa node ids for the mesh↔Matrix bridge —
 `node_id` stored canonical `!`+lowercase-hex and globally UNIQUE, one owner per
 radio; owner-managed status `visibility` private/friends/channels, bridge-written
-LoRa status columns, and the moderation `state` active/revoked trio whose mod-bff
-writer lands in a later wave; visibility/state/battery CHECK parity + a
-Postgres-gated canonical-shape regex CHECK). Spring
+LoRa status columns, and the moderation `state` active/revoked trio whose only
+writer is the SERVICE-only moderation endpoints (see *Mesh devices*); visibility/state/battery CHECK parity + a
+Postgres-gated canonical-shape regex CHECK); 020 = `body` / `content_type` on
+`vn_sticker_pack` (the sticker pixels); 021 = syncs the 004 `vanity_username` reserved-name
+CHECK to the canonical reserved-prefix set (revision 9, 82 labels, per the changeset
+comment); 022 = `avatar_body` / `avatar_content_type` on `user_profile`; 023 =
+`user_profile.avatar_ref` (varchar(36) with a unique index, the serve handle). Spring
 Native: `native` profile + native-maven-plugin, surefire `argLine
 -Dnet.bytebuddy.experimental=true`, `NativeHintsConfig` with reflection hints for the
 JSON-bound DTOs + swagger-ui webjar resource hints. `R2dbcConvertersConfig` maps
 Postgres/H2 timestamp types → `Instant` deterministically (JVM + native).
-Data-access standard: Spring Data R2DBC reactive repositories (no raw SQL strings /
-inline `@Query`).
+Data access: Spring Data R2DBC reactive repositories (`*R2dbcRepository`). Derived queries
+cover the plain cases; a static `@Query` SQL constant is used where a statement needs a
+server-side value (`now()`, a generated id) or an owner and domain predicate.
 
 ## Build / test
 
-- `./mvnw test` — green. Coverage: the Casdoor authorities converter; ROLE_USER +
+- `./mvnw test` — needs a Docker daemon: 23 test classes extend `PostgresTestSupport`
+  (a real Postgres through Testcontainers); the repository slices use the H2 in-memory
+  `TestDatabaseConfig`. Coverage: the Casdoor authorities converter; ROLE_USER +
   spec role-gating (`@WebFluxTest`); repository slices over H2-PG-compat with the
   REAL Liquibase changelog (`TestDatabaseConfig`); **owner-enforcement**
   (`ProfileService` ignores a spoofed body userId; `BlockService` unblock is
@@ -1002,12 +1071,22 @@ inline `@Query`).
   prefs + the SERVICE-only idempotent deliver + the `account-restriction` forced-on
   coercion + per-table domain isolation); and a full-context load test.
 - `./mvnw package -DskipTests` — builds the runnable jar.
+- `./mvnw -Dtest=OpenApiSpecDumpTest -Dopenapi.spec.write=true test` — regenerate the
+  committed `src/main/resources/openapi/openapi.json`. Without the flag the test asserts
+  the file, and CI fails if the build rewrites any committed file.
+- `make pentest` (or `make pentest-sca` / `make pentest-dast`) — the local SCA self-scan
+  and, with `DAST_TARGET_URL` set and the harness at `PENTEST_HARNESS_DIR` (default
+  `../hugmesh-generator/tests/pentest`), the DAST run. It never hard-fails.
 - `./mvnw -Pnative native:compile` — GraalVM native binary (needs a GraalVM host).
 
-CI is **GitLab only** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
-in-cluster GitLab. There are deliberately **no `.github/workflows`** (GitHub
-Actions is billing-blocked). The pipeline runs **`test`** (`mvn verify` on
-`maven:3.9-eclipse-temurin-25`) → **`security`** (OWASP Dependency-Check SCA,
+CI is **GitLab** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
+in-cluster GitLab. GitHub has one workflow, [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which runs on manual dispatch only and pushes the image to GHCR (see *Resolving the
+private org artifacts*). The pipeline runs **`test`** (`./mvnw -B -s settings.xml verify`
+on `maven:3.9-eclipse-temurin-25` with a `docker:27-dind` service, then a clean-tree check
+that fails the job if the build rewrote a committed file; a second job in the stage,
+`config-contract`, runs `ConfigDefaultsContractTest` and `CasdoorRegistrationContractTest`
+on their own) → **`security`** (OWASP Dependency-Check SCA,
 fail-on-CVSS≥9) → **`dast`** (a ZAP API scan against the OpenAPI spec when
 `DAST_TARGET_URL` is set, advisory otherwise) → **`build`** (the container image) →
 **`pentest`**. The `pentest` stage `include:`s the centralized OWASP harness from
@@ -1032,16 +1111,15 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 
 ## Honest deferrals
 
-- **SSO code→token exchange + `bff_` session custody are on `main` but ship DARK.**
+- **SSO code→token exchange + `bff_` session custody ship DARK in the code defaults.**
   The JWT-only `/bff/user/**` resource-server surfaces are live; the server-side
   authorization-code exchange, the per-session JWT custody/refresh, the `bff_`
   opaque-session, and the admin-bff `/bff/internal` account/session data calls are
-  **merged and inert** behind default-off flags (`app.bff.oidc.enabled`,
-  `app.bff.custody-key`, `app.internal.token`) — fail-closed-stubbed, with a
-  byte-identical runtime when off. What remains is the **live flag-flip** (pin the
-  admin-bff #112 contract + the cross-repo egress NetworkPolicy) and **SSO e2e**, not
-  a code merge. Until the flip, registration/login stay operationally owned by
-  admin-bff.
+  behind default-off flags (`app.bff.oidc.enabled`, `app.bff.custody-key`,
+  `app.internal.token`) — fail-closed-stubbed, with a byte-identical runtime when off.
+  The `hugmesh-generator` cluster manifest turns them on (see *Auth model*); this repo's
+  `deploy/` copy does not. What remains is **SSO e2e** proof on a live cluster, not a code
+  merge.
 - **External Matrix / Mastodon block push is STUBBED.** The clients implement the
   documented shapes (Matrix `PUT .../account_data/m.ignored_user_list`; Mastodon
   `GET /api/v1/accounts/lookup` then `POST /api/v1/accounts/{id}/block`) and the
@@ -1059,9 +1137,11 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 - **Connected-clients homeserver list/revoke is a gated stub-seam.** The BFF-owned
   `connected_client_audit` row + the gateway per-credential revocation key
   (`RevocationWriter`) are the real enforcement; the live homeserver delete is
-  best-effort and the gateway revocation-write endpoint ships later.
+  best-effort. The gateway now has the write endpoint (`POST /api/gateway/revocations`),
+  but `gateway.revocation.enabled` defaults to `false` and the cluster manifest does not set
+  it, so the key is only logged until someone turns it on.
 - **Casdoor password/email change is STUBBED by default** (`casdoor.account.enabled
-  =false`). The reactive `CasdoorUserClient` flow runs end-to-end (controller →
+  =false`; the cluster manifest sets `CASDOOR_ACCOUNT_ENABLED=true`). The reactive `CasdoorUserClient` flow runs end-to-end (controller →
   service → client) and acks `casdoor: "stubbed"`. **✅ The Casdoor payload shape is
   now CONFIRMED** (live-verified 2026-07 against the local compose stack's Casdoor
   with a throwaway user; the earlier "unconfirmed" caveat is resolved):
@@ -1085,23 +1165,24 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   + per-query domain predicate are live (see *Multi-tenancy / domain-scoping* above).
   Only the per-brand provisioning (ApplicationSet) and multi-issuer *live wiring* are
   roadmap (in `hugmesh-generator`), not this BFF's code.
-- **Character-studio moderation resolve is a receiver waiting for its caller.** The
-  save/list/serve (parts) and save/list (stickers) endpoints are fully live; the
+- **Character-studio moderation resolve depends on a gated caller.** The
+  save/list/serve (parts) and save/list/serve (stickers) endpoints are fully live; the
   `InternalCharacterModerationController` SERVICE-only resolve receiver is wired and
-  idempotent, but the admin-bff moderation reconciler that is meant to call it when a
-  human moderator resolves the filed finding has not landed yet (a later PR) — until
-  then a saved part/sticker stays `PENDING` indefinitely.
+  idempotent. Its caller is `UserBffCharacterModerationClient` in `hugmesh-admin-bff-api`,
+  which does nothing until `character-moderation.reconciler.enabled` is set (default
+  `false`). Until it is set, a saved part/sticker stays `PENDING` indefinitely.
 - **Notifications floor ships DARK.** The read/mark-read inbox + per-category prefs +
-  the SERVICE-only deliver endpoint are wired and tested, but nothing writes
-  `user_notifications` in normal operation yet — the `hugmesh-actions` reconciler
-  (separate repo, later PR) is the only writer. EXTERNAL channels (Matrix DM / Akkoma
+  the SERVICE-only deliver endpoint are wired and tested, but the only writer, the
+  `hugmesh-actions` reconciler (`UserNotificationClient`), is created only when
+  `app.actions.notify.enabled=true`, and that repo does not set it. EXTERNAL channels (Matrix DM / Akkoma
   feed / phpBB / email) are roadmap (see below).
-- **Mesh-device claims have no bridge to call them yet.** `MeshDeviceController`
+- **Mesh-device claims depend on the bridge being deployed.** `MeshDeviceController`
   (claim/list/visibility/release) and the SERVICE-only `InternalMeshDeviceController`
-  (mapping read + status write-back) are fully live and tested, but the mesh↔Matrix
-  bridge that would actually consume the mapping and report LoRa status is a separate,
-  not-yet-built component — until it exists, a claimed device just sits in the
-  `mesh_device` table with no live status.
+  (mapping read + status write-back + moderation) are fully live and tested. The
+  mesh↔Matrix bridge lives in `hugmesh-generator` `specs/cluster/manifests/meshbridge`
+  and polls the mapping every `MESHBRIDGE_REG_POLL_SECONDS` (60); whether it runs on a
+  given mesh, I did not check. Without it a claimed device just sits in the `mesh_device`
+  table with no live status. The moderation endpoints have no known caller.
 - **Owner-enforcement coverage.** Enforced in EVERY service method (owner = JWT
   subject; body userId ignored) and tested at both the service layer
   (spoofed-body, owner+id-scoped delete) and the repository/SQL layer (owner
@@ -1112,19 +1193,20 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
   federation-api.
 - **Native image** is best-effort hint-wise; an authoritative `-Pnative
   native:compile` on a GraalVM host is the real check (not run in this CI).
-- **Paired `hugmesh-user-ui`** is built later, NOT here; this BFF's
-  `/v3/api-docs` spec is the contract its ng-openapi-gen typed client will consume.
+- **Paired `hugmesh-user-ui`** is its own repo, NOT here; this BFF's
+  `/v3/api-docs` spec is the contract its ng-openapi-gen typed client consumes (its
+  `package.json` has the `gen` script).
 
 ## Status
 
 State convention: ✅ shipped (on `main`) · 🚧 in-flight (open branch/PR or landing) ·
-🔭 planned (design-complete, no code here). Every claim below is grounded in code/tests
-actually present in this worktree as of the commit this section was last refreshed
-against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent history.
+🔭 planned (design-complete, no code here). The section was last refreshed against
+`f63e30f` (#130); the claims below were rechecked against `origin/main` at `247e3fb` on
+2026-10-07 — see `git log --oneline -40` for the full recent history.
 
 - ✅ **Reactive user BFF on the unified baseline:** Spring Boot 4.0.7 / Spring Cloud
-  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–019, incl. DB-generated UUID
-  primary keys + the mesh-device registry), Spring Native hints, springdoc OpenAPI.
+  2025.1.2, Java 25 LTS, WebFlux + R2DBC + Liquibase (001–023, incl. DB-generated UUID
+  primary keys, the mesh-device registry, and the stored sticker and avatar pixels), Spring Native hints, springdoc OpenAPI.
 - ✅ **Casdoor JWT resource server + owner-enforcement** across every `/bff/user/**`
   surface; the canonical `CasdoorAuthorities` converter; `ROLE_SERVICE`-exclusive
   `/bff/user/internal/**`.
@@ -1134,7 +1216,7 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   avatar upload (dark)), home-guide, durable preferences, cards proxy, self-block +
   instance-block recommendation, self-silence (atomic activate), connected-clients
   audit, active login-session management, AI-cloak media proxy (dark), account-status
-  polling, in-app notifications floor (dark — nothing writes user_notifications in normal ops yet) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark), the VN character-studio drawn-parts + expression-sticker surfaces (sanitized-SVG / magic-byte-sniffed PNG, both moderation-queued with a SERVICE-only internal resolve receiver), and mesh-device claims (owner-scoped Meshtastic LoRa node registry + a SERVICE-only internal mapping/status-writeback receiver for the not-yet-built mesh↔Matrix bridge).
+  polling, in-app notifications floor (dark — the only writer, `hugmesh-actions`, is off unless `app.actions.notify.enabled=true`) + ✅ SSE real-time push stream (`GET /bff/user/notifications/events`, `SseNotificationBus` per-user multicast, shipped dark), the VN character-studio drawn-parts + expression-sticker surfaces (sanitized-SVG / magic-byte-sniffed PNG, both moderation-queued with a SERVICE-only internal resolve receiver), and mesh-device claims (owner-scoped Meshtastic LoRa node registry + a SERVICE-only internal mapping/status-writeback receiver that the mesh↔Matrix bridge in `hugmesh-generator` polls).
 - ✅ **Homeserver proxy (D6) live by default** (`app.hs-token.enabled=true`); still
   fail-closed (503) until the custody key + service-account password are provisioned.
 - ✅ **Native-login session bridge + canonical identity resolution — on `main`, ALWAYS
@@ -1149,22 +1231,23 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   see *Native-login session bridge* and *Canonical homeserver-identity resolution* above,
   and PRs #115/#116/#117/#118/#120/#123/#124.
 - ✅ **Org artifact adoption:** `hugmesh-parent:2.8.0` + `hugmesh-commons` (shared
-  security/tenancy/web) + `hugmesh-auth-core:2.4.2`; GitLab-only CI with the shared
-  OWASP pentest harness.
+  security/tenancy/web) + `hugmesh-auth-core:2.4.2`; GitLab CI with the shared
+  OWASP pentest harness, plus a manual GitHub release workflow to GHCR.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
-  outbound calls), config-gated, plaintext in local/dev/CI. Enforcement is already
-  turned on in the cluster deployment manifest — both the GitOps-pilot copy in this
-  repo ([`deploy/deployment.yaml`](deploy/deployment.yaml), see
-  [`hugmesh-deploy.yaml`](hugmesh-deploy.yaml)) and the canonical
-  `hugmesh-generator` manifest; see [SECURITY.md](SECURITY.md) for the wiring.
-- ✅ **SSO relocation — on `main`, ships DARK** (the headline of an earlier cycle, now
+  outbound calls), config-gated, plaintext in local/dev/CI. Server-side enforcement is
+  turned on in the canonical `hugmesh-generator` manifest and in the GitOps-pilot copy in
+  this repo ([`deploy/deployment.yaml`](deploy/deployment.yaml), see
+  [`hugmesh-deploy.yaml`](hugmesh-deploy.yaml)). Only the generator manifest sets the
+  outbound half (`HUGMESH_MTLS_CLIENT_ENABLED=true`); see [SECURITY.md](SECURITY.md) for the wiring.
+- ✅ **SSO relocation — on `main`, dark by code default** (the headline of an earlier cycle, now
   followed by a cross-cutting identity-resolution hardening pass, see above): server-side
   OIDC code→token exchange, per-session JWT custody/refresh, the browser-side opaque
   `bff_` session, the `/bff/login,/register,/session,/me` surface, and the admin-bff
-  `/bff/internal` account/session client — merged and inert behind default-off flags
+  `/bff/internal` account/session client — inert behind default-off flags
   (`app.bff.oidc.enabled` / `app.bff.custody-key` / `app.internal.token`),
-  fail-closed-stubbed, byte-identical runtime when off. The **live flag-flip + SSO
-  e2e** is the only remaining work (🚧, see Roadmap) — the code itself is merged.
+  fail-closed-stubbed, byte-identical runtime when off. The `hugmesh-generator` cluster
+  manifest sets the flags on; `deploy/` in this repo does not. **SSO e2e** proof is the
+  remaining work (🚧, see Roadmap) — the code itself is merged.
 - 🚧 **Edge authz alignment:** the gateway is a pure Casdoor-JWT RS that swaps
   `bff_` → the internal custody JWT (pre-security filter) and gates routes from the
   `gateway_route_access` Postgres table via `GatewayRouteAccessFilter`; SCG-5 moved
@@ -1202,13 +1285,12 @@ Everything in the sections above is ✅ shipped on `main` unless explicitly mark
 otherwise; the items below are NOT yet shipped here.
 
 ### SSO end-to-end + e2e 🚧 in-flight
-The relocation **code** is merged on `main` but ships DARK (see *Auth model* +
-*Status*). The active work is now the **live flag-flip + e2e**, not a code
-merge: pin the admin-bff #112 internal contract, add the cross-repo egress
-NetworkPolicy peer, flip the default-off flags (`app.bff.oidc.enabled` /
-`app.bff.custody-key` / `app.internal.token`), and prove SSO login end-to-end
-(including a browser e2e through `login-ui` → gateway → this BFF), with Cloudflare
-fronting prod.
+The relocation **code** is merged on `main` and dark by code default (see *Auth model* +
+*Status*); the `hugmesh-generator` manifest already sets the flags
+(`app.bff.oidc.enabled` / `app.bff.custody-key` / `app.internal.token`) on. The active
+work is the e2e proof, not a code merge: the admin-bff #112 internal contract, the
+cross-repo egress NetworkPolicy peer, and SSO login end-to-end (including a browser e2e
+through `login-ui` → gateway → this BFF), with Cloudflare fronting prod.
 
 <a id="notifications-roadmap"></a>
 ### Notifications — external channels 🚧 in-flight
@@ -1231,12 +1313,15 @@ generalized step-up. The **JWT-authority-derivation half already ships here, dar
 `CasdoorAuthorities.MfaConfig`, which is exactly the `amr`/`acr` → `MFA_SATISFIED`
 converter this section used to describe as not-yet-existing — with the flag off
 (the default everywhere today) the converter never derives `MFA_SATISFIED` and
-behaviour is unchanged. What genuinely remains: with the auth relocation, the MFA
-challenge/step-up stamping into the opaque `bff_` session lands in THIS BFF (the
-shared infra in `hugmesh-auth-core`), while the gateway keeps enforcing
-`amr`→`MFA_SATISFIED` for the JWT world — that stamping, the gateway route
-enforcement (`gateway_route_access.mfa_required`), and turning `app.mfa.enabled` on
-are not done; surfaces will be marked ✅ as they land.
+behaviour is unchanged. Part of the `bff_` half exists too: `POST /bff/login` accepts
+`mfaPasscode` / `mfaType` and answers `mfaRequired`, and `BffSessionAuthenticationWebFilter`
+grants `MFA_SATISFIED` from the introspected session (`mfaSatisfied`); no controller in this
+BFF gates on that authority yet. What genuinely remains: the MFA challenge/step-up
+stamping into the opaque `bff_` session lands in THIS BFF (the shared infra in
+`hugmesh-auth-core`), while the gateway keeps enforcing `amr`→`MFA_SATISFIED` for the
+JWT world — that stamping, the gateway route enforcement
+(`gateway_route_access.mfa_required`), and turning `app.mfa.enabled` on are not done;
+surfaces will be marked ✅ as they land.
 
 ### Generator supply-chain hardening 🚧 in-flight + CI pen-test jobs 🚧 defined here
 Stage3 GPG/sha + headscale/tailscale checksum verification + de-defaulted baked creds
