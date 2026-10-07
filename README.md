@@ -488,7 +488,8 @@ x86/GPU `hugmesh-media-poisoner`. On a Pi5-only cluster its pod stays `Pending`,
 its Service has no Ready endpoints, the `/health` probe reports `backend=none`, and
 `app.media.poisoning.fallback-mode` decides: `skip` (default — forward **uncloaked**
 with `status=skipped` + a documented signal so the UI warns *"not cloaked"*), `light`
-(reduced-strength CPU if offered), or `queue` (placeholder-then-replace). Posting is
+(reduced-strength CPU if offered), or `queue` (reserved for placeholder-then-replace; it behaves as `skip` until the
+worker queue lands). Any other value also behaves as `skip`. Posting is
 never *forced* to block. Ships **dark** by default (`app.media.poisoning.enabled
 =false` ⇒ the controller is mounted but every upload forwards through `status=none`)
 until the survival gate is verified on a real GPU cluster.
