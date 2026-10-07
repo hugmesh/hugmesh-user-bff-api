@@ -125,24 +125,46 @@ class ReleaseImageGuardTest {
     }
 
     @Test
-    @DisplayName("release.yml (when present) feeds the GitHub contract and not the dead GitLab inputs")
+    @DisplayName("release.yml feeds the GitHub contract, has no GITHUB_TOKEN fall-back and no dead GitLab inputs")
     void releaseWorkflowUsesGitHubContract() throws IOException {
-        Path wf = ROOT.resolve(".github/workflows/release.yml");
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(wf),
-                "this repo has no release workflow yet; the Dockerfile/settings guards above still apply");
-        String yaml = code(Files.readString(wf, StandardCharsets.UTF_8), "#");
+        // No Assumptions.assumeTrue here: a deleted workflow must fail this test, not skip it.
+        String yaml = code(read(".github/workflows/release.yml"), "#");
         assertThat(yaml)
-                .contains("packages_read_token=${{ secrets.PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}")
+                .contains("packages_read_token=${{ secrets.PACKAGES_READ_TOKEN }}")
                 .contains("UPSTREAM_PACKAGES_ACTOR=${{ secrets.PACKAGES_READ_ACTOR || github.actor }}")
                 .contains("DOCKER_BUILD_RECORD_UPLOAD: false")
-                .contains("Preflight - cross-repo package read");
+                .contains("Preflight, cross-repo package read")
+                .contains("workflow_dispatch");
+        assertThat(yaml).as("no push/tag/schedule trigger: this workflow publishes an image")
+                .doesNotContain("\n  push:")
+                .doesNotContain("\n  schedule:")
+                .doesNotContain("\n  pull_request");
+        // GITHUB_TOKEN cannot read another repository's package; falling back to it only
+        // turns a missing secret into a confusing later failure. It is still right for GHCR login.
+        assertThat(yaml).as("no fall-back from PACKAGES_READ_TOKEN to GITHUB_TOKEN")
+                .doesNotContain("PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN")
+                .doesNotContain("PACKAGES_READ_TOKEN || github.token");
         assertThat(yaml).as("the GitLab inputs these names replaced must not come back")
                 .doesNotContain("ci_job_token=")
                 .doesNotContain("CI_API_V4_URL=")
                 .doesNotContain("GITLAB_GROUP_ID=");
-        assertThat(yaml.indexOf("Preflight - cross-repo package read"))
+        for (String upstream : UPSTREAMS) {
+            assertThat(yaml).as("the preflight must probe %s", upstream).contains(upstream);
+        }
+        assertThat(yaml).as("the image build must wait for the preflight").contains("needs: preflight");
+        assertThat(yaml.indexOf("Preflight, cross-repo package read"))
                 .as("the preflight must precede the image build")
+                .isGreaterThan(-1)
                 .isLessThan(yaml.indexOf("docker/build-push-action"));
+        assertThat(yaml).as(":latest moves only on main")
+                .contains("github.ref == 'refs/heads/main'");
+    }
+
+    @Test
+    @DisplayName("Dockerfile refuses a mounted-but-empty packages_read_token instead of falling back to GitLab")
+    void dockerfileRejectsEmptyToken() throws IOException {
+        String dockerfile = code(read("Dockerfile"), "#");
+        assertThat(dockerfile).contains("[ ! -s /run/secrets/packages_read_token ]");
     }
 
     private static String read(String relative) throws IOException {
