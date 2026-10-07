@@ -1052,7 +1052,7 @@ server-side value (`now()`, a generated id) or an owner and domain predicate.
 
 ## Build / test
 
-- `./mvnw test` — needs a Docker daemon: 23 test classes extend `PostgresTestSupport`
+- `./mvnw test` — needs a Docker daemon: 20 test classes extend `PostgresTestSupport`
   (a real Postgres through Testcontainers); the repository slices use the H2 in-memory
   `TestDatabaseConfig`. Coverage: the Casdoor authorities converter; ROLE_USER +
   spec role-gating (`@WebFluxTest`); repository slices over H2-PG-compat with the
