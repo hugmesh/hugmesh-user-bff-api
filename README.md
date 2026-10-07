@@ -242,8 +242,10 @@ avatarUrl`.
 
 - `GET /bff/user/profile` — my profile (an empty default if none yet).
 - `PUT /bff/user/profile` — create/update my profile (body `userId` ignored; the
-  vanity username is derived from the **token** — `preferred_username`, then `name`,
-  then subject — NOT the body, so the reserved-name guard can't be bypassed).
+  vanity username is derived from the **token** — the `bff_` session's Casdoor login-name
+  claim, then `preferred_username`, then `name`, then subject, skipping any candidate that
+  holds `:` or `@`, and a save is a 400 when none qualifies — NOT the body, so the
+  reserved-name guard can't be bypassed).
 - `DELETE /bff/user/profile` — delete my profile.
 - `POST /bff/user/profile/avatar` — upload my profile picture (multipart `file`,
   `image/*` only, 5 MB cap). The bytes are magic-byte-sniffed, then edge-AI moderated
