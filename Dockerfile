@@ -37,6 +37,8 @@ COPY . .
 # `sh -euc`, NOT `-euxc`: xtrace would print `export UPSTREAM_PACKAGES_TOKEN=<value>` into the
 # BuildKit log, and the build-record artifact build-push-action uploads holds raw BuildKit logs,
 # which runner-side secret masking does not cover.
+# A packages_read_token that is mounted but EMPTY is an error, not a silent fall-back to the
+# GitLab path (which would die later as "Non-resolvable parent POM ... /groups//").
 #
 # Resolve + build. CI_JOB_TOKEN is read from a BuildKit secret file and exported only
 # for the lifetime of this RUN (so it is never persisted). `-s settings.xml` points
@@ -44,14 +46,19 @@ COPY . .
 RUN --mount=type=secret,id=ci_job_token \
     --mount=type=secret,id=packages_read_token \
     sh -euc '\
-      if [ -f /run/secrets/ci_job_token ]; then \
-        export CI_JOB_TOKEN="$(cat /run/secrets/ci_job_token)"; \
-      fi; \
-      if [ -f /run/secrets/packages_read_token ]; then \
-        export UPSTREAM_PACKAGES_TOKEN="$(cat /run/secrets/packages_read_token)"; \
+      if [ -e /run/secrets/packages_read_token ]; then \
+        if [ ! -s /run/secrets/packages_read_token ]; then \
+          echo "FATAL: secret packages_read_token is mounted but empty (is PACKAGES_READ_TOKEN set?)" >&2; \
+          exit 1; \
+        fi; \
+        UPSTREAM_PACKAGES_TOKEN="$(cat /run/secrets/packages_read_token)"; \
+        export UPSTREAM_PACKAGES_TOKEN; \
         export UPSTREAM_PACKAGES_ACTOR="${UPSTREAM_PACKAGES_ACTOR:-hugmesh}"; \
         ./mvnw -B -s .github/maven-ci-settings.xml package -DskipTests; \
       else \
+        if [ -f /run/secrets/ci_job_token ]; then \
+          export CI_JOB_TOKEN="$(cat /run/secrets/ci_job_token)"; \
+        fi; \
         ./mvnw -B -s settings.xml package -DskipTests; \
       fi'
 
