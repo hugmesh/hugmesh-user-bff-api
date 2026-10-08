@@ -95,7 +95,11 @@
     <dependency>
       <groupId>net.hugmesh</groupId>
       <artifactId>hugmesh-auth-core</artifactId>
-      <version>2.4.2</version>
+      <!-- 2.5.1 is the only auth-core coordinate the org release chain publishes to GitHub
+           Packages; 2.4.2 exists only in hand-installed local repositories. 2.4.2 -> 2.5.1
+           is source- and binary-compatible (deprecated overloads kept; hugmesh-auth-core
+           RELEASING.md section 4). -->
+      <version>2.5.1</version>
     </dependency>
 
     <!-- ============================================================================

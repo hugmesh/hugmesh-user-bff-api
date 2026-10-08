@@ -855,7 +855,7 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/net/hugmesh/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `net.hugmesh:hugmesh-auth-core:2.4.2`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `net.hugmesh:hugmesh-auth-core:2.5.1`
    🚧. As the login/session/account logic relocates from admin-bff into this user-bff,
    the cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
    infra) is extracted to `hugmesh-auth-core` (depends on `hugmesh-commons`,
@@ -868,7 +868,9 @@ This service adopts the org's shared Maven artifacts. Three de-duplication moves
    WARN-by-default MFA precondition boot guard, and a 32-byte CSPRNG WebAuthn
    challenge) to keep this BFF and admin-bff pinned in lockstep on the same
    released auth-core line, even though this BFF does not wire the MFA subsystem
-   itself — see `pom.xml` for the full version history.
+   itself, and then to 2.5.1 (the only auth-core coordinate the org release chain
+   publishes to GitHub Packages; source- and binary-compatible with 2.4.2) — see
+   `pom.xml` for the full version history.
 
    The committed [`openapi.json`](src/main/resources/openapi/openapi.json) is
    **byte-identical** after the commons refactor (internal-only change).
@@ -1149,7 +1151,7 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   see *Native-login session bridge* and *Canonical homeserver-identity resolution* above,
   and PRs #115/#116/#117/#118/#120/#123/#124.
 - ✅ **Org artifact adoption:** `hugmesh-parent:2.8.0` + `hugmesh-commons` (shared
-  security/tenancy/web) + `hugmesh-auth-core:2.4.2`; GitLab-only CI with the shared
+  security/tenancy/web) + `hugmesh-auth-core:2.5.1`; GitLab-only CI with the shared
   OWASP pentest harness.
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI. Enforcement is already
