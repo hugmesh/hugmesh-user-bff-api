@@ -626,6 +626,18 @@ external channels that build on top.
   (`sourceTable`+`sourceId`), so a retry is INSERT-IF-ABSENT (a duplicate returns
   `delivered=true, deduped=true`, never a second row).
 
+**Internal preference read — `InternalNotificationPreferenceController`
+(`/bff/user/internal/notification-preferences/{owner}?domain=...`)** —
+**SERVICE-PRINCIPAL ONLY** (same `ROLE_SERVICE` gate as the deliver endpoint above).
+- `GET` returns one owner's effective per-category map in one domain, so a channel
+  adapter outside this BFF (admin-bff's external-channel reconciler) can honour the
+  owner's silence choices. It is the same defaults-merged view the owner gets from
+  `GET /bff/user/notification-preferences`: an owner with no rows reads as all-enabled
+  (200, not 404) and `account-restriction` is reported enabled regardless of any row.
+- `domain` is required (a missing, blank or malformed value is a 400): the service
+  treats a `null` domain as the cross-domain SUPERADMIN bypass, so this endpoint never
+  forwards one.
+
 **Test/seed self-notify — `TestSeedNotificationController`
 (`/bff/user/notifications/test-seed`)** (`ROLE_USER` floor) — gated by
 `app.test-seed.enabled` (default `false`).
