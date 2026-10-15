@@ -984,9 +984,20 @@ inline `@Query`).
 
 ## Build / test
 
-- `./mvnw test` — green. Coverage: the Casdoor authorities converter; ROLE_USER +
-  spec role-gating (`@WebFluxTest`); repository slices over H2-PG-compat with the
-  REAL Liquibase changelog (`TestDatabaseConfig`); **owner-enforcement**
+- `./mvnw test` (and `./mvnw verify`) — **needs a reachable Docker daemon**: 20 test
+  classes run against a real Postgres started by Testcontainers
+  (`net.hugmesh.commons.testsupport.PostgresTestSupport`, with
+  `support/PostgresSliceTestConfig` re-adding Liquibase for the `@DataR2dbcTest`
+  slices). Those are the repository slices of the DB-generated-UUID-PK tables
+  (changelog 015's `pgcrypto` + `(gen_random_uuid())::text` DEFAULT and
+  `INSERT ... RETURNING id` cannot run on H2) plus the full-context boot tests. The
+  other 21 classes (profile, preferences, self-silence, notification-preference
+  slices) still run over H2 in PostgreSQL mode with the REAL Liquibase changelog
+  (`TestDatabaseConfig`) and need no Docker. For a dind runner or a local daemon with
+  quirks, see the variables in `.gitlab-ci.yml`'s `test:` job:
+  `TESTCONTAINERS_HOST_OVERRIDE`, `TESTCONTAINERS_RYUK_DISABLED` and
+  `MAVEN_OPTS=-Dapi.version=...`. Coverage: the Casdoor authorities converter; ROLE_USER +
+  spec role-gating (`@WebFluxTest`); repository slices over both stores (above); **owner-enforcement**
   (`ProfileService` ignores a spoofed body userId; `BlockService` unblock is
   owner+id-scoped; repo slices assert owner isolation at the SQL layer); the
   platform-role / external-client-role gates; the username/displayName confusable +
