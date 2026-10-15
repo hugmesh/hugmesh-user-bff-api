@@ -140,13 +140,16 @@ for the user-facing slice of it. Ground truth as of 2026-06-25:
 > completion path (`OidcLoginCompletionService`) native login uses, the `bff_` session
 > custody (`BffCustodyCipher`), the `/bff/login,/register,/session,/me` SSO surface, the
 > admin-bff `/bff/internal` account/session client (`AdminBffInternalClient`), and
-> the `hugmesh-auth-core` adoption. 🚧 What genuinely remains is the **live
-> flag-flip** (gating off `app.bff.oidc.enabled` / `app.bff.custody-key` /
-> `app.internal.token`, wiring `app.bff.oidc.login-base` to the in-cluster Casdoor,
-> pinning the admin-bff #112 contract + the cross-repo egress NetworkPolicy) and
-> **SSO e2e**. Until that flip, login stays operationally owned by admin-bff: the
-> `/bff/login` (native) + `/bff/register` routes exist but 503 / are inert while the
-> flags are off.
+> the `hugmesh-auth-core` adoption. ✅ **The flags are flipped in the cluster
+> manifest:** the canonical `hugmesh-generator`
+> `specs/cluster/manifests/user-bff-api/deployment.yaml` sets
+> `APP_BFF_OIDC_ENABLED=true`, `APP_BFF_OIDC_LOGIN_BASE` (the in-cluster Casdoor),
+> `APP_BFF_CUSTODY_KEY` (from the `user-bff-custody-key` Secret) and `INTERNAL_TOKEN`
+> (from `bff-internal-token`). The GitOps-pilot copy in this repo,
+> [`deploy/deployment.yaml`](deploy/deployment.yaml), still carries
+> `APP_BFF_OIDC_ENABLED=false`, and the default for a bare checkout is still off, so
+> the `/bff/login` (native) + `/bff/register` routes 503 / are inert wherever the flag
+> is off. 🚧 What remains is the live e2e residue, see the Roadmap.
 
 ### Native-login session bridge — `BffSessionAuthenticationWebFilter` ✅ shipped
 
@@ -1034,16 +1037,14 @@ harness is a follow-up). All security/DAST/pentest jobs are `allow_failure: true
 
 ## Honest deferrals
 
-- **SSO code→token exchange + `bff_` session custody are on `main` but ship DARK.**
-  The JWT-only `/bff/user/**` resource-server surfaces are live; the server-side
-  authorization-code exchange, the per-session JWT custody/refresh, the `bff_`
-  opaque-session, and the admin-bff `/bff/internal` account/session data calls are
-  **merged and inert** behind default-off flags (`app.bff.oidc.enabled`,
-  `app.bff.custody-key`, `app.internal.token`) — fail-closed-stubbed, with a
-  byte-identical runtime when off. What remains is the **live flag-flip** (pin the
-  admin-bff #112 contract + the cross-repo egress NetworkPolicy) and **SSO e2e**, not
-  a code merge. Until the flip, registration/login stay operationally owned by
-  admin-bff.
+- **SSO code→token exchange + `bff_` session custody are default-off in this repo, lit in the cluster manifest.**
+  The server-side authorization-code exchange, the per-session JWT custody/refresh,
+  the `bff_` opaque-session, and the admin-bff `/bff/internal` account/session data
+  calls sit behind default-off flags (`app.bff.oidc.enabled`, `app.bff.custody-key`,
+  `app.internal.token`) — fail-closed-stubbed, with a byte-identical runtime when off.
+  The canonical `hugmesh-generator` user-bff-api manifest sets them (see *Auth model*);
+  this repo's own `deploy/deployment.yaml` copy still has `APP_BFF_OIDC_ENABLED=false`.
+  What remains is the **live e2e residue** (see Roadmap), not a code merge.
 - **External Matrix / Mastodon block push is STUBBED.** The clients implement the
   documented shapes (Matrix `PUT .../account_data/m.ignored_user_list`; Mastodon
   `GET /api/v1/accounts/lookup` then `POST /api/v1/accounts/{id}/block`) and the
@@ -1159,14 +1160,16 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
   repo ([`deploy/deployment.yaml`](deploy/deployment.yaml), see
   [`hugmesh-deploy.yaml`](hugmesh-deploy.yaml)) and the canonical
   `hugmesh-generator` manifest; see [SECURITY.md](SECURITY.md) for the wiring.
-- ✅ **SSO relocation — on `main`, ships DARK** (the headline of an earlier cycle, now
-  followed by a cross-cutting identity-resolution hardening pass, see above): server-side
-  OIDC code→token exchange, per-session JWT custody/refresh, the browser-side opaque
-  `bff_` session, the `/bff/login,/register,/session,/me` surface, and the admin-bff
-  `/bff/internal` account/session client — merged and inert behind default-off flags
-  (`app.bff.oidc.enabled` / `app.bff.custody-key` / `app.internal.token`),
-  fail-closed-stubbed, byte-identical runtime when off. The **live flag-flip + SSO
-  e2e** is the only remaining work (🚧, see Roadmap) — the code itself is merged.
+- ✅ **SSO relocation — on `main`, flags flipped in the cluster manifest** (the headline
+  of an earlier cycle, now followed by a cross-cutting identity-resolution hardening
+  pass, see above): server-side OIDC code→token exchange, per-session JWT
+  custody/refresh, the browser-side opaque `bff_` session, the
+  `/bff/login,/register,/session,/me` surface, and the admin-bff `/bff/internal`
+  account/session client. In this repo the flags (`app.bff.oidc.enabled` /
+  `app.bff.custody-key` / `app.internal.token`) default off (fail-closed-stubbed,
+  byte-identical runtime when off); the `hugmesh-generator` user-bff-api manifest turns
+  them on, and its kind e2e records `27-native-login` PASS (2026-08-06). The remaining
+  e2e residue is the only open work (🚧, see Roadmap).
 - 🚧 **Edge authz alignment:** the gateway is a pure Casdoor-JWT RS that swaps
   `bff_` → the internal custody JWT (pre-security filter) and gates routes from the
   `gateway_route_access` Postgres table via `GatewayRouteAccessFilter`; SCG-5 moved
@@ -1203,14 +1206,26 @@ against (`f63e30f`, #130) — see `git log --oneline -40` for the full recent hi
 Everything in the sections above is ✅ shipped on `main` unless explicitly marked
 otherwise; the items below are NOT yet shipped here.
 
-### SSO end-to-end + e2e 🚧 in-flight
-The relocation **code** is merged on `main` but ships DARK (see *Auth model* +
-*Status*). The active work is now the **live flag-flip + e2e**, not a code
-merge: pin the admin-bff #112 internal contract, add the cross-repo egress
-NetworkPolicy peer, flip the default-off flags (`app.bff.oidc.enabled` /
-`app.bff.custody-key` / `app.internal.token`), and prove SSO login end-to-end
-(including a browser e2e through `login-ui` → gateway → this BFF), with Cloudflare
-fronting prod.
+### SSO end-to-end + e2e 🚧 mostly shipped, residue open
+The relocation **code** is merged on `main` (see *Auth model* + *Status*), and the
+flag-flip is **shipped in the cluster manifest**: `hugmesh-generator`
+`specs/cluster/manifests/user-bff-api/deployment.yaml` sets `APP_BFF_OIDC_ENABLED=true`,
+`APP_BFF_CUSTODY_KEY` and `INTERNAL_TOKEN`. admin-bff serves the matching internal
+contract (`/bff/internal/**`, including `/custody/stamp` and `/session/exchange`, in its
+`InternalAccountController`). The egress NetworkPolicy peer is not needed today: tier
+egress is open, and the peer (user-bff-api and gateway to `admin-bff-api:8080`) is only
+needed when the tier-egress default-deny lands (`hugmesh-generator` #132, held). The kind
+e2e (`hugmesh-generator` `docs/KIND-SSO-E2E-FINDINGS.md`) records `27-native-login` PASS
+on 2026-08-06.
+
+Still open, tracked elsewhere:
+- finishing the cutover, `hugmesh-admin-bff-api#2`;
+- the gateway image rebuild for the SSO e2e, `hugmesh-generator#505`;
+- kind e2e findings 20, 25 and 26, `hugmesh-generator#507`; the findings document also
+  lists `GET /bff/session` answering 500 on kind (`hugmesh-generator#693`), so the
+  spec 27 PASS proves less than "login works" until that is fixed and re-run;
+- the browser e2e through `login-ui` → gateway → this BFF, with Cloudflare fronting prod;
+- this repo's own `deploy/deployment.yaml` still sets `APP_BFF_OIDC_ENABLED=false`.
 
 <a id="notifications-roadmap"></a>
 ### Notifications — external channels 🚧 in-flight
