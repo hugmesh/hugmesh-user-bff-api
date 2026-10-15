@@ -190,6 +190,13 @@ public class SecurityConfig {
     private static void commonRoutes(ServerHttpSecurity.AuthorizeExchangeSpec ex) {
         // Probes are public so k8s/Docker healthchecks need no token.
         ex.pathMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll();
+        // EVERY other actuator path is an operator surface (env, beans, heapdump, metrics,
+        // loggers, prometheus ...). Today the exposure list (health,info) leaves nothing
+        // behind it, but an env override or a new starter widens that list with no code
+        // change, and the anyExchange().authenticated() floor below would then hand it to
+        // any logged-in ROLE_USER. Decide it here, first-match-wins, so it fails CLOSED
+        // whatever is exposed. Explicit hasAnyRole, not the hierarchy edge.
+        ex.pathMatchers("/actuator/**").hasAnyRole("ADMIN", "SUPERADMIN");
         // INTERNAL service-to-service surface — SERVICE PRINCIPAL ONLY. The deliver
         // endpoint takes its TARGET (domain, userSubject) from the request BODY (the
         // system acting on a user's behalf, NOT owner==caller), so it MUST be
