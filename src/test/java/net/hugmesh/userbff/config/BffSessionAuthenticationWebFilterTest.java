@@ -547,6 +547,62 @@ class BffSessionAuthenticationWebFilterTest {
         assertThat(exchange.getResponse().getHeaders().getFirst("X-Bff-Denied")).isEqualTo("account-banned");
     }
 
+    // ── allow-list: only an explicit "active" is granted; everything else fails CLOSED ──
+
+    /** Statuses that are NOT the literal (case-insensitive) "active": null (introspect body
+     *  omitted the field), blank, whitespace-padded, an unknown future vocabulary value, and a
+     *  value carrying a header-splitting payload. Each must be refused with 403, the chain
+     *  never reached, and the denial header must be a constant (never the raw status). */
+    private static java.util.stream.Stream<String> notActiveStatuses() {
+        return java.util.stream.Stream.of(
+                null, "", "   ", "pending", "disabled", "locked", "deleted", "inactive",
+                " active", "active ", "active\n", "activ", "actives", "ac\u0074ive\u200b",
+                "active\r\nX-Evil: 1");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.MethodSource("notActiveStatuses")
+    void unknownOrMissingStatus_rejected403_chainNeverInvoked(String status) {
+        AccountView view = new AccountView("acct-u", "casdoor", "unk", true, List.of("user", "superadmin"), "lp");
+        AdminBffInternalClient client = enabledClient();
+        when(client.resolveSession("bff_unknown")).thenReturn(Mono.just(
+                new AdminBffInternalClient.SessionResolution(view, status, true)));
+
+        BffSessionAuthenticationWebFilter f = filter(client);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/bff/user/profile")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer bff_unknown").build());
+        CapturingChain chain = new CapturingChain();
+
+        StepVerifier.create(f.filter(exchange, chain)).verifyComplete();
+
+        assertThat(chain.forwarded.get()).as("status=%s", status).isEqualTo(0);
+        assertThat(exchange.getResponse().getStatusCode()).as("status=%s", status).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(exchange.getResponse().getHeaders().getFirst("X-Bff-Denied"))
+                .as("status=%s", status).isEqualTo("account-status-unrecognized");
+        assertThat(exchange.getResponse().getHeaders().getFirst("X-Evil")).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"active", "ACTIVE", "Active"})
+    void activeStatus_anyCase_isStillAuthenticated(String status) {
+        BffSessionAuthenticationWebFilter f = filter(enabledClient());
+        AccountView view = new AccountView("acct-a", "casdoor", "a", true, List.of("user"), "lp");
+        var d = f.decide(new AdminBffInternalClient.SessionResolution(view, status, false));
+        assertThat(d.kind()).isEqualTo(BffSessionAuthenticationWebFilter.Kind.AUTHENTICATE);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"pending", "x"})
+    void decide_notActive_isForbidden_withConstantReason(String status) {
+        BffSessionAuthenticationWebFilter f = filter(enabledClient());
+        AccountView view = new AccountView("acct-d", "casdoor", "d", true, List.of("user"), "lp");
+        var d = f.decide(new AdminBffInternalClient.SessionResolution(view, status, false));
+        assertThat(d.kind()).isEqualTo(BffSessionAuthenticationWebFilter.Kind.FORBIDDEN);
+        assertThat(d.reason()).isEqualTo("status-unrecognized");
+    }
+
     // ── MFA_SATISFIED plumb-through ───────────────────────────────────────────
 
     @Test

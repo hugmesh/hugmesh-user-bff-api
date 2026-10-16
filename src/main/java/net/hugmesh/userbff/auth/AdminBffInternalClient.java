@@ -10,6 +10,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -174,12 +176,12 @@ public class AdminBffInternalClient {
      *  {@code handle}, absent here); {@code status} + {@code mfaSatisfied} are live,
      *  session-scoped facts that the account view does NOT carry — kept so the session
      *  bridge can deny a suspended/banned session and grant {@code MFA_SATISFIED} (see
-     *  {@link #resolveSession}). Unknown fields ignored; {@code null} status defaults to
-     *  {@code "active"} so a partial row never NPEs the mapping. */
+     *  {@link #resolveSession}). Unknown fields ignored; a {@code null} status stays {@code
+     *  null} (it is NOT defaulted to {@code "active"}) so the session filter's allow-list
+     *  refuses it. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record SessionIntrospect(String id, String status, boolean mfaSatisfied, String issuer) {
         SessionIntrospect {
-            if (status == null) status = "active";
             // Changeset 301: the account's brand. NULLABLE on the wire by design — an older
             // admin-bff omits it entirely, and a current one emits null for a legacy/off-path
             // row or an issuer it did not trust. Normalise to blank so the fold-in and the
@@ -194,11 +196,17 @@ public class AdminBffInternalClient {
      *  ({@code status} — active/suspended/banned, live-checked server-side; {@code
      *  mfaSatisfied} — this session's MFA step-up state). Returned by {@link
      *  #resolveSession} for the session-auth bridge; the plain {@link #getAccountBySession}
-     *  drops these for the {@code /bff/me} hydrate path that doesn't need them. */
+     *  refuses any session that is not active and returns only the account. */
     public record SessionResolution(AccountView account, String status, boolean mfaSatisfied) {}
 
     /** Body of admin-bff's {@code GET /bff/internal/domain-capabilities/{domain}/{capability}}. */
     public record CapabilityView(boolean active) {}
+
+    /** Decoder for the session-introspect body: rejects a duplicate key instead of letting the
+     *  last one win (see {@link #resolveSession}). */
+    private static final JsonMapper INTROSPECT_READER = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .build();
 
     /** Null unless app.bff.oidc.enabled=true — when null every call is a fail-closed
      *  stub (Mono.error), so a disabled surface can never silently authenticate. */
@@ -271,9 +279,20 @@ public class AdminBffInternalClient {
      * {@code /bff/session} call failed (masked while the surface shipped dark). Fail-closed
      * stub when the OIDC surface is disabled, exactly like the other calls. Unknown/expired
      * session ⇒ admin-bff 401 (propagated), never a fabricated view.
+     *
+     * <p>Only an {@code active} session yields a view ({@link SessionStatusPolicy}); a
+     * suspended, banned, missing or unknown status is a 403 {@link ResponseStatusException}
+     * whose reason is a constant. Callers that need the status itself use
+     * {@link #resolveSession}.
      */
     public Mono<AccountView> getAccountBySession(String bffToken) {
-        return resolveSession(bffToken).map(SessionResolution::account);
+        return resolveSession(bffToken).map(resolution -> {
+            SessionStatusPolicy.Verdict verdict = SessionStatusPolicy.classify(resolution.status());
+            if (verdict != SessionStatusPolicy.Verdict.ACTIVE) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "account-" + verdict.reason());
+            }
+            return resolution.account();
+        });
     }
 
     /**
@@ -297,7 +316,12 @@ public class AdminBffInternalClient {
         return http.get().uri("/bff/internal/session/introspect")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + bffToken)
                 .retrieve()
-                .bodyToMono(SessionIntrospect.class)
+                // Read the body as text and decode it with duplicate-key detection on: by default
+                // Jackson keeps the LAST of two "status" keys, so {"status":"suspended",
+                // "status":"active"} would read as active. Two values for one field is an
+                // ambiguous status and fails closed (decode error), like any malformed body.
+                .bodyToMono(String.class)
+                .map(body -> INTROSPECT_READER.readValue(body, SessionIntrospect.class))
                 // Changeset 301: fold the account's brand (issuer) from the INTROSPECT body into
                 // the account view — getAccount() reads /bff/internal/accounts/{id}, whose
                 // AccountOut carries no issuer, so this is the only place the two halves meet.
