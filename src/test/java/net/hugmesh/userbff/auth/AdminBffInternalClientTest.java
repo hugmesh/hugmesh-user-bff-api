@@ -492,4 +492,29 @@ class AdminBffInternalClientTest {
                 .expectError(IllegalStateException.class)
                 .verify();
     }
+
+    /** Introspect body whose {@code status} is absent / null / an unknown value must reach the
+     *  caller AS-IS (null or the raw value) — never rewritten to "active" — so the session
+     *  filter's allow-list can refuse it. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "{\"id\":\"acc-1\",\"mfaSatisfied\":true}",
+            "{\"id\":\"acc-1\",\"status\":null,\"mfaSatisfied\":true}",
+            "{\"id\":\"acc-1\",\"status\":\"pending\",\"mfaSatisfied\":true}"})
+    void resolveSession_missingOrUnknownStatus_isNotDefaultedToActive(String introspectBody) {
+        ExchangeFunction ex = request -> {
+            String body = request.url().getPath().endsWith("/session/introspect")
+                    ? introspectBody
+                    : "{\"id\":\"acc-1\",\"provider\":\"casdoor\",\"handle\":\"alice\","
+                            + "\"registrationComplete\":true,\"roles\":[\"user\"]}";
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json").body(body).build());
+        };
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(ex).build());
+
+        StepVerifier.create(client.resolveSession("bff_x"))
+                .assertNext(r -> assertThat(r.status()).isNotEqualToIgnoringCase("active"))
+                .verifyComplete();
+    }
 }

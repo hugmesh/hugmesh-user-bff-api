@@ -87,8 +87,12 @@ import java.util.Set;
  * in this service's controllers TODAY, but granting it now means a future MFA-gated
  * endpoint here cannot silently ship ungated the way it would have before.
  *
- * <h3>Suspended/banned accounts — explicit deny, mirroring the gateway</h3>
- * admin-bff's introspect body may report {@code status: "suspended"|"banned"} on a
+ * <h3>Account status — allow-list; suspended/banned/unknown are an explicit deny</h3>
+ * Authorities are granted only when the introspect body's {@code status} is exactly {@code
+ * "active"} (case-insensitive); a missing ({@code null}), blank or unrecognized status is
+ * refused with {@code 403} + {@code X-Bff-Denied: account-status-unrecognized}. The
+ * remainder of this section describes the suspended/banned case. admin-bff's introspect
+ * body may report {@code status: "suspended"|"banned"} on a
  * still-live session (the suspension check is live, not cached). Exactly like the
  * gateway's own {@code BffSessionAuthFilter} and mod-bff-api's filter, this is an
  * explicit {@code 403} + {@code X-Bff-Denied} — the exchange is completed directly and
@@ -195,8 +199,12 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
     public static final String BFF_SESSION_TOKEN_CONTEXT_KEY = "hugmesh.userbff.bff-session-token";
 
     /** Response header naming why a request was explicitly denied by this filter
-     *  (suspended/banned branch only) — mirrors the gateway's {@code X-BFF-Denied}. */
+     *  (forbidden branch only: suspended, banned or unrecognized status) — mirrors the gateway's {@code X-BFF-Denied}. */
     private static final String DENIED_HEADER = "X-Bff-Denied";
+
+    /** {@code X-Bff-Denied} reason suffix for a status that is missing or not one of
+     *  active/suspended/banned. Constant on purpose: the raw status is never echoed. */
+    static final String UNRECOGNIZED_STATUS_REASON = "status-unrecognized";
 
     /** Default bounded wait on the admin-bff introspection round-trip. {@code
      *  AdminBffInternalClient.resolveSession} sets no timeout of its own (unlike
@@ -330,11 +338,20 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
     /** Package-private so a unit test can exercise the status/authority decision directly. */
     Decision decide(AdminBffInternalClient.SessionResolution resolution) {
         String status = resolution.status();
+        // ALLOW-LIST: authorities are granted ONLY for an explicit "active". A suspended/banned
+        // status keeps its specific reason; null (field omitted), blank, padded or any value this
+        // service does not know is refused with a constant reason (never the raw status, which
+        // is backend-supplied text and must not reach a response header or an unbounded log).
+        if ("active".equalsIgnoreCase(status)) {
+            return Decision.authenticate(authenticationFor(resolution.account(), resolution.mfaSatisfied()));
+        }
         if ("suspended".equalsIgnoreCase(status) || "banned".equalsIgnoreCase(status)) {
             log.warn("[bff-session] denied — account status={} id={}", status, resolution.account().id());
             return Decision.forbidden(status.toLowerCase(Locale.ROOT));
         }
-        return Decision.authenticate(authenticationFor(resolution.account(), resolution.mfaSatisfied()));
+        log.warn("[bff-session] denied — unrecognized account status (null={}) id={}",
+                status == null, resolution.account().id());
+        return Decision.forbidden(UNRECOGNIZED_STATUS_REASON);
     }
 
     private static Mono<Void> reject(ServerWebExchange exchange, HttpStatus status, String reason) {

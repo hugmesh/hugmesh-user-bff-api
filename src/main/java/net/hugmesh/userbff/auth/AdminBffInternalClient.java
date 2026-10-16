@@ -174,12 +174,12 @@ public class AdminBffInternalClient {
      *  {@code handle}, absent here); {@code status} + {@code mfaSatisfied} are live,
      *  session-scoped facts that the account view does NOT carry — kept so the session
      *  bridge can deny a suspended/banned session and grant {@code MFA_SATISFIED} (see
-     *  {@link #resolveSession}). Unknown fields ignored; {@code null} status defaults to
-     *  {@code "active"} so a partial row never NPEs the mapping. */
+     *  {@link #resolveSession}). Unknown fields ignored; a {@code null} status stays {@code
+     *  null} (it is NOT defaulted to {@code "active"}) so the session filter's allow-list
+     *  refuses it. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record SessionIntrospect(String id, String status, boolean mfaSatisfied, String issuer) {
         SessionIntrospect {
-            if (status == null) status = "active";
             // Changeset 301: the account's brand. NULLABLE on the wire by design — an older
             // admin-bff omits it entirely, and a current one emits null for a legacy/off-path
             // row or an issuer it did not trust. Normalise to blank so the fold-in and the
