@@ -21,6 +21,9 @@
     "name" : "Matrix proxy (D6)",
     "description" : "Owner-scoped Matrix reverse-proxy; injects the server-held homeserver-native token. Live by default behind app.hs-token.enabled."
   }, {
+    "name" : "Notification preferences (internal read)",
+    "description" : "SERVICE-PRINCIPAL ONLY read of an owner's effective per-category notification preferences (domain-scoped; account-restriction always enabled)."
+  }, {
     "name" : "Self-silence",
     "description" : "Self-service visibility hide (owner = JWT subject). NOT a ban: no role/suspension/revocation."
   }, {
@@ -1917,6 +1920,48 @@
                   "type" : "object",
                   "additionalProperties" : {
                     "type" : "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bff/user/internal/notification-preferences/{owner}" : {
+      "get" : {
+        "tags" : [ "Notification preferences (internal read)" ],
+        "summary" : "Effective per-category notification preferences of one owner in one domain (SERVICE-principal only; defaults merged in, account-restriction always enabled, unknown owner reads as all-enabled).",
+        "operationId" : "read",
+        "parameters" : [ {
+          "name" : "owner",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }, {
+          "name" : "domain",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "pattern" : "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "boolean"
                   }
                 }
               }
