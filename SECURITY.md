@@ -11,7 +11,9 @@ Two independent layers defend this BFF.
    owner is always the JWT subject, and that scopes the owner-keyed
    profile/preference/block tables. The caller's bearer goes on to federation-api, so
    the owner check holds end to end (a `bff_` session is first exchanged for a
-   custody JWT). `/bff/user/internal/**` accepts `ROLE_SERVICE` only.
+   custody JWT). `/bff/user/internal/**` accepts `ROLE_SERVICE` only. Every other
+   `/actuator/**` path needs `ROLE_ADMIN` or `ROLE_SUPERADMIN` (only `health,info` are
+   exposed today, so the rule guards any path a later exposure change adds).
 
    Public routes (`permitAll` in `SecurityConfig.commonRoutes`): `/actuator/health`,
    `/actuator/health/**`, `/actuator/info`, `/bff/login`, `/bff/register`,

@@ -901,7 +901,8 @@ every authenticated principal; `roles` (string or `{name}`) → `ROLE_<UPPER>`;
 plus the per-surface platform and external-client role gates above).
 Spec gating is split by profile. Under `dev`/`test` the OpenAPI spec and Swagger
 UI are public (so `gen:fetch` can curl `/v3/api-docs` tokenless). In prod they need
-`ROLE_ADMIN` or `ROLE_SUPERADMIN`. Actuator health/info are public for probes, and so are the
+`ROLE_ADMIN` or `ROLE_SUPERADMIN`. Actuator health/info are public for probes, every other
+`/actuator/**` path needs `ROLE_ADMIN` or `ROLE_SUPERADMIN`, and the public set also covers the
 login, register, session and password-reset routes listed in [SECURITY.md](SECURITY.md).
 
 This BFF is the per-session JWT custodian behind the gateway's `bff_`-opaque-session
