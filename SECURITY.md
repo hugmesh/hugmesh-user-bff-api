@@ -18,8 +18,11 @@ Two independent layers defend this BFF.
    `/bff/session`, `/bff/sessionOut`, `/bff/register/google`, `/bff/register/discord`,
    `/bff/password-reset/request`, `/bff/password-reset/confirm`. The OpenAPI spec and
    Swagger UI are public under the `dev`/`test` profiles and need `ROLE_ADMIN` or
-   `ROLE_SUPERADMIN` otherwise. The login, register and password-reset routes answer
-   503 while their default-off flags stay off.
+   `ROLE_SUPERADMIN` otherwise. While their default-off flags stay off, `/bff/login`,
+   `/bff/register` and the password-reset routes answer 503, and
+   `/bff/register/google` and `/bff/register/discord` answer 500 from the fail-closed
+   admin-bff client stub (`LegacyPathParityController` javadoc); none of them creates
+   an account or a session.
 
 2. **Mutual TLS — the API-to-API trust boundary (transport layer).** In-cluster,
    the TLS handshake **requires a client certificate that chains to the cluster CA
