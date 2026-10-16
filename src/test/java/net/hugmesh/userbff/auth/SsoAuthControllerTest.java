@@ -33,6 +33,8 @@ class SsoAuthControllerTest {
     private static final AdminBffInternalClient.AccountView ACCOUNT =
             new AdminBffInternalClient.AccountView(
                     "acc-1", "email", "alice@example.test", false, List.of("user"), "alice");
+    private static final AdminBffInternalClient.SessionResolution ACTIVE =
+            new AdminBffInternalClient.SessionResolution(ACCOUNT, "active", false);
     private static final AdminBffInternalClient.SessionView SESSION =
             new AdminBffInternalClient.SessionView("bff_opaque", "acc-1");
 
@@ -159,10 +161,10 @@ class SsoAuthControllerTest {
     @Test
     void me_withCookie_resolvesAccountBySessionToken() {
         // The cookie value is the opaque SESSION token, NOT an account id — /bff/me must
-        // resolve it via getAccountBySession (introspect → account view), never
+        // resolve it via resolveSession (introspect → account view), never
         // getAccount(sessionToken) (which 404's: a bff_ token is not an account primary key).
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.getAccountBySession("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
+        when(adminBff.resolveSession("bff_opaque")).thenReturn(Mono.just(ACTIVE));
 
         client(adminBff, true).get().uri("/bff/me")
                 .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
@@ -172,7 +174,7 @@ class SsoAuthControllerTest {
                 .jsonPath("$.id").isEqualTo("acc-1")
                 .jsonPath("$.handle").isEqualTo("alice@example.test");
 
-        verify(adminBff).getAccountBySession("bff_opaque");
+        verify(adminBff).resolveSession("bff_opaque");
         verify(adminBff, never()).getAccount("bff_opaque");
     }
 
@@ -189,7 +191,7 @@ class SsoAuthControllerTest {
         // login-ui's SessionService hydrates from GET /bff/session (permitAll, cookie-only)
         // after login — it must return the same account/session view as /bff/me.
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
-        when(adminBff.getAccountBySession("bff_opaque")).thenReturn(Mono.just(ACCOUNT));
+        when(adminBff.resolveSession("bff_opaque")).thenReturn(Mono.just(ACTIVE));
 
         client(adminBff, true).get().uri("/bff/session")
                 .cookie(SessionCookieWebFilter.SESSION_COOKIE, "bff_opaque")
@@ -201,7 +203,7 @@ class SsoAuthControllerTest {
                 .jsonPath("$.registrationComplete").isEqualTo(false)
                 .jsonPath("$.roles").isArray();
 
-        verify(adminBff).getAccountBySession("bff_opaque");
+        verify(adminBff).resolveSession("bff_opaque");
     }
 
     @Test
@@ -229,7 +231,7 @@ class SsoAuthControllerTest {
     /**
      * hugmesh-generator#549's "Done when": the server is modeled STATEFULLY, not just
      * "the endpoint was called". {@code adminBff} tracks revocation in a real flag —
-     * {@code getAccountBySession} answers the live account until {@code deleteSession} flips
+     * {@code resolveSession} answers the live account until {@code deleteSession} flips
      * it, exactly like the real admin-bff would once the row is gone. A test that only
      * verified {@code deleteSession} was invoked would pass the broken admin-bff sessionOut
      * too (it also returns 200 having deleted nothing); this one cannot, because it re-reads
@@ -239,9 +241,9 @@ class SsoAuthControllerTest {
     void sessionOutPost_legacyAlias_endsSessionStatefully_andExpiresCookie() {
         AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
         AtomicBoolean revoked = new AtomicBoolean(false);
-        when(adminBff.getAccountBySession("bff_opaque")).thenAnswer(inv -> revoked.get()
+        when(adminBff.resolveSession("bff_opaque")).thenAnswer(inv -> revoked.get()
                 ? Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unknown or expired session"))
-                : Mono.just(ACCOUNT));
+                : Mono.just(ACTIVE));
         when(adminBff.deleteSession("bff_opaque")).thenAnswer(inv -> {
             revoked.set(true);
             return Mono.empty();

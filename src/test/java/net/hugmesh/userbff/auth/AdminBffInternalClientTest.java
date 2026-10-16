@@ -517,4 +517,59 @@ class AdminBffInternalClientTest {
                 .assertNext(r -> assertThat(r.status()).isNotEqualToIgnoringCase("active"))
                 .verifyComplete();
     }
+
+    /** getAccountBySession returns a view only for an active session: every other status is a
+     *  403 with a constant reason, so no caller can get a status-blind account view. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "{\"id\":\"acc-1\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":null,\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":\"\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":\"pending\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":\"suspended\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":\"banned\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":\"act\\u0130ve\",\"mfaSatisfied\":false}"})
+    void getAccountBySession_nonActiveStatus_is403(String introspectBody) {
+        ExchangeFunction ex = request -> {
+            String body = request.url().getPath().endsWith("/session/introspect")
+                    ? introspectBody
+                    : "{\"id\":\"acc-1\",\"provider\":\"casdoor\",\"handle\":\"alice\","
+                            + "\"registrationComplete\":true,\"roles\":[\"user\"]}";
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json").body(body).build());
+        };
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(ex).build());
+
+        StepVerifier.create(client.getAccountBySession("bff_x"))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ResponseStatusException.class);
+                    assertThat(((ResponseStatusException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(((ResponseStatusException) e).getReason()).startsWith("account-");
+                })
+                .verify();
+    }
+
+    /** Two "status" keys are an ambiguous status: the decode fails (closed) instead of the
+     *  last value winning, whichever order they come in. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "{\"id\":\"acc-1\",\"status\":\"suspended\",\"status\":\"active\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-1\",\"status\":\"active\",\"status\":\"active\",\"mfaSatisfied\":false}",
+            "{\"id\":\"acc-2\",\"id\":\"acc-1\",\"status\":\"active\",\"mfaSatisfied\":false}"})
+    void resolveSession_duplicateKey_failsClosed(String introspectBody) {
+        ExchangeFunction ex = request -> {
+            String body = request.url().getPath().endsWith("/session/introspect")
+                    ? introspectBody
+                    : "{\"id\":\"acc-1\",\"provider\":\"casdoor\",\"handle\":\"alice\","
+                            + "\"registrationComplete\":true,\"roles\":[\"user\"]}";
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json").body(body).build());
+        };
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(ex).build());
+
+        StepVerifier.create(client.resolveSession("bff_x")).expectError().verify();
+        StepVerifier.create(client.getAccountBySession("bff_x")).expectError().verify();
+    }
 }

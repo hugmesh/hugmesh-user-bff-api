@@ -3,6 +3,7 @@ package net.hugmesh.userbff.auth;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -60,6 +61,9 @@ import java.util.Map;
 @RestController
 @RequestMapping("/bff")
 public class SsoAuthController {
+
+    /** Same header the session-authentication filter sets when it refuses a session. */
+    private static final String DENIED_HEADER = "X-Bff-Denied";
 
     /**
      * The native-login request body. {@code username} + {@code password} are the credentials
@@ -259,13 +263,21 @@ public class SsoAuthController {
     }
 
     /**
-     * The caller's account/session view, keyed on the opaque {@code bff_} cookie and resolved
-     * via admin-bff. Shared by {@code GET /bff/me} (JWT-authenticated) and {@code GET /bff/session}
-     * (permitAll, cookie-only — the login-ui hydrate path). 401 when no cookie; fail-closed 503
+     * The caller's account/session view, keyed on the opaque {@code bff_} session and resolved
+     * via admin-bff. Shared by {@code GET /bff/me} (authenticated) and {@code GET /bff/session}
+     * (permitAll, cookie-only — the login-ui hydrate path). 401 when no session; fail-closed 503
      * (stub error) while the SSO surface is dark — never a fabricated local view.
+     *
+     * <p>The session's status goes through the SAME allow-list as the session-authentication
+     * filter ({@link SessionStatusPolicy}): only an explicit {@code active} session gets a view.
+     * Suspended, banned, missing or unknown status is 403 with a constant
+     * {@code X-Bff-Denied} reason. This check is needed here and not only in the filter: the
+     * filter authenticates from the {@code Authorization} header first, so a request carrying
+     * an active {@code bff_} bearer (or a valid JWT) plus a non-active {@code bff_session}
+     * cookie used to reach this method with the filter never having looked at the cookie.
      */
     private Mono<Map<String, Object>> sessionView(ServerWebExchange exchange) {
-        String token = bffTokenFrom(exchange);
+        String token = sessionViewToken(exchange);
         if (token == null) {
             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "no session"));
         }
@@ -273,16 +285,26 @@ public class SsoAuthController {
         // full view). NOT getAccount(token): a bff_ session token is never an account id
         // (provider:handle), so getAccount(token) always 404'd — /bff/me + /bff/session both
         // failed (masked while the SSO surface shipped dark).
-        return adminBff.getAccountBySession(token)
-                .map(account -> {
-                    Map<String, Object> out = new LinkedHashMap<>();
-                    out.put("id", account.id());
-                    out.put("provider", account.provider());
-                    out.put("handle", account.handle());
-                    out.put("registrationComplete", account.registrationComplete());
-                    out.put("roles", account.roles());
-                    return out;
-                });
+        return adminBff.resolveSession(token)
+                .map(resolution -> activeView(exchange, resolution));
+    }
+
+    /** The view of an ACTIVE session; any other status is a 403 with a constant reason. */
+    private static Map<String, Object> activeView(ServerWebExchange exchange,
+                                                  AdminBffInternalClient.SessionResolution resolution) {
+        SessionStatusPolicy.Verdict verdict = SessionStatusPolicy.classify(resolution.status());
+        if (verdict != SessionStatusPolicy.Verdict.ACTIVE) {
+            exchange.getResponse().getHeaders().set(DENIED_HEADER, "account-" + verdict.reason());
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "account-" + verdict.reason());
+        }
+        AdminBffInternalClient.AccountView account = resolution.account();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", account.id());
+        out.put("provider", account.provider());
+        out.put("handle", account.handle());
+        out.put("registrationComplete", account.registrationComplete());
+        out.put("roles", account.roles());
+        return out;
     }
 
     /**
@@ -315,8 +337,31 @@ public class SsoAuthController {
         return ResponseEntity.noContent().build();
     }
 
-    /** The opaque {@code bff_} session token from the cookie (the only place user-bff
-     *  reads it). Null when absent — callers fail closed. */
+    /**
+     * The session the view describes: a {@code bff_} bearer in the {@code Authorization} header
+     * first, else the {@code bff_session} cookie — the same priority the session-authentication
+     * filter uses, so when the filter authenticated a {@code bff_} bearer the view is of that
+     * same session, not of a different cookie. A non-{@code bff_} bearer (a JWT) falls back to
+     * the cookie, which the filter did not examine; {@link #sessionView} therefore applies the
+     * status allow-list itself instead of relying on the filter.
+     */
+    private static String sessionViewToken(ServerWebExchange exchange) {
+        String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        if (authHeader != null) {
+            String trimmed = authHeader.trim();
+            if (trimmed.regionMatches(true, 0, "Bearer ", 0, 7)) {
+                String candidate = trimmed.substring(7).trim();
+                if (candidate.startsWith("bff_")) {
+                    return candidate;
+                }
+            }
+        }
+        String cookie = bffTokenFrom(exchange);
+        return cookie == null || cookie.isBlank() ? null : cookie;
+    }
+
+    /** The opaque {@code bff_} session token from the cookie. Null when absent — callers
+     *  fail closed. Sign-out revokes the cookie's session because it is the cookie it expires. */
     private static String bffTokenFrom(ServerWebExchange exchange) {
         var cookie = exchange.getRequest().getCookies()
                 .getFirst(SessionCookieWebFilter.SESSION_COOKIE);

@@ -28,12 +28,12 @@ import net.hugmesh.commons.security.DomainRegistry;
 import net.hugmesh.userbff.auth.AdminBffInternalClient;
 import net.hugmesh.userbff.auth.AdminBffInternalClient.AccountView;
 import net.hugmesh.userbff.auth.CanonicalIdentityResolver;
+import net.hugmesh.userbff.auth.SessionStatusPolicy;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -202,10 +202,6 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
      *  (forbidden branch only: suspended, banned or unrecognized status) — mirrors the gateway's {@code X-BFF-Denied}. */
     private static final String DENIED_HEADER = "X-Bff-Denied";
 
-    /** {@code X-Bff-Denied} reason suffix for a status that is missing or not one of
-     *  active/suspended/banned. Constant on purpose: the raw status is never echoed. */
-    static final String UNRECOGNIZED_STATUS_REASON = "status-unrecognized";
-
     /** Default bounded wait on the admin-bff introspection round-trip. {@code
      *  AdminBffInternalClient.resolveSession} sets no timeout of its own (unlike
      *  the gateway's equivalent call), so an unresponsive-but-still-connected admin-bff
@@ -338,20 +334,19 @@ public class BffSessionAuthenticationWebFilter implements WebFilter {
     /** Package-private so a unit test can exercise the status/authority decision directly. */
     Decision decide(AdminBffInternalClient.SessionResolution resolution) {
         String status = resolution.status();
-        // ALLOW-LIST: authorities are granted ONLY for an explicit "active". A suspended/banned
-        // status keeps its specific reason; null (field omitted), blank, padded or any value this
-        // service does not know is refused with a constant reason (never the raw status, which
-        // is backend-supplied text and must not reach a response header or an unbounded log).
-        if ("active".equalsIgnoreCase(status)) {
+        // ALLOW-LIST (shared with SsoAuthController's session view via SessionStatusPolicy):
+        // authorities are granted ONLY for an explicit "active". A suspended/banned status keeps
+        // its specific reason; null (field omitted), blank, padded, non-ASCII lookalike or any
+        // value this service does not know is refused with a constant reason (never the raw
+        // status, which is backend-supplied text and must not reach a response header or an
+        // unbounded log).
+        SessionStatusPolicy.Verdict verdict = SessionStatusPolicy.classify(status);
+        if (verdict == SessionStatusPolicy.Verdict.ACTIVE) {
             return Decision.authenticate(authenticationFor(resolution.account(), resolution.mfaSatisfied()));
         }
-        if ("suspended".equalsIgnoreCase(status) || "banned".equalsIgnoreCase(status)) {
-            log.warn("[bff-session] denied — account status={} id={}", status, resolution.account().id());
-            return Decision.forbidden(status.toLowerCase(Locale.ROOT));
-        }
-        log.warn("[bff-session] denied — unrecognized account status (null={}) id={}",
-                status == null, resolution.account().id());
-        return Decision.forbidden(UNRECOGNIZED_STATUS_REASON);
+        log.warn("[bff-session] denied — account status verdict={} (null={}) id={}",
+                verdict, status == null, resolution.account().id());
+        return Decision.forbidden(verdict.reason());
     }
 
     private static Mono<Void> reject(ServerWebExchange exchange, HttpStatus status, String reason) {
