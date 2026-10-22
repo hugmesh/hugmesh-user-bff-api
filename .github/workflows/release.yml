@@ -1,7 +1,23 @@
 name: Release
 
-# Manual only. Builds the image and pushes it to GHCR (ghcr.io/hugmesh/hugmesh-user-bff-api).
-# Never add `push`/`tags` triggers here without an explicit decision to go live.
+# Builds the image and pushes it to GHCR (ghcr.io/hugmesh/hugmesh-user-bff-api).
+#
+# Beta release scheme (org-wide, 2026-10-21):
+#   * push to main           -> image tags :main and :sha-<12>. No versioned tag moves.
+#   * push of tag v<version> -> image tags :<version>, :beta and :sha-<12>, plus a GitHub
+#                               Release marked prerelease and NOT latest.
+#   * workflow_dispatch      -> on a v* tag ref it re-runs that release (the image step
+#                               refuses if <version> is already published, so a re-run only
+#                               helps when the image push itself never happened); on main it
+#                               does a main build; on any other ref the version guard refuses.
+# The version is the project <version> of pom.xml. A tag must equal "v" + that version, and
+# an existing <version> image tag is never overwritten. ":latest" is never pushed.
+#
+# There is deliberately NO pull_request / pull_request_target trigger. Every job runs on the
+# variable RUNS_ON_PUBLISH (a JSON array, e.g. ["self-hosted","Linux","X64"]) only for main,
+# v* tags and dispatches of those refs; otherwise, or when the variable is unset, it runs on
+# hosted ubuntu-latest. Deleting RUNS_ON_PUBLISH is the off switch. This line is not a
+# fork-PR security boundary; the runner group settings are.
 #
 # The Maven build inside the Dockerfile resolves the PRIVATE net.hugmesh libraries
 # (hugmesh-parent, hugmesh-build-config, hugmesh-commons, hugmesh-auth-core) from GitHub
@@ -9,22 +25,81 @@ name: Release
 # `packages_read_token` (see the Dockerfile). They are published by the release chain; until it
 # has run, the Preflight step fails by name. The repo-root settings.xml (GitLab registry) is not
 # used by this workflow and stays for GitLab CI and the local compose lane.
-#
-# Runs on a GitHub-hosted runner: the GitLab registry is tailnet-only and unreachable from there.
-#
-# Shape copied from hugmesh-owncast-bff-api's release.yml (the reconciled sibling), with
-# hugmesh-auth-core added to the preflight (this service depends on it) and the build-record
-# upload switched off.
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/hugmesh/hugmesh-user-bff-api
 
 jobs:
+  version:
+    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
+    outputs:
+      version: ${{ steps.guard.outputs.version }}
+      kind: ${{ steps.guard.outputs.kind }}
+      sha12: ${{ steps.guard.outputs.sha12 }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # VERSION GUARD. Reads the project's own <version> (not the parent's) from pom.xml.
+      - name: Version guard
+        id: guard
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import xml.etree.ElementTree as E; n="{http://maven.apache.org/POM/4.0.0}"; v=E.parse("pom.xml").getroot().find(n+"version"); print(v.text.strip() if v is not None and v.text else "")')
+          if [ -z "${version}" ]; then
+            echo "::error::pom.xml has no project <version>"
+            exit 1
+          fi
+          case "${version}" in
+            *-SNAPSHOT)
+              echo "::error::pom.xml version ${version} is a SNAPSHOT; a published image needs a fixed version such as 0.3.0-beta.1"
+              exit 1
+              ;;
+          esac
+          # MAJOR.MINOR.PATCH with an optional -prerelease; no +build part (OCI tags reject '+').
+          semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+          if ! [[ "${version}" =~ ${semver} ]]; then
+            echo "::error::pom.xml version ${version} is not MAJOR.MINOR.PATCH[-beta.N]"
+            exit 1
+          fi
+          case "${GITHUB_REF}" in
+            refs/heads/main)
+              kind=main
+              ;;
+            refs/tags/v*)
+              if [ "${GITHUB_REF_NAME#v}" != "${version}" ]; then
+                echo "::error::tag ${GITHUB_REF_NAME} does not match pom.xml version ${version} (expected tag v${version})"
+                exit 1
+              fi
+              kind=release
+              ;;
+            *)
+              echo "::error::refusing to publish from ${GITHUB_REF}: only refs/heads/main and v<version> tags publish"
+              exit 1
+              ;;
+          esac
+          {
+            echo "version=${version}"
+            echo "kind=${kind}"
+            echo "sha12=${GITHUB_SHA:0:12}"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=${version} kind=${kind} ref=${GITHUB_REF}"
+
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
     steps:
       # Preflight, cross-repo package read. Fails here, by name, instead of deep inside Maven.
       # The net.hugmesh libraries live in the PRIVATE GitHub Packages registries of the chain
@@ -68,8 +143,8 @@ jobs:
           exit ${rc}
 
   build-and-push:
-    needs: preflight
-    runs-on: ubuntu-latest
+    needs: [version, preflight]
+    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
     permissions:
       contents: read
       packages: write
@@ -87,12 +162,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tag
-        id: tag
-        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      # A published version tag is immutable: refuse to overwrite <version>. On a tag run the
+      # tags are :<version>, :sha-<12> and, for a pre-release only, :beta (moving). On main they
+      # are :main (moving) and :sha-<12>. Never :latest.
+      - name: Resolve image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          KIND: ${{ needs.version.outputs.kind }}
+          SHA12: ${{ needs.version.outputs.sha12 }}
+        run: |
+          set -euo pipefail
+          if [ "${KIND}" = release ]; then
+            if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
+              echo "::error::${IMAGE}:${VERSION} already exists. A published version is never overwritten: raise N in pom.xml (e.g. -beta.2) and tag again."
+              exit 1
+            fi
+            tags="${IMAGE}:${VERSION}"$'\n'"${IMAGE}:sha-${SHA12}"
+            case "${VERSION}" in
+              *-*) tags="${tags}"$'\n'"${IMAGE}:beta" ;;
+            esac
+            label_version="${VERSION}"
+          elif [ "${KIND}" = main ]; then
+            tags="${IMAGE}:main"$'\n'"${IMAGE}:sha-${SHA12}"
+            label_version=main
+          else
+            echo "::error::unknown publish kind '${KIND}'"
+            exit 1
+          fi
+          {
+            echo "list<<EOF"
+            echo "${tags}"
+            echo "EOF"
+            echo "label_version=${label_version}"
+          } >> "$GITHUB_OUTPUT"
+          echo "${tags}"
 
-      # `latest` moves only when the run is on main, so a proof dispatch from a branch can never
-      # overwrite it. (A blank line in `tags` is ignored.)
       - name: Build and push image
         uses: docker/build-push-action@v6
         env:
@@ -104,11 +209,39 @@ jobs:
           context: .
           push: true
           pull: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
-            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', env.IMAGE) || '' }}
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.label_version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
             UPSTREAM_PACKAGES_ACTOR=${{ secrets.PACKAGES_READ_ACTOR || github.actor }}
           # BuildKit secret, never an ARG/ENV, never persisted in a layer.
           secrets: |
             packages_read_token=${{ secrets.PACKAGES_READ_TOKEN }}
+
+  github-release:
+    needs: [version, build-and-push]
+    if: needs.version.outputs.kind == 'release'
+    runs-on: ${{ fromJSON(github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/studio-v')) && vars.RUNS_ON_PUBLISH || '"ubuntu-latest"') }}
+    permissions:
+      contents: write
+    steps:
+      - name: Create prerelease (never latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "release ${GITHUB_REF_NAME} already exists; nothing to do"
+            exit 0
+          fi
+          flags=(--verify-tag)
+          case "${VERSION}" in
+            *-*) flags+=(--prerelease --latest=false) ;;
+          esac
+          gh release create "${GITHUB_REF_NAME}" "${flags[@]}" \
+            --title "hugmesh-user-bff-api ${VERSION}" \
+            --notes "Image: ${IMAGE}:${VERSION}"

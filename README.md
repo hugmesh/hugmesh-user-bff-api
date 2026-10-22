@@ -916,7 +916,7 @@ the only authority source.
 
 This service adopts the org's shared Maven artifacts. Three moves remove duplication:
 
-1. **Parent POM →** `net.hugmesh:hugmesh-parent:2.8.0` (itself a child of
+1. **Parent POM →** `net.hugmesh:hugmesh-parent:2.9.0-beta.1` (itself a child of
    `spring-boot-starter-parent:4.0.7`, so the whole Spring Boot dependency/plugin
    management comes along). The parent consolidates the reactive-BFF
    `<dependencies>` (webflux/actuator/security/oauth2-resource-server/validation,
@@ -925,9 +925,9 @@ This service adopts the org's shared Maven artifacts. Three moves remove duplica
    plugin config. Only the **repo-specific** deps stay in this POM: `icu4j` and
    `commons-text` (the Unicode confusable / typo-squat guard).
 
-2. **Shared security/tenancy/web →** `net.hugmesh:hugmesh-commons:2.1.0` (a test-jar
-   classifier pin; the main classifier comes from `hugmesh-parent`'s
-   `dependencyManagement`).
+2. **Shared security/tenancy/web →** `net.hugmesh:hugmesh-commons:2.2.0-beta.1` (a test-jar
+   classifier pin that must equal the parent's `hugmesh-commons.version`; the main
+   classifier comes from `hugmesh-parent`'s `dependencyManagement`).
    The local copies of `security.{Roles,DomainRegistry,CasdoorAuthorities,DomainScope}`,
    `config.TenancyResourceServerConfig` and `web.ApiException` were **deleted** and
    replaced by:
@@ -963,7 +963,7 @@ This service adopts the org's shared Maven artifacts. Three moves remove duplica
      `TenancyResourceServerConfig.tenantAuthManagerResolver()` through a same-package
      test accessor at `src/test/java/net/hugmesh/commons/config/TenancyResolvers.java`.
 
-3. **Shared account/session/MFA/Casdoor-admin infra →** `net.hugmesh:hugmesh-auth-core:2.5.1`
+3. **Shared account/session/MFA/Casdoor-admin infra →** `net.hugmesh:hugmesh-auth-core:2.6.0-beta.1`
    🚧. The login/session/account logic is relocating from admin-bff into this user-bff.
    Its cross-cutting core (account-state, session-custody, MFA, Casdoor-admin client
    infra) is extracted to `hugmesh-auth-core` (depends on `hugmesh-commons`, consumed by
@@ -975,9 +975,10 @@ This service adopts the org's shared Maven artifacts. Three moves remove duplica
    (auth-core #39/#40/#41: ceremony-test coverage, a WARN-by-default MFA precondition boot
    guard, and a 32-byte CSPRNG WebAuthn challenge). That keeps this BFF and admin-bff
    pinned in lockstep on the same released auth-core line, even though this BFF does not
-   wire the MFA subsystem itself. It then moved to 2.5.1, the only auth-core coordinate
-   the org release chain publishes to GitHub Packages (source- and binary-compatible
-   with 2.4.2). See `pom.xml` for the full version history.
+   wire the MFA subsystem itself. It then moved to 2.5.1 (source- and binary-compatible
+   with 2.4.2), and on 2026-10-21 to 2.6.0-beta.1, the first coordinate of the org beta
+   scheme (2.6.0 adds the `bff_` session bridge). See `pom.xml` for the full version
+   history.
 
    `OpenApiSpecDumpTest` asserts the committed
    [`openapi.json`](src/main/resources/openapi/openapi.json) (see *Build / test* to
@@ -1002,12 +1003,39 @@ sit in git**:
   `--secret id=ci_job_token,env=CI_JOB_TOKEN` plus the `CI_API_V4_URL` /
   `GITLAB_GROUP_ID` build-args, and the `test:` job passes `-s settings.xml` to `./mvnw`.
 - **GitHub release workflow:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
-  (manual `workflow_dispatch` only) builds the image and pushes it to
-  `ghcr.io/hugmesh/hugmesh-user-bff-api`. When the `packages_read_token` BuildKit secret is
+  builds the image and pushes it to `ghcr.io/hugmesh/hugmesh-user-bff-api` (triggers and
+  tags under *Versions and releases*). When the `packages_read_token` BuildKit secret is
   mounted, the `Dockerfile` builds with `-s .github/maven-ci-settings.xml` (GitHub
   Packages) instead of `settings.xml`. A preflight step fails by name unless the repository
   secret `PACKAGES_READ_TOKEN` is set and `hugmesh-build-config`, `hugmesh-parent`,
   `hugmesh-commons` and `hugmesh-auth-core` answer.
+
+#### Versions and releases
+
+The version is the project `<version>` in [`pom.xml`](pom.xml), in the org beta form
+`MAJOR.MINOR.PATCH-beta.N` (today `0.3.0-beta.1`): never `-SNAPSHOT`, never a `+build`
+part. N goes up by one for every new published beta of the same base version.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) publishes:
+
+| Event | Image tags | GitHub Release |
+|---|---|---|
+| push to `main` | `:main`, `:sha-<12 hex>` | none |
+| push of tag `v<version>` | `:<version>`, `:beta`, `:sha-<12 hex>` | prerelease, not latest |
+| manual dispatch on a `v*` tag | same as the tag push; refused if `:<version>` already exists | same, skipped if it exists |
+| manual dispatch on `main` | same as a push to `main` | none |
+
+A version guard runs first: a tag must equal `v` + the pom version, a SNAPSHOT is
+refused, and any other ref is refused. A published `:<version>` is never overwritten,
+so a fix means raising N and tagging again. `:latest` is never pushed. Every job runs on
+the runner named by the repository variable `RUNS_ON_PUBLISH` (a JSON array such as
+`["self-hosted","Linux","X64"]`) for `main` and `v*` refs only, and on hosted
+`ubuntu-latest` otherwise or when the variable is unset; deleting the variable is the
+off switch. The workflow has no pull-request trigger.
+
+To cut a beta: merge the version bump, then
+`git tag -a v0.3.0-beta.1 -m "hugmesh-user-bff-api 0.3.0-beta.1" <commit on main>` and
+`git push origin v0.3.0-beta.1`. The release chain (build-config, parent, commons,
+auth-core) must be published first, or the preflight fails by name.
 
 ### API-to-API mTLS (PKI identity, both directions)
 In-cluster, the deployment mounts a PKCS12 keystore (this service's Vault-PKI
@@ -1159,8 +1187,8 @@ owner and domain predicate, such as `ConnectedClientAuditR2dbcRepository#revokeS
 
 CI is **GitLab** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
 in-cluster GitLab. GitHub has one workflow,
-[`.github/workflows/release.yml`](.github/workflows/release.yml), which runs on manual
-dispatch only and pushes the image to GHCR (see *Resolving the private org artifacts*).
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which pushes the image
+to GHCR on pushes to `main`, `v*` tags and manual dispatch (see *Versions and releases*).
 GitHub Actions is billing-blocked. The GitLab pipeline has five stages:
 
 1. **`test`**: `./mvnw -B -s settings.xml verify` on `maven:3.9-eclipse-temurin-25` with a
@@ -1336,9 +1364,9 @@ See `git log --oneline -40` for the full recent history.
   call site. Together they closed a cross-user account-takeover class. See *Native-login
   session bridge* and *Canonical homeserver-identity resolution* above, and PRs
   #115/#116/#117/#118/#120/#123/#124.
-- ✅ **Org artifact adoption:** `hugmesh-parent:2.8.0` + `hugmesh-commons` (shared
-  security/tenancy/web) + `hugmesh-auth-core:2.5.1`; GitLab CI with the shared
-  OWASP pentest harness, plus a manual GitHub release workflow to GHCR.
+- ✅ **Org artifact adoption:** `hugmesh-parent:2.9.0-beta.1` + `hugmesh-commons` (shared
+  security/tenancy/web) + `hugmesh-auth-core:2.6.0-beta.1`; GitLab CI with the shared
+  OWASP pentest harness, plus a GitHub release workflow to GHCR (main and `v*` tags).
 - ✅ **mTLS both directions** (server-side client-auth + client-cert presentation on
   outbound calls), config-gated, plaintext in local/dev/CI. Server-side enforcement is
   on in the canonical `hugmesh-generator` manifest and in the GitOps-pilot copy in
