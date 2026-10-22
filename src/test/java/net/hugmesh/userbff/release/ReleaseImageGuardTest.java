@@ -13,8 +13,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +46,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       {@code export UPSTREAM_PACKAGES_TOKEN=<value>} into the BuildKit log, and
  *       build-push-action v6 uploads a build-record artifact holding raw BuildKit logs,
  *       which runner-side masking does not cover.</li>
+ *   <li><b>Beta release scheme (2026-10-21).</b> The workflow publishes from {@code main}
+ *       ({@code :main}, {@code :sha-<12>}) and from {@code v<version>} tags
+ *       ({@code :<version>}, {@code :beta}, {@code :sha-<12>}, a prerelease GitHub Release that
+ *       is not latest), never {@code :latest}; it has no pull-request trigger; every job runs on
+ *       {@code RUNS_ON_PUBLISH} only for main and v* refs and on hosted runners otherwise; and
+ *       the pom version is a {@code MAJOR.MINOR.PATCH-beta.N}.</li>
  * </ul>
  *
  * <p>Reads the repository files directly (surefire runs with the project basedir as the
@@ -135,10 +144,6 @@ class ReleaseImageGuardTest {
                 .contains("DOCKER_BUILD_RECORD_UPLOAD: false")
                 .contains("Preflight, cross-repo package read")
                 .contains("workflow_dispatch");
-        assertThat(yaml).as("no push/tag/schedule trigger: this workflow publishes an image")
-                .doesNotContain("\n  push:")
-                .doesNotContain("\n  schedule:")
-                .doesNotContain("\n  pull_request");
         // GITHUB_TOKEN cannot read another repository's package; falling back to it only
         // turns a missing secret into a confusing later failure. It is still right for GHCR login.
         assertThat(yaml).as("no fall-back from PACKAGES_READ_TOKEN to GITHUB_TOKEN")
@@ -151,13 +156,172 @@ class ReleaseImageGuardTest {
         for (String upstream : UPSTREAMS) {
             assertThat(yaml).as("the preflight must probe %s", upstream).contains(upstream);
         }
-        assertThat(yaml).as("the image build must wait for the preflight").contains("needs: preflight");
+        assertThat(jobs(yaml).get("build-and-push"))
+                .as("the image build must wait for the version guard AND the preflight")
+                .contains("needs: [version, preflight]");
         assertThat(yaml.indexOf("Preflight, cross-repo package read"))
                 .as("the preflight must precede the image build")
                 .isGreaterThan(-1)
                 .isLessThan(yaml.indexOf("docker/build-push-action"));
-        assertThat(yaml).as(":latest moves only on main")
-                .contains("github.ref == 'refs/heads/main'");
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Beta release scheme (2026-10-21): what publishes, from where, under which tags.
+    // ---------------------------------------------------------------------------------------
+
+    /** The exact runs-on line every publish job carries (org beta scheme, section 3.1). */
+    static final String PUBLISH_RUNS_ON = "${{ fromJSON(github.event_name != 'pull_request'"
+            + " && github.event_name != 'pull_request_target'"
+            + " && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')"
+            + " || startsWith(github.ref, 'refs/tags/studio-v'))"
+            + " && vars.RUNS_ON_PUBLISH || '\"ubuntu-latest\"') }}";
+
+    @Test
+    @DisplayName("release.yml triggers: push to main, v* tags and manual dispatch; never a PR, schedule or other event")
+    void releaseTriggersAreMainTagsAndDispatchOnly() throws IOException {
+        List<String> on = onBlock(code(read(".github/workflows/release.yml"), "#"));
+        List<String> events = on.stream().filter(l -> l.matches("  \\S.*")).map(String::strip).toList();
+        assertThat(events).as("the trigger events").containsExactly("push:", "workflow_dispatch: {}");
+        List<String> push = on.stream().filter(l -> l.startsWith("    ")).map(String::strip).toList();
+        assertThat(push).as("push publishes from main and v* tags only")
+                .containsExactly("branches: [main]", "tags: ['v*']");
+    }
+
+    @Test
+    @DisplayName("every release job runs on RUNS_ON_PUBLISH only for main / v* tags, hosted otherwise; nothing reads RUNS_ON")
+    void everyReleaseJobUsesThePublishRunnerLine() throws IOException {
+        String yaml = code(read(".github/workflows/release.yml"), "#");
+        Map<String, String> jobs = jobs(yaml);
+        assertThat(jobs.keySet()).containsExactly("version", "preflight", "build-and-push", "github-release");
+        for (Map.Entry<String, String> job : jobs.entrySet()) {
+            List<String> runsOn = job.getValue().lines()
+                    .filter(l -> l.startsWith("    runs-on:")).toList();
+            assertThat(runsOn).as("runs-on of job %s", job.getKey())
+                    .containsExactly("    runs-on: " + PUBLISH_RUNS_ON);
+        }
+        assertThat(Pattern.compile("vars\\.RUNS_ON\\b(?!_PUBLISH)").matcher(yaml).find())
+                .as("the PR-reachable RUNS_ON variable must not steer a publish job")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("release.yml never pushes :latest; tag runs push :<version>, :sha-<12>, :beta and a prerelease that is not latest")
+    void releaseNeverPushesLatest() throws IOException {
+        String yaml = code(read(".github/workflows/release.yml"), "#");
+        assertThat(yaml).as("no :latest image tag, in any spelling")
+                .doesNotContain(":latest")
+                .doesNotContain("latest=true")
+                .doesNotContain("format('{0}:latest'");
+        String image = jobs(yaml).get("build-and-push");
+        assertThat(image)
+                .contains("tags: ${{ steps.tags.outputs.list }}")
+                .contains("tags=\"${IMAGE}:${VERSION}\"$'\\n'\"${IMAGE}:sha-${SHA12}\"")
+                .contains("*-*) tags=\"${tags}\"$'\\n'\"${IMAGE}:beta\" ;;")
+                .contains("tags=\"${IMAGE}:main\"$'\\n'\"${IMAGE}:sha-${SHA12}\"")
+                .contains("org.opencontainers.image.source=https://github.com/${{ github.repository }}");
+        String release = jobs(yaml).get("github-release");
+        assertThat(release)
+                .contains("if: needs.version.outputs.kind == 'release'")
+                .contains("contents: write")
+                .contains("flags=(--verify-tag)")
+                .contains("*-*) flags+=(--prerelease --latest=false) ;;");
+    }
+
+    @Test
+    @DisplayName("the version guard ties a v* tag to the pom version, refuses SNAPSHOT and other refs, and never overwrites a published version")
+    void versionGuardIsWired() throws IOException {
+        String yaml = code(read(".github/workflows/release.yml"), "#");
+        String version = jobs(yaml).get("version");
+        assertThat(version)
+                .contains("E.parse(\"pom.xml\").getroot().find(n+\"version\")")
+                .contains("*-SNAPSHOT)")
+                .contains("semver='^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$'")
+                .contains("if ! [[ \"${version}\" =~ ${semver} ]]; then")
+                .contains("if [ \"${GITHUB_REF_NAME#v}\" != \"${version}\" ]; then")
+                .contains("\n            refs/heads/main)\n              kind=main\n")
+                .contains("\n            refs/tags/v*)\n")
+                .contains("\n            *)\n              echo \"::error::refusing to publish from ${GITHUB_REF}");
+        assertThat(jobs(yaml).get("build-and-push"))
+                .contains("if docker buildx imagetools inspect \"${IMAGE}:${VERSION}\" >/dev/null 2>&1; then");
+    }
+
+    @Test
+    @DisplayName("pom.xml carries a beta version (MAJOR.MINOR.PATCH-beta.N) and no SNAPSHOT anywhere")
+    void pomVersionIsABeta() throws Exception {
+        Document pom = parse(read("pom.xml"));
+        Element project = pom.getDocumentElement();
+        assertThat(directChild(project, "version"))
+                .as("project version").matches("\\d+\\.\\d+\\.\\d+-beta\\.[1-9]\\d*");
+        assertThat(directChild(directChildElement(project, "parent"), "version"))
+                .as("parent version").doesNotContain("SNAPSHOT");
+        assertThat(read("pom.xml")).as("no SNAPSHOT coordinate").doesNotContain("-SNAPSHOT</version>");
+    }
+
+    /** The lines of the top-level {@code on:} block (its indented children). */
+    private static List<String> onBlock(String yaml) {
+        List<String> out = new ArrayList<>();
+        boolean inside = false;
+        for (String line : yaml.split("\n", -1)) {
+            if (line.equals("on:")) {
+                inside = true;
+            } else if (inside && !line.isBlank() && !line.startsWith(" ")) {
+                break;
+            } else if (inside && !line.isBlank()) {
+                out.add(line);
+            }
+        }
+        assertThat(out).as("release.yml must have a top-level on: block").isNotEmpty();
+        return out;
+    }
+
+    /** Job name -> the job's text, for every job under the top-level {@code jobs:} key. */
+    private static Map<String, String> jobs(String yaml) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Pattern header = Pattern.compile("^  ([A-Za-z0-9_-]+):\\s*$");
+        boolean inside = false;
+        String current = null;
+        StringBuilder body = new StringBuilder();
+        for (String line : yaml.split("\n", -1)) {
+            if (line.equals("jobs:")) {
+                inside = true;
+                continue;
+            }
+            if (!inside) {
+                continue;
+            }
+            if (!line.isBlank() && !line.startsWith(" ")) {
+                break;
+            }
+            Matcher m = header.matcher(line);
+            if (m.matches()) {
+                if (current != null) {
+                    out.put(current, body.toString());
+                }
+                current = m.group(1);
+                body = new StringBuilder();
+            } else if (current != null) {
+                body.append(line).append('\n');
+            }
+        }
+        if (current != null) {
+            out.put(current, body.toString());
+        }
+        assertThat(out).as("release.yml must declare jobs").isNotEmpty();
+        return out;
+    }
+
+    private static Element directChildElement(Element parent, String name) {
+        NodeList nodes = parent.getChildNodes();
+        for (int i = 0; i < nodes.getLength(); i++) {
+            if (nodes.item(i) instanceof Element e && e.getTagName().equals(name)) {
+                return e;
+            }
+        }
+        throw new AssertionError("<" + name + "> missing under <" + parent.getTagName() + ">");
+    }
+
+    private static String directChild(Element parent, String name) {
+        return directChildElement(parent, name).getTextContent().trim();
     }
 
     @Test
