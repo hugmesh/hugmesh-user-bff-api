@@ -188,16 +188,21 @@ class ReleaseImageGuardTest {
     }
 
     @Test
-    @DisplayName("every release job runs on RUNS_ON_PUBLISH only for main / v* tags, hosted otherwise; nothing reads RUNS_ON")
+    @DisplayName("release jobs run on RUNS_ON_PUBLISH only for main / v* tags, hosted otherwise; the signed jobs always hosted; nothing reads RUNS_ON")
     void everyReleaseJobUsesThePublishRunnerLine() throws IOException {
         String yaml = code(read(".github/workflows/release.yml"), "#");
         Map<String, String> jobs = jobs(yaml);
-        assertThat(jobs.keySet()).containsExactly("version", "preflight", "build-and-push", "github-release");
+        assertThat(jobs.keySet())
+                .containsExactly("version", "preflight", "build-and-push", "github-release", "notify-site");
+        // The signed publish job and notify-site never run on the self-hosted runner
+        // (ReleaseSignedImageGuardTest pins the signing itself).
+        Set<String> hosted = Set.of("build-and-push", "notify-site");
         for (Map.Entry<String, String> job : jobs.entrySet()) {
             List<String> runsOn = job.getValue().lines()
                     .filter(l -> l.startsWith("    runs-on:")).toList();
             assertThat(runsOn).as("runs-on of job %s", job.getKey())
-                    .containsExactly("    runs-on: " + PUBLISH_RUNS_ON);
+                    .containsExactly("    runs-on: "
+                            + (hosted.contains(job.getKey()) ? "ubuntu-latest" : PUBLISH_RUNS_ON));
         }
         assertThat(Pattern.compile("vars\\.RUNS_ON\\b(?!_PUBLISH)").matcher(yaml).find())
                 .as("the PR-reachable RUNS_ON variable must not steer a publish job")
