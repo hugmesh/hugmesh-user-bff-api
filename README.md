@@ -1167,6 +1167,11 @@ GitHub Actions is billing-blocked. The GitLab pipeline has five stages:
    `docker:27-dind` service. A clean-tree check then fails the job if the build rewrote a
    committed file. A second job in the stage, `config-contract`, runs
    `ConfigDefaultsContractTest` and `CasdoorRegistrationContractTest` on their own.
+   The old-brand check in `ConfigDefaultsContractTest` reads its banned names from
+   outside the repo, because the old name is deliberately never written here: set
+   `HUGMESH_FORBIDDEN_TOKENS` (comma-separated) or `HUGMESH_FORBIDDEN_TOKENS_FILE` (one
+   name per line) on the machine or as a masked CI/CD variable. Without either, the test
+   only checks a placeholder and proves the scanner works on a planted name.
 2. **`security`**: OWASP Dependency-Check SCA, fail-on-CVSS≥9.
 3. **`dast`**: a ZAP API scan against the OpenAPI spec when `DAST_TARGET_URL` is set,
    advisory otherwise.

@@ -73,6 +73,10 @@ test:
 # of the dind service `test` needs (they run inside `test` too):
 #   ConfigDefaultsContractTest       — SHAPE: no pre-rebrand identifier under src/main,
 #                                      and the duplicated copies of a default agree.
+#                                      The banned old-brand names come from the
+#                                      HUGMESH_FORBIDDEN_TOKENS (comma-separated) or
+#                                      HUGMESH_FORBIDDEN_TOKENS_FILE CI/CD variable; set
+#                                      one (masked) or only a placeholder is checked.
 #   CasdoorRegistrationContractTest  — VALUE: every default on the POST /bff/login path
 #                                      matches what the cluster's casdoor-init actually
 #                                      registers (clientId app-user-bff, org hugmesh,
