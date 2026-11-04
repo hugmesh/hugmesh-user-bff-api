@@ -25,8 +25,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       and {@code attestations: write}; no other job, and not the workflow, holds
  *       {@code id-token} or {@code attestations}.</li>
  *   <li>After the build it resolves the pushed repository and DIGEST (refusing a non-sha256
- *       digest and a pushed {@code latest} tag), signs that digest with cosign keyless, and pushes
- *       a build-provenance and an SBOM attestation for it to the registry.</li>
+ *       digest, a pushed tag set that is not exactly the version guard's, and a {@code latest}
+ *       tag on a prerelease version or outside the stable channel), signs that digest with cosign
+ *       keyless, pushes a build-provenance and an SBOM attestation for it to the registry, and
+ *       then checks that every pushed tag resolves to that one signed digest.</li>
  *   <li>{@code notify-site} runs hosted, with no permissions, only for {@code v*} tags, after the
  *       GitHub Release.</li>
  * </ul>
@@ -130,7 +132,12 @@ class ReleaseSignedImageGuardTest {
                 .contains("if: steps.build.outcome == 'success'")
                 .contains("DIGEST: ${{ steps.build.outputs.digest }}");
         assertThat(after).as("a non-sha256 digest is refused").contains("sha256:[0-9a-f]{64}");
-        assertThat(after).as("a pushed latest tag is refused").contains("\"latest\" in tags");
+        assertThat(after).as("a pushed latest tag is refused on a prerelease version (a missing VERSION fails closed)")
+                .contains("if \"latest\" in tags and \"-\" in (os.environ.get(\"VERSION\") or \"-\"):")
+                .contains("if \"latest\" in tags and channel != \"stable\":");
+        assertThat(after).as("the pushed tags are exactly the version guard's tags")
+                .contains("EXPECTED_TAGS: ${{ needs.version.outputs.tags }}")
+                .contains("if sorted(tags) != expected:");
         assertThat(after).as("cosign keyless signs the pushed digest")
                 .contains("REF: ${{ steps.signref.outputs.repo }}@${{ steps.signref.outputs.digest }}")
                 .contains("run: cosign sign --yes \"$REF\"");
@@ -142,6 +149,14 @@ class ReleaseSignedImageGuardTest {
                 .as("both attestations name the pushed digest").isEqualTo(2);
         assertThat(count(after, "push-to-registry: true"))
                 .as("both attestations are pushed to the registry").isEqualTo(2);
+        int sbom = after.indexOf("uses: actions/attest-sbom@");
+        int digestCheck = after.indexOf("- name: Check every pushed tag resolves to the signed digest");
+        assertThat(digestCheck).as("every pushed tag is checked against the signed digest, after the attestations")
+                .isGreaterThan(sbom);
+        assertThat(after.substring(digestCheck))
+                .contains("TAGS: ${{ needs.version.outputs.tags }}")
+                .contains("DIGEST: ${{ steps.signref.outputs.digest }}")
+                .contains("docker buildx imagetools inspect \"${ref}\" --raw | sha256sum");
     }
 
     @Test

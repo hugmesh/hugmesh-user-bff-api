@@ -46,12 +46,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       {@code export UPSTREAM_PACKAGES_TOKEN=<value>} into the BuildKit log, and
  *       build-push-action v6 uploads a build-record artifact holding raw BuildKit logs,
  *       which runner-side masking does not cover.</li>
- *   <li><b>Beta release scheme (2026-10-21).</b> The workflow publishes from {@code main}
- *       ({@code :main}, {@code :sha-<12>}) and from {@code v<version>} tags
- *       ({@code :<version>}, {@code :beta}, {@code :sha-<12>}, a prerelease GitHub Release that
- *       is not latest), never {@code :latest}; it has no pull-request trigger; every job runs on
+ *   <li><b>Release channels (2026-11-04).</b> The workflow publishes from {@code main}
+ *       ({@code :main}, {@code :sha-<12>}), from {@code release/X.Y} ({@code :sha-<12>} only)
+ *       and from {@code v*} tags, whose channel the tag decides in
+ *       {@code scripts/release-version.sh}: a beta {@code vX.Y.Z-beta.N} ({@code :<version>},
+ *       {@code :beta}, {@code :sha-<12>}, a prerelease GitHub Release that is not latest) or a
+ *       stable {@code vX.Y.Z} ({@code :<version>}, {@code :sha-<12>}, {@code :X.Y} and
+ *       {@code :latest} only on the newest stable line). The workflow takes its image tags from
+ *       that guard and builds none itself; it has no pull-request trigger; every job runs on
  *       {@code RUNS_ON_PUBLISH} only for main and v* refs and on hosted runners otherwise; and
- *       the pom version is a {@code MAJOR.MINOR.PATCH-beta.N}.</li>
+ *       the pom version is a {@code MAJOR.MINOR.PATCH} or {@code MAJOR.MINOR.PATCH-beta.N}.</li>
  * </ul>
  *
  * <p>Reads the repository files directly (surefire runs with the project basedir as the
@@ -177,14 +181,14 @@ class ReleaseImageGuardTest {
             + " && vars.RUNS_ON_PUBLISH || '\"ubuntu-latest\"') }}";
 
     @Test
-    @DisplayName("release.yml triggers: push to main, v* tags and manual dispatch; never a PR, schedule or other event")
+    @DisplayName("release.yml triggers: push to main and release/**, v* tags and manual dispatch; never a PR, schedule or other event")
     void releaseTriggersAreMainTagsAndDispatchOnly() throws IOException {
         List<String> on = onBlock(code(read(".github/workflows/release.yml"), "#"));
         List<String> events = on.stream().filter(l -> l.matches("  \\S.*")).map(String::strip).toList();
         assertThat(events).as("the trigger events").containsExactly("push:", "workflow_dispatch: {}");
         List<String> push = on.stream().filter(l -> l.startsWith("    ")).map(String::strip).toList();
-        assertThat(push).as("push publishes from main and v* tags only")
-                .containsExactly("branches: [main]", "tags: ['v*']");
+        assertThat(push).as("push publishes from main, release/X.Y branches and v* tags only")
+                .containsExactly("branches: [main, 'release/**']", "tags: ['v*']");
     }
 
     @Test
@@ -210,26 +214,46 @@ class ReleaseImageGuardTest {
     }
 
     @Test
-    @DisplayName("release.yml never pushes :latest; tag runs push :<version>, :sha-<12>, :beta and a prerelease that is not latest")
-    void releaseNeverPushesLatest() throws IOException {
+    @DisplayName("image tags come only from the version guard: :beta for a beta, :X.Y and :latest only for a stable; release flags follow the channel")
+    void imageTagsComeFromTheChannelGuard() throws IOException {
         String yaml = code(read(".github/workflows/release.yml"), "#");
-        assertThat(yaml).as("no :latest image tag, in any spelling")
-                .doesNotContain(":latest")
-                .doesNotContain("latest=true")
+        assertThat(yaml).as("release.yml builds no floating tag itself; the guard chooses them")
+                .doesNotContain("\"${IMAGE}:latest\"")
+                .doesNotContain("${IMAGE}:latest\"")
+                .doesNotContain("${IMAGE}:beta\"")
                 .doesNotContain("format('{0}:latest'");
         String image = jobs(yaml).get("build-and-push");
         assertThat(image)
-                .contains("tags: ${{ steps.tags.outputs.list }}")
-                .contains("tags=\"${IMAGE}:${VERSION}\"$'\\n'\"${IMAGE}:sha-${SHA12}\"")
-                .contains("*-*) tags=\"${tags}\"$'\\n'\"${IMAGE}:beta\" ;;")
-                .contains("tags=\"${IMAGE}:main\"$'\\n'\"${IMAGE}:sha-${SHA12}\"")
+                .contains("tags: ${{ needs.version.outputs.tags }}")
+                .contains("EXPECTED_TAGS: ${{ needs.version.outputs.tags }}")
                 .contains("org.opencontainers.image.source=https://github.com/${{ github.repository }}");
+        String guard = code(read("scripts/release-version.sh"), "#");
+        assertThat(guard)
+                .contains("tags=\"${IMAGE}:main,${IMAGE}:sha-${sha12}\"")
+                .contains("tags=\"${IMAGE}:sha-${sha12}\"")
+                .contains("tags=\"${IMAGE}:${version},${IMAGE}:sha-${sha12}\"")
+                .contains("tags=\"${tags},${IMAGE}:beta\"")
+                .contains("tags=\"${tags},${IMAGE}:${xy}\"")
+                .contains("tags=\"${tags},${IMAGE}:latest\"")
+                .contains("beta_tag_re='^v([0-9]+)\\.([0-9]+)\\.([0-9]+)-beta\\.[0-9]+$'")
+                .contains("stable_tag_re='^v([0-9]+)\\.([0-9]+)\\.([0-9]+)$'")
+                .contains("on_branch \"${commit}\" main")
+                .contains("on_branch \"${commit}\" \"release/${xy}\"")
+                .contains("sort -V");
+        // :latest is added only after the newest-line comparison, never on the beta path.
+        int beta = guard.indexOf("tags=\"${tags},${IMAGE}:beta\"");
+        int stable = guard.indexOf("elif [[ \"${tag}\" =~ ${stable_tag_re} ]]; then");
+        int latest = guard.indexOf("tags=\"${tags},${IMAGE}:latest\"");
+        assertThat(beta).isLessThan(stable);
+        assertThat(latest).isGreaterThan(guard.indexOf("if [ \"${newest}\" = \"${xy}\" ]; then", stable));
         String release = jobs(yaml).get("github-release");
         assertThat(release)
                 .contains("if: needs.version.outputs.kind == 'release'")
                 .contains("contents: write")
                 .contains("flags=(--verify-tag)")
-                .contains("*-*) flags+=(--prerelease --latest=false) ;;");
+                .contains("beta:false:*-*) flags+=(--prerelease --latest=false) ;;")
+                .contains("stable:true:*) flags+=(--latest) ;;")
+                .contains("stable:false:*) flags+=(--latest=false) ;;");
     }
 
     @Test
@@ -238,25 +262,38 @@ class ReleaseImageGuardTest {
         String yaml = code(read(".github/workflows/release.yml"), "#");
         String version = jobs(yaml).get("version");
         assertThat(version)
-                .contains("E.parse(\"pom.xml\").getroot().find(n+\"version\")")
+                .contains("fetch-depth: 0")
+                .contains("run: bash scripts/test-release-version.sh")
+                .contains("run: python3 scripts/test-release-workflow.py")
+                .contains("run: bash scripts/release-version.sh");
+        assertThat(version.indexOf("run: bash scripts/test-release-version.sh"))
+                .as("the guard's own tests run before the guard decides anything")
+                .isLessThan(version.indexOf("run: bash scripts/release-version.sh"));
+        String guard = code(read("scripts/release-version.sh"), "#");
+        assertThat(guard)
+                .contains("find(\"m:version\", ns)")
                 .contains("*-SNAPSHOT)")
-                .contains("semver='^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$'")
-                .contains("if ! [[ \"${version}\" =~ ${semver} ]]; then")
-                .contains("if [ \"${GITHUB_REF_NAME#v}\" != \"${version}\" ]; then")
-                .contains("\n            refs/heads/main)\n              kind=main\n")
-                .contains("\n            refs/tags/v*)\n")
-                .contains("\n            *)\n              echo \"::error::refusing to publish from ${GITHUB_REF}");
-        assertThat(jobs(yaml).get("build-and-push"))
-                .contains("if docker buildx imagetools inspect \"${IMAGE}:${VERSION}\" >/dev/null 2>&1; then");
+                .contains("version_re='^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z]+(\\.[0-9A-Za-z]+)*)?$'")
+                .contains("[ \"${tag}\" = \"v${version}\" ] || die")
+                .contains("\n  refs/heads/main)\n    kind=main\n")
+                .contains("\n  refs/heads/release/*)\n")
+                .contains("\n  refs/tags/v*)\n")
+                .contains("\n  *)\n    die \"release runs only on");
+        String image = jobs(yaml).get("build-and-push");
+        assertThat(image)
+                .as("the overwrite guard inspects only the immutable :<version>, under bash -e")
+                .contains("ref=\"${IMAGE}:${VERSION}\"")
+                .contains("out=$(docker buildx imagetools inspect \"${ref}\" 2>&1) || rc=$?")
+                .contains("already exists in GHCR");
     }
 
     @Test
-    @DisplayName("pom.xml carries a beta version (MAJOR.MINOR.PATCH-beta.N) and no SNAPSHOT anywhere")
-    void pomVersionIsABeta() throws Exception {
+    @DisplayName("pom.xml carries a beta (MAJOR.MINOR.PATCH-beta.N) or stable (MAJOR.MINOR.PATCH) version and no SNAPSHOT anywhere")
+    void pomVersionIsABetaOrStable() throws Exception {
         Document pom = parse(read("pom.xml"));
         Element project = pom.getDocumentElement();
         assertThat(directChild(project, "version"))
-                .as("project version").matches("\\d+\\.\\d+\\.\\d+-beta\\.[1-9]\\d*");
+                .as("project version").matches("\\d+\\.\\d+\\.\\d+(-beta\\.[1-9]\\d*)?");
         assertThat(directChild(directChildElement(project, "parent"), "version"))
                 .as("parent version").doesNotContain("SNAPSHOT");
         assertThat(read("pom.xml")).as("no SNAPSHOT coordinate").doesNotContain("-SNAPSHOT</version>");

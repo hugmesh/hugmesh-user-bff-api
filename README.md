@@ -1012,29 +1012,43 @@ sit in git**:
 
 #### Versions and releases
 
-The version is the project `<version>` in [`pom.xml`](pom.xml), in the org beta form
-`MAJOR.MINOR.PATCH-beta.N` (today `0.3.0-beta.1`): never `-SNAPSHOT`, never a `+build`
-part. N goes up by one for every new published beta of the same base version.
+The version is the project `<version>` in [`pom.xml`](pom.xml): a beta
+`MAJOR.MINOR.PATCH-beta.N` on `main` (today `0.3.0-beta.1`), or a stable
+`MAJOR.MINOR.PATCH` on a `release/X.Y` branch. Never `-SNAPSHOT`, never a `+build` part.
+The tag decides the release channel, and
 [`.github/workflows/release.yml`](.github/workflows/release.yml) publishes:
 
 | Event | Image tags | GitHub Release |
 |---|---|---|
 | push to `main` | `:main`, `:sha-<12 hex>` | none |
-| push of tag `v<version>` | `:<version>`, `:beta`, `:sha-<12 hex>` | prerelease, not latest |
-| manual dispatch on a `v*` tag | same as the tag push; refused if `:<version>` already exists | same, skipped if it exists |
-| manual dispatch on `main` | same as a push to `main` | none |
+| push to `release/X.Y` | `:sha-<12 hex>` only (pom must be `X.Y.*`) | none |
+| tag `vX.Y.Z-beta.N` on a `main` commit (beta) | `:X.Y.Z-beta.N`, `:sha-<12 hex>`, `:beta` | prerelease, not latest |
+| tag `vX.Y.Z` on a `release/X.Y` commit (stable) | `:X.Y.Z`, `:sha-<12 hex>`, `:X.Y`, and `:latest` only when X.Y is the newest stable line | full release; marked Latest only in the `:latest` case |
+| any other `v*` tag (`-rc.N`, ...) | refused | none |
+| manual dispatch on a `v*` tag or branch | same as the push; refused if `:<version>` already exists | same, skipped if it exists |
 
-A version guard runs first: a tag must equal `v` + the pom version, a SNAPSHOT is
-refused, and any other ref is refused. A published `:<version>` is never overwritten,
-so a fix means raising N and tagging again. `:latest` is never pushed. Every job runs on
-the runner named by the repository variable `RUNS_ON_PUBLISH` (a JSON array such as
+The version guard, [`scripts/release-version.sh`](scripts/release-version.sh), runs first
+with a full-history checkout: a tag must equal `v` + the pom version, a beta tag's commit
+must be on `main`, a stable tag's commit must be on `release/X.Y`, a SNAPSHOT is refused,
+and any other ref is refused. The newest stable line is computed from this repo's own
+`vA.B.C` tags, so a patch on an older line moves `:X.Y` but never `:latest`, and a stable
+older than an existing patch of its line is refused. A published `:X.Y.Z` /
+`:X.Y.Z-beta.N` is never overwritten (a fix means the next beta number or the next patch);
+the floating `:beta`, `:X.Y` and `:latest` move. The image job asks the guard again right
+before the build, so "Re-run failed jobs" can never move `:latest` back, and checks that
+every pushed tag resolves to the one signed, attested digest. The guard and the workflow
+steps are tested by [`scripts/test-release-version.sh`](scripts/test-release-version.sh) and
+[`scripts/test-release-workflow.py`](scripts/test-release-workflow.py), which the version job
+runs before the guard (no network, no Maven). Every job runs on the runner named by the
+repository variable `RUNS_ON_PUBLISH` (a JSON array such as
 `["self-hosted","Linux","X64"]`) for `main` and `v*` refs only, and on hosted
-`ubuntu-latest` otherwise or when the variable is unset; deleting the variable is the
-off switch. The workflow has no pull-request trigger.
+`ubuntu-latest` otherwise (including `release/X.Y`) or when the variable is unset;
+deleting the variable is the off switch. The workflow has no pull-request trigger.
 
 To cut a beta: merge the version bump, then
 `git tag -a v0.3.0-beta.1 -m "hugmesh-user-bff-api 0.3.0-beta.1" <commit on main>` and
-`git push origin v0.3.0-beta.1`. The release chain (build-config, parent, commons,
+`git push origin v0.3.0-beta.1`. A stable `vX.Y.Z` is tagged the same way on a commit of
+`release/X.Y` whose pom says `X.Y.Z`. The release chain (build-config, parent, commons,
 auth-core) must be published first, or the preflight fails by name.
 
 ### API-to-API mTLS (PKI identity, both directions)
@@ -1188,7 +1202,8 @@ owner and domain predicate, such as `ConnectedClientAuditR2dbcRepository#revokeS
 CI is **GitLab** (`.gitlab-ci.yml`); the GitHub repo is pull-mirrored into
 in-cluster GitLab. GitHub has one workflow,
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which pushes the image
-to GHCR on pushes to `main`, `v*` tags and manual dispatch (see *Versions and releases*).
+to GHCR on pushes to `main` and `release/X.Y`, `v*` tags and manual dispatch (see
+*Versions and releases*).
 GitHub Actions is billing-blocked. The GitLab pipeline has five stages:
 
 1. **`test`**: `./mvnw -B -s settings.xml verify` on `maven:3.9-eclipse-temurin-25` with a
