@@ -25,7 +25,7 @@
   <!-- Beta scheme (2026-10-21): MAJOR.MINOR.PATCH-beta.N, never -SNAPSHOT, never +build.
        This is the image version: .github/workflows/release.yml publishes
        ghcr.io/hugmesh/hugmesh-user-bff-api:<version> only from the git tag v<version>. -->
-  <version>0.3.0-beta.1</version>
+  <version>0.4.0-beta.2</version>
   <properties>
     <!-- java.version (25), encoding, the hugmesh-commons version and the springdoc
          version are all inherited from hugmesh-parent. ONLY the repo-specific pins
