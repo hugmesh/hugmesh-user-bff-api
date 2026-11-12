@@ -278,6 +278,38 @@ class AdminBffInternalClientTest {
                 .verifyComplete();
     }
 
+    /** The human-readable name admin-bff carries next to the localpart decodes into the view;
+     *  a body from an admin-bff that predates the field decodes to blank (never null, never the
+     *  UUID handle), which makes the homeserver display-name reconcile a no-op. */
+    @Test
+    void accountView_displayName_decodesWhenPresent_blankWhenAbsent() {
+        ExchangeFunction withName = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"id\":\"casdoor:c18f905c-62a1-4c20-a7c5-c707fb6eae85\",\"provider\":\"casdoor\","
+                        + "\"handle\":\"c18f905c-62a1-4c20-a7c5-c707fb6eae85\",\"registrationComplete\":true,"
+                        + "\"roles\":[\"user\"],\"localpart\":\"c18f905c-62a1-4c20-a7c5-c707fb6eae85\","
+                        + "\"mastodonLocalpart\":\"c18f905c_62a1_4c20_a7c5_c707fb\","
+                        + "\"displayName\":\"e2e-matrix\"}").build());
+        AdminBffInternalClient client = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(withName).build());
+        StepVerifier.create(client.getAccount("casdoor:c18f905c-62a1-4c20-a7c5-c707fb6eae85"))
+                .assertNext(a -> {
+                    assertThat(a.displayName()).isEqualTo("e2e-matrix");
+                    assertThat(a.localpart()).isEqualTo("c18f905c-62a1-4c20-a7c5-c707fb6eae85");
+                })
+                .verifyComplete();
+
+        ExchangeFunction withoutName = req -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"id\":\"casdoor:x\",\"provider\":\"casdoor\",\"handle\":\"x\","
+                        + "\"registrationComplete\":true,\"roles\":[],\"localpart\":\"x\"}").build());
+        AdminBffInternalClient older = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(withoutName).build());
+        StepVerifier.create(older.getAccount("casdoor:x"))
+                .assertNext(a -> assertThat(a.displayName()).isEqualTo(""))
+                .verifyComplete();
+    }
+
     /**
      * REGRESSION PIN — the {@code /accounts/{id}/namespaces} decode, against the body
      * admin-bff's {@code InternalAccountController#namespaces} actually emits:

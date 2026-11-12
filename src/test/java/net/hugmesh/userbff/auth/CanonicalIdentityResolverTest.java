@@ -63,6 +63,29 @@ class CanonicalIdentityResolverTest {
         verify(adminBff, never()).getAccount(anyString());
     }
 
+    // -- display name (best-effort, for the homeserver profile reconcile) ------------------
+
+    @Test
+    void displayNameForSubject_readsOwnAccountsDisplayName_degradesToBlank() {
+        AdminBffInternalClient adminBff = mock(AdminBffInternalClient.class);
+        String uuid = "c18f905c-62a1-4c20-a7c5-c707fb6eae85";
+        when(adminBff.getAccount("casdoor:" + uuid)).thenReturn(Mono.just(
+                new AdminBffInternalClient.AccountView("casdoor:" + uuid, "casdoor", uuid, true,
+                        List.of("user"), uuid, "c18f905c_62a1_4c20_a7c5_c707fb", "", "e2e-matrix")));
+        when(adminBff.getAccount("casdoor:gone")).thenReturn(Mono.error(notFound()));
+        when(adminBff.getAccount("casdoor:old")).thenReturn(Mono.just(view("casdoor:old", "old", "old")));
+        CanonicalIdentityResolver r = new CanonicalIdentityResolver(adminBff);
+
+        // The bff_ session principal's subject IS the account id; a bare Casdoor subject is
+        // normalised to casdoor:<subject>. Both reach the same own account.
+        StepVerifier.create(r.displayNameForSubject("casdoor:" + uuid)).expectNext("e2e-matrix").verifyComplete();
+        StepVerifier.create(r.displayNameForSubject(uuid)).expectNext("e2e-matrix").verifyComplete();
+        // Every miss is "" -- never an error, never the handle.
+        StepVerifier.create(r.displayNameForSubject("casdoor:gone")).expectNext("").verifyComplete();
+        StepVerifier.create(r.displayNameForSubject("casdoor:old")).expectNext("").verifyComplete();
+        StepVerifier.create(r.displayNameForSubject(" ")).expectNext("").verifyComplete();
+    }
+
     // -- own casdoor: key resolution + subject precedence ----------------------------------
 
     @Test
