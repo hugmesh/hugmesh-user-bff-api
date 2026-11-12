@@ -2,12 +2,15 @@ package net.hugmesh.userbff.profile;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import net.hugmesh.authcore.reserved.ReservedNames;
 import net.hugmesh.commons.security.DomainRegistry;
 import net.hugmesh.commons.web.ApiException;
 import net.hugmesh.userbff.federation.FederationApiClient;
+import net.hugmesh.userbff.hsproxy.ServiceTokenBroker;
 import net.hugmesh.userbff.web.ScreenReaderNames;
 
 /**
@@ -66,12 +69,28 @@ public class ProfileService {
     private final UserProfileRepository repo;
     private final CasdoorUserClient casdoor;
     private final FederationApiClient federation;
+    /** Pushes a saved {@code displayName} to the person's existing Matrix / Mastodon-Akkoma
+     *  accounts; {@code null} when no broker is wired (slice contexts), which skips the push. */
+    private final ServiceTokenBroker homeservers;
 
     public ProfileService(UserProfileRepository repo, CasdoorUserClient casdoor,
                           FederationApiClient federation) {
+        this(repo, casdoor, federation, (ServiceTokenBroker) null);
+    }
+
+    @Autowired
+    public ProfileService(UserProfileRepository repo, CasdoorUserClient casdoor,
+                          FederationApiClient federation,
+                          ObjectProvider<ServiceTokenBroker> homeservers) {
+        this(repo, casdoor, federation, homeservers == null ? null : homeservers.getIfAvailable());
+    }
+
+    ProfileService(UserProfileRepository repo, CasdoorUserClient casdoor,
+                   FederationApiClient federation, ServiceTokenBroker homeservers) {
         this.repo = repo;
         this.casdoor = casdoor;
         this.federation = federation;
+        this.homeservers = homeservers;
     }
 
     /** The owner's own profile; an empty default if they have none yet. Back-compat
@@ -222,10 +241,34 @@ public class ProfileService {
             // repo.save() returns the SAME instance it was handed, so publishing with
             // owned.displayName() sends byte-identical bytes to what the post-save order did.
             return federation.publishVanity(normalizedUsername, owned.displayName())
-                    .then(repo.save(owned, domain));
+                    .then(repo.save(owned, domain))
+                    .flatMap(saved -> syncHomeserverDisplayName(owner, saved).thenReturn(saved));
         }
         return repo.save(owned, domain)
-                .flatMap(saved -> syncVanityUnpublish(normalizedUsername).thenReturn(saved));
+                .flatMap(saved -> syncVanityUnpublish(normalizedUsername).thenReturn(saved))
+                .flatMap(saved -> syncHomeserverDisplayName(owner, saved).thenReturn(saved));
+    }
+
+    /**
+     * The profile {@code displayName} is the source of truth for a name the person chose, so a
+     * save carries it to their existing homeserver accounts (the Matrix displayname and the
+     * Mastodon/Akkoma {@code display_name}) — before this, a name set here never left user-bff
+     * and Matrix kept showing the account's UUID localpart. Runs AFTER the local write, and is
+     * BEST-EFFORT ({@link ServiceTokenBroker#pushChosenDisplayName} swallows every failure), for
+     * the same reason the vanity-unpublish leg is: an unrelated profile edit must never fail on a
+     * homeserver. A blank displayName pushes nothing (clearing it here does not wipe the
+     * homeserver name).
+     */
+    private Mono<Void> syncHomeserverDisplayName(String owner, UserProfile saved) {
+        if (homeservers == null || saved == null
+                || saved.displayName() == null || saved.displayName().isBlank()) {
+            return Mono.empty();
+        }
+        return homeservers.pushChosenDisplayName(owner, saved.displayName())
+                .onErrorResume(e -> {
+                    log.warn("[profile] homeserver display-name push failed (ignored): {}", e.toString());
+                    return Mono.empty();
+                });
     }
 
     /**

@@ -171,6 +171,27 @@ public class CanonicalIdentityResolver {
                 .onErrorResume(e -> Mono.empty());
     }
 
+    /**
+     * The owner's human-readable name for the homeserver profile, resolved from the SAME
+     * own-account key as {@link #ownMatrixLocalpartForSubject} ({@code ownerSubject} is the
+     * custody owner every mint site passes: the account id for a {@code bff_} session, the raw
+     * Casdoor subject otherwise). BEST-EFFORT: any miss (blank subject, no such account, an
+     * older admin-bff that does not emit {@code displayName}, admin-bff unreachable) completes
+     * with {@code ""}, which makes the display-name reconcile a no-op. It is only ever used to
+     * label a profile the caller already owns, never to choose an identity, so degrading is safe
+     * here where the localpart resolution above must fail closed.
+     */
+    public Mono<String> displayNameForSubject(String subject) {
+        String id = ownAccountId(subject);
+        if (id == null) {
+            return Mono.just("");
+        }
+        return adminBff.getAccount(id)
+                .map(AdminBffInternalClient.AccountView::displayName)
+                .onErrorResume(e -> Mono.empty())
+                .defaultIfEmpty("");
+    }
+
     // -- own account id (for consumers that need the id itself, not a localpart) -----------
 
     /**

@@ -89,7 +89,8 @@ public class AdminBffInternalClient {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record AccountView(String id, String provider, String handle,
                               boolean registrationComplete, List<String> roles,
-                              String localpart, String mastodonLocalpart, String issuer) {
+                              String localpart, String mastodonLocalpart, String issuer,
+                              String displayName) {
 
         /**
          * Copy {@code roles} on the way IN. The {@link #roles()} accessor already copies on
@@ -100,6 +101,20 @@ public class AdminBffInternalClient {
          */
         public AccountView {
             roles = roles == null ? null : List.copyOf(roles);
+        }
+
+        /**
+         * Back-compat constructor for callers/tests that predate {@code displayName}: the
+         * human-readable name defaults blank ("unknown" — the homeserver display-name
+         * reconcile then does nothing). Jackson binds admin-bff's JSON through the CANONICAL
+         * constructor, so an older admin-bff that omits the field still deserialises (null,
+         * normalised to blank by the accessor).
+         */
+        public AccountView(String id, String provider, String handle, boolean registrationComplete,
+                           List<String> roles, String localpart, String mastodonLocalpart,
+                           String issuer) {
+            this(id, provider, handle, registrationComplete, roles, localpart, mastodonLocalpart,
+                    issuer, "");
         }
 
         /**
@@ -132,7 +147,7 @@ public class AdminBffInternalClient {
          */
         public AccountView withIssuer(String issuer) {
             return new AccountView(id, provider, handle, registrationComplete, roles,
-                    localpart, mastodonLocalpart, issuer == null ? "" : issuer);
+                    localpart, mastodonLocalpart, issuer == null ? "" : issuer, displayName);
         }
 
         // Return a defensive copy so callers cannot mutate the internal list.
@@ -165,6 +180,23 @@ public class AdminBffInternalClient {
          *  that the consumer re-validates against its own trusted set before use. */
         public String issuer() {
             return issuer == null ? "" : issuer;
+        }
+
+        /**
+         * Never null — the account's human-readable name as admin-bff knows it (the Casdoor
+         * login name, i.e. the id_token {@code name} claim, or the display name chosen at
+         * registration). It sits next to {@link #localpart()} because it is the half the
+         * localpart cannot carry: for a Casdoor account without an email the persisted
+         * localpart is the Casdoor UUID, so a homeserver profile left at its default shows
+         * {@code c18f905c-... 💕} instead of the username. {@code ServiceTokenBroker} writes this
+         * value into the Matrix / Mastodon-Akkoma profile when that profile still carries a
+         * default. Blank means "unknown" (an older admin-bff that does not emit the field) and
+         * makes the reconcile a no-op, never a fallback to {@link #handle()}, which for exactly
+         * the affected accounts IS the UUID.
+         */
+        @Override
+        public String displayName() {
+            return displayName == null ? "" : displayName;
         }
     }
 

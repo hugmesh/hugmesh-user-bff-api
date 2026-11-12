@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -17,12 +18,15 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
+import net.hugmesh.userbff.auth.CanonicalIdentityResolver;
 import net.hugmesh.userbff.federation.FederationHttpClientSsl;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Mints (or recovers) REAL Matrix (tuwunel) and Mastodon (Akkoma) homeserver-NATIVE
@@ -69,6 +73,23 @@ public class ServiceTokenBroker {
     private final HsTokenCustody custody;
     private final HsTokenRevocationHashWriter hashWriter;
 
+    /**
+     * Owner subject -> the account's human-readable name (admin-bff's
+     * {@code AccountView.displayName}), best-effort: completes {@code ""} when unknown. Used ONLY
+     * by the post-mint display-name reconcile ({@link #reconcileMatrixDisplayName} /
+     * {@link #reconcileMastodonDisplayName}); never consulted for identity.
+     */
+    private final Function<String, Mono<String>> displayNameLookup;
+
+    /** Upper bound on the whole post-mint display-name reconcile. It runs AFTER the custody
+     *  upsert, so a slow homeserver profile endpoint can only delay the mint's completion by this
+     *  much, and a timeout is swallowed like any other reconcile failure. */
+    static final Duration DISPLAY_NAME_RECONCILE_TIMEOUT = Duration.ofSeconds(5);
+
+    /** Mastodon caps {@code display_name} at 30 characters (Akkoma's default limit is higher);
+     *  the name is truncated to fit the stricter of the two so one value works on both. */
+    static final int MASTODON_DISPLAY_NAME_MAX = 30;
+
     /** Lazily-registered doorkeeper app creds ({@code client_id}/{@code client_secret})
      *  — see {@link #ensureMastodonApp}. In-process cache only. */
     private final java.util.concurrent.atomic.AtomicReference<JsonNode> mastodonApp =
@@ -89,7 +110,8 @@ public class ServiceTokenBroker {
             @Value("${app.hs-token.svc-password}") String svcPassword,
             @Value("${app.hs-token.mastodon-email-domain:}") String mastodonEmailDomain,
             HsTokenCustody custody,
-            HsTokenRevocationHashWriter hashWriter) {
+            HsTokenRevocationHashWriter hashWriter,
+            ObjectProvider<CanonicalIdentityResolver> identity) {
         HttpClient httpClient = mtls.customize(HttpClient.create());
         ReactorClientHttpConnector connector = new ReactorClientHttpConnector(httpClient);
         this.matrix = WebClient.builder().baseUrl(matrixUrl).clientConnector(connector).build();
@@ -108,7 +130,12 @@ public class ServiceTokenBroker {
         this.mastodonEmailDomain = mastodonEmailDomain;
         this.custody = custody;
         this.hashWriter = hashWriter;
+        CanonicalIdentityResolver resolver = identity.getIfAvailable();
+        this.displayNameLookup = resolver == null ? NO_DISPLAY_NAME : resolver::displayNameForSubject;
     }
+
+    /** The lookup used when no resolver is wired: every name is unknown, so no reconcile runs. */
+    private static final Function<String, Mono<String>> NO_DISPLAY_NAME = subject -> Mono.just("");
 
     /**
      * Test seam — inject pre-built {@link WebClient}s (e.g. backed by a stub
@@ -124,6 +151,15 @@ public class ServiceTokenBroker {
     ServiceTokenBroker(WebClient matrix, WebClient mastodon, String svcPassword,
                        String mastodonEmailDomain,
                        HsTokenCustody custody, HsTokenRevocationHashWriter hashWriter) {
+        this(matrix, mastodon, svcPassword, mastodonEmailDomain, custody, hashWriter, NO_DISPLAY_NAME);
+    }
+
+    /** Test seam with an explicit display-name lookup (owner subject -> name, "" = unknown). */
+    ServiceTokenBroker(WebClient matrix, WebClient mastodon, String svcPassword,
+                       String mastodonEmailDomain,
+                       HsTokenCustody custody, HsTokenRevocationHashWriter hashWriter,
+                       Function<String, Mono<String>> displayNameLookup) {
+        this.displayNameLookup = displayNameLookup;
         this.matrix = matrix;
         this.mastodon = mastodon;
         this.mastodonEmailDomain = mastodonEmailDomain;
@@ -180,8 +216,11 @@ public class ServiceTokenBroker {
         // Register (or fall through to login if already registered), then persist the token.
         return matrixRegister(user, null)
                 .flatMap(reg -> resolveMatrixToken(reg, user))
-                .map(node -> new MintedToken(node.path("access_token").asText(), null, null, user))
-                .flatMap(token -> persist(ownerSubject, HsServiceTokenRow.PLATFORM_MATRIX, token));
+                .flatMap(node -> persist(ownerSubject, HsServiceTokenRow.PLATFORM_MATRIX,
+                                new MintedToken(node.path("access_token").asText(), null, null, user))
+                        .flatMap(token -> reconcileMatrixDisplayName(ownerSubject,
+                                node.path("user_id").asText(""), user, token.accessToken())
+                                .thenReturn(token)));
     }
 
     /** Stage-2 register (dummy UIA) or password-login if the account already exists. */
@@ -355,7 +394,217 @@ public class ServiceTokenBroker {
                 ? Instant.now().plus(node.path("expires_in").asLong(), ChronoUnit.SECONDS)
                 : null;
         return persist(ownerSubject, HsServiceTokenRow.PLATFORM_MASTODON,
-                new MintedToken(access, refresh, expiresAt, user));
+                        new MintedToken(access, refresh, expiresAt, user))
+                .flatMap(token -> reconcileMastodonDisplayName(ownerSubject, user, access)
+                        .thenReturn(token));
+    }
+
+    // ── Display-name reconcile (post-mint, best-effort) ─────────────────────────────
+    //
+    // A Casdoor account without an email is persisted by admin-bff with handle = localpart =
+    // the Casdoor UUID, and neither homeserver registration call carries a display name. So
+    // tuwunel shows "<uuid> 💕" (its default: localpart + new_user_displayname_suffix) and
+    // Mastodon/Akkoma show an empty display_name, i.e. the truncated-UUID @handle, everywhere
+    // a person's name should be. After every successful mint (register AND recover legs) the
+    // broker writes the account's real name into the homeserver profile, but ONLY when that
+    // profile still carries a default, so a name the person chose in a Matrix/fediverse
+    // client is never overwritten. The localpart/@handle itself is NOT renamed: changing an
+    // mxid or a fediverse nickname breaks every existing room membership and follow.
+    //
+    // Failure posture: the custody upsert has already succeeded when this runs, so every error
+    // (admin-bff miss, homeserver 4xx/5xx — e.g. mainline Mastodon's 403 for an unconfirmed
+    // account — or a timeout) is logged and swallowed. A reconcile can never fail a mint.
+
+    /**
+     * Set the Matrix displayname for {@code userId} (taken from the register/login response, never
+     * rebuilt from the localpart) to the owner's name when the current one is a default.
+     */
+    Mono<Void> reconcileMatrixDisplayName(String ownerSubject, String userId, String localpart,
+                                          String accessToken) {
+        if (userId == null || userId.isBlank()) {
+            return Mono.empty();
+        }
+        return Mono.defer(() -> displayNameLookup.apply(ownerSubject))
+                .map(ServiceTokenBroker::cleanDisplayName)
+                .filter(name -> isUsefulDisplayName(name, localpart))
+                .flatMap(name -> matrixGetDisplayName(userId, accessToken)
+                        .filter(current -> isDefaultMatrixDisplayName(current, localpart))
+                        .flatMap(current -> matrixPutDisplayName(userId, accessToken, name)))
+                .timeout(DISPLAY_NAME_RECONCILE_TIMEOUT)
+                .onErrorResume(e -> {
+                    log.warn("[hs-token-broker] matrix display-name reconcile skipped for {}: {}",
+                            localpart, e.toString());
+                    return Mono.empty();
+                })
+                .then();
+    }
+
+    /**
+     * Set the Mastodon/Akkoma {@code display_name} of the token's own account to the owner's name
+     * when the current one is a default (empty, or the bare username).
+     */
+    Mono<Void> reconcileMastodonDisplayName(String ownerSubject, String username, String accessToken) {
+        return Mono.defer(() -> displayNameLookup.apply(ownerSubject))
+                .map(ServiceTokenBroker::cleanDisplayName)
+                .map(ServiceTokenBroker::truncateForMastodon)
+                .filter(name -> isUsefulDisplayName(name, username))
+                .flatMap(name -> mastodonVerifyCredentials(accessToken)
+                        .filter(me -> isDefaultMastodonDisplayName(
+                                me.path("display_name").asText(""),
+                                me.path("username").asText(username)))
+                        .flatMap(me -> mastodonUpdateDisplayName(accessToken, name)))
+                .timeout(DISPLAY_NAME_RECONCILE_TIMEOUT)
+                .onErrorResume(e -> {
+                    log.warn("[hs-token-broker] mastodon display-name reconcile skipped for {}: {}",
+                            username, e.toString());
+                    return Mono.empty();
+                })
+                .then();
+    }
+
+    /**
+     * Push a display name the person CHOSE (their user-bff profile {@code displayName}, the source
+     * of truth for a chosen name) to the homeserver accounts they already have. Unlike the
+     * post-mint reconcile this overwrites whatever the homeserver shows, because the person just
+     * asked for this name; it skips the write when the profile already carries it (a Matrix
+     * displayname change emits a member event into every joined room, so an unrelated profile
+     * save must not re-announce an unchanged name).
+     *
+     * <p>Uses only tokens already in custody, NEVER mints: a person who has not used Matrix or
+     * the fediverse yet has no account there, and their first mint's reconcile picks the name
+     * up. Best-effort and bounded like the reconcile: every failure is logged and swallowed, so
+     * a profile save can never fail on a homeserver leg.
+     */
+    public Mono<Void> pushChosenDisplayName(String ownerSubject, String name) {
+        String clean = cleanDisplayName(name);
+        if (clean.isEmpty() || ownerSubject == null || ownerSubject.isBlank()) {
+            return Mono.empty();
+        }
+        Mono<Void> matrixLeg = Mono.defer(() -> custody.loadAccessToken(ownerSubject, HsServiceTokenRow.PLATFORM_MATRIX))
+                .flatMap(token -> matrixWhoami(token)
+                        .filter(userId -> !userId.isBlank())
+                        .flatMap(userId -> matrixGetDisplayName(userId, token)
+                                .filter(current -> !current.equals(clean))
+                                .flatMap(current -> matrixPutDisplayName(userId, token, clean))))
+                .timeout(DISPLAY_NAME_RECONCILE_TIMEOUT)
+                .onErrorResume(e -> {
+                    log.warn("[hs-token-broker] matrix display-name push skipped: {}", e.toString());
+                    return Mono.empty();
+                })
+                .then();
+        String mastodonName = truncateForMastodon(clean);
+        Mono<Void> mastodonLeg = Mono.defer(() -> custody.loadAccessToken(ownerSubject, HsServiceTokenRow.PLATFORM_MASTODON))
+                .flatMap(token -> mastodonVerifyCredentials(token)
+                        .filter(me -> !me.path("display_name").asText("").equals(mastodonName))
+                        .flatMap(me -> mastodonUpdateDisplayName(token, mastodonName)))
+                .timeout(DISPLAY_NAME_RECONCILE_TIMEOUT)
+                .onErrorResume(e -> {
+                    log.warn("[hs-token-broker] mastodon display-name push skipped: {}", e.toString());
+                    return Mono.empty();
+                })
+                .then();
+        return Mono.when(matrixLeg, mastodonLeg);
+    }
+
+    /** {@code GET /account/whoami} -> the token's own {@code user_id} ("" when absent). */
+    private Mono<String> matrixWhoami(String accessToken) {
+        return matrix.get().uri("/_matrix/client/v3/account/whoami")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve()
+                .bodyToMono(String.class)
+                .flatMap(ServiceTokenBroker::parseJson)
+                .map(node -> node.path("user_id").asText(""));
+    }
+
+    /** Trim, and reject (blank) a name carrying control characters: it is about to become the
+     *  label other people see, and admin-bff is trusted for the value, not for its bytes. */
+    static String cleanDisplayName(String name) {
+        if (name == null) {
+            return "";
+        }
+        String trimmed = name.strip();
+        return trimmed.codePoints().anyMatch(Character::isISOControl) ? "" : trimmed;
+    }
+
+    /** Cut to {@link #MASTODON_DISPLAY_NAME_MAX} code points (never splitting a surrogate pair). */
+    static String truncateForMastodon(String name) {
+        if (name.codePointCount(0, name.length()) <= MASTODON_DISPLAY_NAME_MAX) {
+            return name;
+        }
+        return name.substring(0, name.offsetByCodePoints(0, MASTODON_DISPLAY_NAME_MAX)).strip();
+    }
+
+    /** A name worth writing: known, and different from the handle the profile already shows. */
+    static boolean isUsefulDisplayName(String name, String localpart) {
+        return name != null && !name.isBlank() && !name.equalsIgnoreCase(localpart);
+    }
+
+    /**
+     * Whether {@code current} is a homeserver-generated default rather than a chosen name:
+     * empty/absent, the bare localpart (Synapse; tuwunel with an empty suffix), or the localpart
+     * followed by a space and a suffix with no letters or digits (tuwunel's default {@code "💕"},
+     * Conduit's lightning bolt, or any other configured emoji suffix).
+     */
+    static boolean isDefaultMatrixDisplayName(String current, String localpart) {
+        if (current == null || current.isBlank() || current.equals(localpart)) {
+            return true;
+        }
+        String prefix = localpart + " ";
+        return current.startsWith(prefix)
+                && current.substring(prefix.length()).codePoints().noneMatch(Character::isLetterOrDigit);
+    }
+
+    /** Whether a Mastodon/Akkoma {@code display_name} is a default: empty, or the username itself
+     *  (what Akkoma fills in when registration carries no name). */
+    static boolean isDefaultMastodonDisplayName(String current, String username) {
+        return current == null || current.isBlank() || current.equalsIgnoreCase(username);
+    }
+
+    /** {@code GET /profile/{userId}/displayname}; a 404 (no displayname set) reads as {@code ""}.
+     *  {@code userId} is a URI-template variable, so {@code @} and {@code :} go out
+     *  percent-encoded exactly as Matrix clients send them. */
+    private Mono<String> matrixGetDisplayName(String userId, String accessToken) {
+        return matrix.get().uri("/_matrix/client/v3/profile/{userId}/displayname", userId)
+                .header("Authorization", "Bearer " + accessToken)
+                .exchangeToMono(resp -> {
+                    if (resp.statusCode().value() == 404) {
+                        return resp.releaseBody().thenReturn("{}");
+                    }
+                    return resp.statusCode().is2xxSuccessful()
+                            ? resp.bodyToMono(String.class).defaultIfEmpty("{}")
+                            : resp.createException().flatMap(e -> Mono.<String>error(e));
+                })
+                .flatMap(ServiceTokenBroker::parseJson)
+                .map(node -> node.path("displayname").asText(""))
+                .defaultIfEmpty("");
+    }
+
+    private Mono<Boolean> matrixPutDisplayName(String userId, String accessToken, String name) {
+        return matrix.put().uri("/_matrix/client/v3/profile/{userId}/displayname", userId)
+                .header("Authorization", "Bearer " + accessToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("displayname", name))
+                .retrieve()
+                .toBodilessEntity()
+                .thenReturn(Boolean.TRUE);
+    }
+
+    private Mono<JsonNode> mastodonVerifyCredentials(String accessToken) {
+        return mastodon.get().uri("/api/v1/accounts/verify_credentials")
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve()
+                .bodyToMono(String.class)
+                .flatMap(ServiceTokenBroker::parseJson);
+    }
+
+    private Mono<Boolean> mastodonUpdateDisplayName(String accessToken, String name) {
+        return mastodon.patch().uri("/api/v1/accounts/update_credentials")
+                .header("Authorization", "Bearer " + accessToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("display_name", name))
+                .retrieve()
+                .toBodilessEntity()
+                .thenReturn(Boolean.TRUE);
     }
 
     /** Encrypt + upsert the custody row AND write the gateway revocation hash, then
