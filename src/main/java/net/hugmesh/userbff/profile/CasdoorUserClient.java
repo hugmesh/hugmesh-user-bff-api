@@ -179,6 +179,56 @@ public class CasdoorUserClient {
                 .then();
     }
 
+    /**
+     * What Casdoor holds for {@code username} in {@code linkField}: empty when there is no such
+     * account, {@code Optional.of("")} for an account with no link, else the linked provider
+     * id. Fail-closed when dark (errors), like {@link #addLinkedUser}.
+     */
+    public Mono<java.util.Optional<String>> linkOf(String username, String linkField) {
+        if (http == null) {
+            return Mono.error(new IllegalStateException(
+                    "Casdoor account reads disabled (casdoor.account.enabled=false)"));
+        }
+        return http.get()
+                .uri(uri -> uri.path("/api/get-user").queryParam("id", organization + "/" + username).build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(r -> {
+                    Object data = r == null ? null : r.get("data");
+                    if (!(data instanceof Map<?, ?> user) || user.isEmpty()) {
+                        return java.util.Optional.<String>empty();
+                    }
+                    Object v = user.get(linkField);
+                    return java.util.Optional.of(v == null ? "" : v.toString());
+                });
+    }
+
+    /**
+     * Link an EXISTING account to a provider id: {@code update-user} with
+     * {@code columns=<linkField>}, so no other field is touched (the {@link #changeEmail}
+     * pattern). Only ever called for the account an invite NAMES (provisioning wrote that
+     * invite for that user), never for a name derived from the provider's profile.
+     */
+    public Mono<Void> linkExistingUser(String username, String linkField, String providerId) {
+        if (http == null) {
+            return Mono.error(new IllegalStateException(
+                    "Casdoor account writes disabled (casdoor.account.enabled=false)"));
+        }
+        Map<String, Object> user = new LinkedHashMap<>();
+        user.put("owner", organization);
+        user.put("name", username);
+        user.put(linkField, providerId);
+        return http.post()
+                .uri(uri -> uri.path("/api/update-user")
+                        .queryParam("id", organization + "/" + username)
+                        .queryParam("columns", linkField).build())
+                .bodyValue(user)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .flatMap(r -> requireOk("update-user(" + linkField + ")", username, r))
+                .then();
+    }
+
     /** Casdoor's set-password expects form-encoding (live-verified); build the urlencoded body. */
     private static MultiValueMap<String, String> form(Map<String, String> fields) {
         LinkedMultiValueMap<String, String> mv = new LinkedMultiValueMap<>();
