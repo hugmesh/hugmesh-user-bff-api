@@ -144,6 +144,62 @@ public class CasdoorLoginClient {
                 .map(CasdoorLoginClient::parse);
     }
 
+    /**
+     * Sign in with a provider code (hugmesh-generator#1107): Casdoor exchanges {@code code}
+     * with the provider ITSELF (its own client secret, {@code providerRedirectUri} — the URL
+     * the provider redirected to), finds the account linked to the provider's id, runs its MFA
+     * check, and answers like the password path: a one-time code, NextMfa, or an error. The
+     * query carries the same server-side PKCE + {@code redirectUri} as native login, so the
+     * code is redeemed by the same completion. {@code state} must start with the application
+     * name and {@code -org-} (Casdoor's own check); the real CSRF binding is the caller's.
+     */
+    public Mono<CasdoorLoginResult> loginWithProvider(String casdoorProvider, String code,
+                                                      String state, String codeChallenge,
+                                                      String redirectUri,
+                                                      String providerRedirectUri) {
+        if (http == null) {
+            return Mono.error(new IllegalStateException(
+                    "Casdoor login client disabled (app.bff.oidc.enabled=false)"));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("application", application);
+        body.put("organization", organization);
+        body.put("provider", casdoorProvider);
+        body.put("code", code);
+        body.put("state", state);
+        body.put("redirectUri", providerRedirectUri);
+        body.put("method", "signin");
+        body.put("type", "code");
+        body.put("autoSignin", true);
+
+        return http.post()
+                .uri(b -> b.path(loginPath)
+                        .queryParam("clientId", clientId)
+                        .queryParam("responseType", "code")
+                        .queryParam("redirectUri", redirectUri)
+                        .queryParam("scope", scope)
+                        .queryParam("state", state)
+                        .queryParam("code_challenge", codeChallenge)
+                        .queryParam("code_challenge_method", "S256")
+                        .build())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(CasdoorLoginClient::parse);
+    }
+
+    /**
+     * Whether a provider sign-in error means "no account is linked to this provider id" —
+     * Casdoor's sign-up-disabled refusal ("The account for provider: … does not exist and is
+     * not allowed to sign up …"), the cue for the invite leg. Any other error is a failure.
+     */
+    public static boolean isUnknownAccount(String message) {
+        return message != null && message.contains("does not exist")
+                && message.contains("not allowed to sign up");
+    }
+
     /** Map Casdoor's {@code Response} envelope onto one of the three outcomes. */
     private static CasdoorLoginResult parse(Map<?, ?> resp) {
         Object status = resp.get("status");
