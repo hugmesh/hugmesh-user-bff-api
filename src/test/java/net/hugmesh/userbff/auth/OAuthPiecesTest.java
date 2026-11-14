@@ -96,9 +96,12 @@ class OAuthPiecesTest {
                 "app-user-bff", "mesh.example", Duration.ofMinutes(10));
         String sealed = c.seal(s);
         assertThat(codec(now.plusSeconds(601)).open(sealed)).isEmpty();
-        char last = sealed.charAt(sealed.length() - 1);
-        assertThat(c.open(sealed.substring(0, sealed.length() - 1) + (last == 'A' ? 'B' : 'A')))
-                .isEmpty();
+        // flip a character in the MIDDLE (the last one can carry only padding bits, so
+        // changing it need not change the decoded bytes)
+        int mid = sealed.length() / 2;
+        char ch = sealed.charAt(mid);
+        assertThat(c.open(sealed.substring(0, mid) + (ch == 'A' ? 'B' : 'A')
+                + sealed.substring(mid + 1))).isEmpty();
         OAuthStateCodec other = new OAuthStateCodec(
                 new BffCustodyCipher("ffffffffffffffffffffffffffffffff"), Clock.fixed(now, ZoneOffset.UTC));
         assertThat(other.open(sealed)).isEmpty();

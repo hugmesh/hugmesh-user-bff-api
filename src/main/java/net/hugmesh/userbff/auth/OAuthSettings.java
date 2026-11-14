@@ -34,8 +34,34 @@ public final class OAuthSettings {
     private final Map<OAuthProvider, Client> clients;
     private final Map<String, List<String>> domainMethods;
 
-    /** One provider's OAuth client (the secret never leaves this process). */
-    public record Client(String clientId, String clientSecret) {
+    /**
+     * One provider's OAuth client (the secret never leaves this process). The three endpoint
+     * overrides are blank in production (the provider's own constants apply); they exist so a
+     * local stack can put a mock provider in place of Google or Discord for an end-to-end
+     * walk, set at boot like the client, never from a request.
+     */
+    public record Client(String clientId, String clientSecret, String authorizeUrl,
+                         String tokenUrl, String userinfoUrl) {
+        public Client(String clientId, String clientSecret) {
+            this(clientId, clientSecret, "", "", "");
+        }
+
+        public String authorize(OAuthProvider p) {
+            return blank(authorizeUrl) ? p.authorizeUrl() : authorizeUrl.trim();
+        }
+
+        public String token(OAuthProvider p) {
+            return blank(tokenUrl) ? p.tokenUrl() : tokenUrl.trim();
+        }
+
+        public String userinfo(OAuthProvider p) {
+            return blank(userinfoUrl) ? p.userinfoUrl() : userinfoUrl.trim();
+        }
+
+        private static boolean blank(String s) {
+            return s == null || s.isBlank();
+        }
+
         public boolean configured() {
             return clientId != null && !clientId.isBlank()
                     && clientSecret != null && !clientSecret.isBlank();
@@ -79,6 +105,10 @@ public final class OAuthSettings {
             return Optional.empty();
         }
         String h = host.trim().toLowerCase(Locale.ROOT);
+        int colon = h.lastIndexOf(':');
+        if (colon > 0 && h.indexOf(']') < colon) {
+            h = h.substring(0, colon);                  // the domain match ignores the port
+        }
         String best = null;
         for (String d : domainMethods.keySet()) {
             if ((h.equals(d) || h.endsWith("." + d)) && (best == null || d.length() > best.length())) {
@@ -109,6 +139,19 @@ public final class OAuthSettings {
             }
         }
         return out;
+    }
+
+    /**
+     * Whether {@code POST /bff/login} must refuse a password on {@code host}: only while the
+     * sign-in settings are live and the host's domain lists its ways WITHOUT {@code password}.
+     * Dark, or a host that matches no listed domain, keeps today's password sign-in.
+     */
+    public boolean passwordRefused(String host) {
+        if (!enabled) {
+            return false;
+        }
+        Optional<String> domain = domainFor(host);
+        return domain.isPresent() && !domainMethods.get(domain.get()).contains(PASSWORD);
     }
 
     public boolean allows(String host, OAuthProvider provider) {

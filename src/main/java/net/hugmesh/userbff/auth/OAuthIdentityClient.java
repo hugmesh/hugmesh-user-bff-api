@@ -34,6 +34,9 @@ public class OAuthIdentityClient {
     private static final ParameterizedTypeReference<Map<String, Object>> JSON =
             new ParameterizedTypeReference<>() {};
 
+    /** Each provider call is bounded: a hung provider fails the leg, never the thread. */
+    static final java.time.Duration TIMEOUT = java.time.Duration.ofSeconds(10);
+
     private final WebClient http;
 
     public OAuthIdentityClient(WebClient http) {
@@ -43,7 +46,7 @@ public class OAuthIdentityClient {
     /** Exchange {@code code} (issued for {@code redirectUri}) and read the identity. */
     public Mono<Identity> identify(OAuthProvider provider, OAuthSettings.Client client,
                                    String code, String redirectUri) {
-        return http.post().uri(provider.tokenUrl())
+        return http.post().uri(client.token(provider))
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .accept(MediaType.APPLICATION_JSON)
                 .body(BodyInserters.fromFormData("grant_type", "authorization_code")
@@ -53,17 +56,19 @@ public class OAuthIdentityClient {
                         .with("client_secret", client.clientSecret()))
                 .retrieve()
                 .bodyToMono(JSON)
+                .timeout(TIMEOUT)
                 .flatMap(token -> {
                     Object access = token.get("access_token");
                     if (access == null || access.toString().isBlank()) {
                         return Mono.error(new IllegalStateException(
                                 provider.id() + " returned no access token"));
                     }
-                    return http.get().uri(provider.userinfoUrl())
+                    return http.get().uri(client.userinfo(provider))
                             .headers(h -> h.setBearerAuth(access.toString()))
                             .accept(MediaType.APPLICATION_JSON)
                             .retrieve()
-                            .bodyToMono(JSON);
+                            .bodyToMono(JSON)
+                            .timeout(TIMEOUT);
                 })
                 .map(info -> parse(provider, info));
     }

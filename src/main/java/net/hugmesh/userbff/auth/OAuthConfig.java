@@ -35,15 +35,26 @@ public class OAuthConfig {
             @Value("${app.bff.oauth.google.client-secret:}") String googleSecret,
             @Value("${app.bff.oauth.discord.client-id:}") String discordId,
             @Value("${app.bff.oauth.discord.client-secret:}") String discordSecret,
-            @Value("${app.bff.oauth.domain-methods:}") String domainMethods) {
+            @Value("${app.bff.oauth.domain-methods:}") String domainMethods,
+            org.springframework.core.env.Environment env) {
         Map<OAuthProvider, OAuthSettings.Client> clients = new EnumMap<>(OAuthProvider.class);
-        clients.put(OAuthProvider.GOOGLE, new OAuthSettings.Client(googleId, googleSecret));
-        clients.put(OAuthProvider.DISCORD, new OAuthSettings.Client(discordId, discordSecret));
+        clients.put(OAuthProvider.GOOGLE, client(env, "google", googleId, googleSecret));
+        clients.put(OAuthProvider.DISCORD, client(env, "discord", discordId, discordSecret));
         OAuthSettings s = new OAuthSettings(enabled, stateTtl, clients, domainMethods);
         log.info("[oauth] Google/Discord sign-in {} (google configured={}, discord configured={})",
                 enabled ? "ENABLED" : "dark (app.bff.oauth.enabled=false)",
                 s.client(OAuthProvider.GOOGLE).isPresent(), s.client(OAuthProvider.DISCORD).isPresent());
         return s;
+    }
+
+    /** A client with its (normally blank) endpoint overrides, for a local mock provider. */
+    private static OAuthSettings.Client client(org.springframework.core.env.Environment env,
+                                               String p, String id, String secret) {
+        String base = "app.bff.oauth." + p + ".";
+        return new OAuthSettings.Client(id, secret,
+                env.getProperty(base + "authorize-url", ""),
+                env.getProperty(base + "token-url", ""),
+                env.getProperty(base + "userinfo-url", ""));
     }
 
     @Bean

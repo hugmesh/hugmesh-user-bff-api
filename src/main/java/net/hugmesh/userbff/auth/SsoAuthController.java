@@ -99,18 +99,32 @@ public class SsoAuthController {
     private final AdminBffInternalClient adminBff;
     private final SessionCookieService cookies;
     private final String redirectUri;
+    /** The per-domain ways to sign in (hugmesh-generator#1107); dark settings refuse nothing. */
+    private final OAuthSettings signinSettings;
 
     public SsoAuthController(CasdoorLoginClient casdoorLogin,
                             OidcLoginCompletionService completion,
                             AdminBffInternalClient adminBff,
                             SessionCookieService cookies,
-                            @Value("${app.bff.oidc.redirect-uri:https://hugmesh.net/login/callback}")
                             String redirectUri) {
+        this(casdoorLogin, completion, adminBff, cookies, redirectUri,
+                new OAuthSettings(false, null, null, ""));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SsoAuthController(CasdoorLoginClient casdoorLogin,
+                            OidcLoginCompletionService completion,
+                            AdminBffInternalClient adminBff,
+                            SessionCookieService cookies,
+                            @Value("${app.bff.oidc.redirect-uri:https://hugmesh.net/login/callback}")
+                            String redirectUri,
+                            OAuthSettings signinSettings) {
         this.casdoorLogin = casdoorLogin;
         this.completion = completion;
         this.adminBff = adminBff;
         this.cookies = cookies;
         this.redirectUri = redirectUri;
+        this.signinSettings = signinSettings;
     }
 
     @Operation(summary = "Native login: verify username+password SERVER-SIDE at Casdoor, then "
@@ -121,6 +135,13 @@ public class SsoAuthController {
     @PostMapping("/login")
     public Mono<ResponseEntity<Object>> login(@RequestBody NativeLoginRequest req,
                                               ServerWebExchange exchange) {
+        // A domain that does not offer a password (its Studio sign-in methods leave it out)
+        // refuses one here, before Casdoor sees the credential (hugmesh-generator#1107).
+        if (signinSettings.passwordRefused(OAuthController.host(exchange))) {
+            return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN).body((Object)
+                    new LoginError("password_disabled",
+                            "this domain does not offer sign-in with a password")));
+        }
         // Generate the PKCE pair + state SERVER-SIDE — none of these ever reach the browser.
         Pkce pkce = Pkce.generate();
         String state = Pkce.randomState();

@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import net.hugmesh.authcore.reserved.ReservedNames;
 import net.hugmesh.userbff.profile.CasdoorUserClient;
+import net.hugmesh.userbff.profile.UsernameSkeleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -198,21 +199,51 @@ public class OAuthController {
                     if (inviteKey == null || inviteKey.isBlank()) {
                         return Mono.just(fail("not_invited", true));
                     }
-                    String username = usernameFor(p, who);
-                    if (username.isEmpty()) {
-                        return Mono.just(fail("taken", true));
-                    }
-                    return adminBff.allowlistCheck(p.id(), inviteKey)
-                            .flatMap(invited -> !Boolean.TRUE.equals(invited)
-                                    ? Mono.just(fail("not_invited", true))
-                                    : casdoorUsers.addLinkedUser(username, who.username(),
-                                                    who.email(), p.casdoorUserField(), who.id())
-                                            .then(Mono.fromSupplier(() -> toProvider(
-                                                    p, OAuthStateCodec.Phase.SIGNIN, host)))
-                                            .onErrorResume(e -> Mono.just(fail(
-                                                    String.valueOf(e.getMessage()).contains("exist")
-                                                            ? "taken" : "failed", true))));
+                    return adminBff.invite(p.id(), inviteKey)
+                            .flatMap(inv -> inv.invited()
+                                    ? account(p, who, inv, host)
+                                    : Mono.just(fail("not_invited", true)));
                 });
+    }
+
+    /**
+     * The account an invited person signs in to. An invite that NAMES its user (provisioned
+     * from the Studio's user row) is that account: created when it does not exist yet, linked
+     * when it exists without a link, used as is when it is already linked to this id, and
+     * refused ({@code taken}) when it is linked to someone else. An invite that names nobody
+     * gets a name derived from the provider's profile; that name is only ever CREATED, never
+     * linked to an account that already holds it (that would hand a stranger's account to
+     * whoever has the matching provider name).
+     */
+    private Mono<ResponseEntity<Void>> account(OAuthProvider p, OAuthIdentityClient.Identity who,
+                                               AdminBffInternalClient.Invite inv, String host) {
+        boolean named = inv.username() != null && !inv.username().isBlank();
+        String username = named ? inv.username() : usernameFor(p, who);
+        if (username.isEmpty()) {
+            return Mono.just(fail("taken", true));
+        }
+        String field = p.casdoorUserField();
+        return casdoorUsers.linkOf(username, field)
+                .flatMap(link -> {
+                    if (link.isEmpty()) {
+                        return casdoorUsers.addLinkedUser(username, who.username(), who.email(),
+                                field, who.id()).thenReturn(true);
+                    }
+                    String have = link.get();
+                    if (have.equals(who.id())) {
+                        return Mono.just(true);
+                    }
+                    if (named && have.isBlank()) {
+                        return casdoorUsers.linkExistingUser(username, field, who.id())
+                                .thenReturn(true);
+                    }
+                    return Mono.just(false);
+                })
+                .map(ok -> ok ? toProvider(p, OAuthStateCodec.Phase.SIGNIN, host)
+                        : fail("taken", true))
+                .onErrorResume(e -> Mono.just(fail(
+                        String.valueOf(e.getMessage()).contains("exist") ? "taken" : "failed",
+                        true)));
     }
 
     /**
@@ -230,7 +261,10 @@ public class OAuthController {
         if (folded.length() > 39) {
             folded = folded.substring(0, 39);
         }
-        return folded.isEmpty() || ReservedNames.isReserved(folded) ? "" : folded;
+        // the registry's own confusable rule (4dmin ~ admin) on top of the exact reserved
+        // list; Casdoor's add-user webhook to signup-gate re-checks against existing names
+        return folded.isEmpty() || ReservedNames.isReserved(folded)
+                || UsernameSkeleton.isReservedConfusable(folded) ? "" : folded;
     }
 
     // ── the redirects ───────────────────────────────────────────────────────────────────
@@ -238,7 +272,7 @@ public class OAuthController {
                                             String host) {
         OAuthSettings.Client client = settings.client(p).orElseThrow();
         OAuthStateCodec.State s = codec.issue(p, phase, application, host, settings.stateTtl());
-        URI to = UriComponentsBuilder.fromUriString(p.authorizeUrl())
+        URI to = UriComponentsBuilder.fromUriString(client.authorize(p))
                 .queryParam("response_type", "code")
                 .queryParam("client_id", client.clientId())
                 .queryParam("redirect_uri", callbackUrl(host, p))
@@ -272,8 +306,15 @@ public class OAuthController {
         return "https://" + host + "/bff/oauth/" + p.id() + "/callback";
     }
 
-    private static String host(ServerWebExchange exchange) {
-        String h = exchange.getRequest().getURI().getHost();
-        return h == null ? "" : h.toLowerCase(Locale.ROOT);
+    /**
+     * The request's {@code host[:port]} (the port only when it is not the scheme's default):
+     * the callback URL and the state binding keep it, so a stack served on a non-default port
+     * (the local compose stack's :9080) gets back to itself; the domain match drops it.
+     */
+    static String host(ServerWebExchange exchange) {
+        URI u = exchange.getRequest().getURI();
+        String h = u.getHost() == null ? "" : u.getHost().toLowerCase(Locale.ROOT);
+        int port = u.getPort();
+        return port > 0 && port != 443 && port != 80 && !h.isEmpty() ? h + ":" + port : h;
     }
 }
