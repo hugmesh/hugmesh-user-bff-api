@@ -246,6 +246,13 @@ public class SecurityConfig {
         // permitting the prefix would expose a sibling nobody decided to open. The same
         // scoping discipline as the /bff/password-reset/* pair below.
         ex.pathMatchers("/bff/register/google", "/bff/register/discord").permitAll();
+        // GOOGLE/DISCORD SIGN-IN (OAuthController, hugmesh-generator#1107): pre-authentication
+        // by definition, like /bff/login. The gates are the sealed state cookie, Casdoor's
+        // link by the provider's id, and admin-bff's invite allowlist; permitAll only
+        // exposes the routes (dark by default: app.bff.oauth.enabled=false). EXACT
+        // patterns, never /bff/oauth/**, by the scoping rule above.
+        ex.pathMatchers("/bff/oauth/providers", "/bff/oauth/{provider}/start",
+                "/bff/oauth/{provider}/callback").permitAll();
         // ANONYMOUS PASSWORD RESET — the forgot-password legs, for a caller who by
         // definition has no session and no current password (PasswordResetController).
         // permitAll for the SAME reason /bff/login is: requiring the credential the

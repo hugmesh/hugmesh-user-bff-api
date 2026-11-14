@@ -141,6 +141,44 @@ public class CasdoorUserClient {
                 .then();
     }
 
+    /**
+     * Create an INVITED person's Casdoor account, already linked to their Google or Discord id
+     * (hugmesh-generator#1107): {@code POST /api/add-user} with {@code linkField} (Casdoor's
+     * {@code google} / {@code discord} user field) set to the provider's immutable id, so
+     * Casdoor's own provider sign-in finds this account by that id and by nothing else (the
+     * Casdoor providers carry {@code bindingRule: []}, so no email or name match can link a
+     * stranger). The caller has already checked the invite and the verified email; this is
+     * only the write.
+     *
+     * <p>FAIL-CLOSED when dark: unlike the profile writes above (whose stub is a logged no-op),
+     * a stubbed account creation would let the sign-up leg believe an account exists that
+     * does not, so with {@code casdoor.account.enabled=false} this errors.
+     */
+    public Mono<Void> addLinkedUser(String username, String displayName, String email,
+                                    String linkField, String providerId) {
+        if (http == null) {
+            return Mono.error(new IllegalStateException(
+                    "Casdoor account writes disabled (casdoor.account.enabled=false)"));
+        }
+        Map<String, Object> user = new LinkedHashMap<>();
+        user.put("owner", organization);
+        user.put("name", username);
+        user.put("displayName", displayName == null || displayName.isBlank() ? username : displayName);
+        user.put("type", "normal-user");
+        if (email != null && !email.isBlank()) {
+            user.put("email", email);
+            user.put("emailVerified", true);
+        }
+        user.put(linkField, providerId);
+        return http.post()
+                .uri("/api/add-user")
+                .bodyValue(user)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .flatMap(r -> requireOk("add-user", username, r))
+                .then();
+    }
+
     /** Casdoor's set-password expects form-encoding (live-verified); build the urlencoded body. */
     private static MultiValueMap<String, String> form(Map<String, String> fields) {
         LinkedMultiValueMap<String, String> mv = new LinkedMultiValueMap<>();
