@@ -232,6 +232,30 @@ Four more groups of routes live next to `/bff/login`.
   stays in custody, and the body carries no `access_token`. Errors: 403 before
   registration completes, 502 on a mint failure, 503 when brokering is not configured.
 
+### Google / Discord sign-in — `OAuthController` (`/bff/oauth/**`) 🔒 ships dark
+
+Sign-in and invite-gated sign-up through Casdoor's `google` and `discord` providers
+(hugmesh-generator#1107). `app.bff.oauth.enabled=false` by default: no provider is offered
+anywhere. Going live also needs `oidc.enabled`, the custody key (it seals the `bff_oauth` state
+cookie), `casdoor.account.enabled` and each provider's client id and secret.
+
+**What an invite is keyed by** (hugmesh-generator#1123). An invite is how a first-time person is let
+in, and it is only as safe as the key it is written under:
+
+| Provider | Key | Strength |
+|---|---|---|
+| Google | the **verified email** | strong |
+| Discord | the **Discord user id** (17-20 digits; "Copy User ID" with Developer Mode on) | strong |
+| Discord | the Discord **username** | weak: a person can change it, release it, or see it taken |
+
+The Discord leg asks for the id first and the username second. A **weak** invite still lets the
+person create a new account under a name derived from their profile (never one that already
+exists), but it is **never** honoured for an invite that names a specific account (one provisioned
+from the Studio's user row): that is refused with `/login?oauth=not_invited` and a log line, because
+whoever held that username could otherwise take the named account. Write such invites under the
+Discord id. A username that is itself a 17-20 digit number is never looked up as a username, so
+nobody can borrow another person's id-keyed invite by renaming themselves to it.
+
 ## The core invariant: owner-enforcement
 
 **Every endpoint operates ONLY on the caller's OWN data.** The owner is ALWAYS the

@@ -195,15 +195,48 @@ public class OAuthController {
                     if (!who.hasVerifiedEmail() && p == OAuthProvider.GOOGLE) {
                         return Mono.just(fail("unverified", true));
                     }
-                    String inviteKey = p == OAuthProvider.GOOGLE ? who.email() : who.username();
-                    if (inviteKey == null || inviteKey.isBlank()) {
-                        return Mono.just(fail("not_invited", true));
-                    }
-                    return adminBff.invite(p.id(), inviteKey)
-                            .flatMap(inv -> inv.invited()
-                                    ? account(p, who, inv, host)
+                    return findInvite(p, who)
+                            .flatMap(found -> found.invite().invited()
+                                    ? account(p, who, found, host)
                                     : Mono.just(fail("not_invited", true)));
                 });
+    }
+
+    /**
+     * An invite and how strongly it is tied to the person who holds it. A STRONG invite is
+     * keyed by something that cannot be handed to someone else: Google's verified email, or
+     * Discord's immutable user id. A WEAK one is keyed by a Discord username, which a person
+     * can change, release and see taken by somebody else (hugmesh-generator#1123).
+     */
+    record Found(AdminBffInternalClient.Invite invite, boolean strong) {}
+
+    private static final Found NO_INVITE =
+            new Found(new AdminBffInternalClient.Invite(false, ""), false);
+
+    /** A Discord user id: a decimal "snowflake", 17 to 20 digits. */
+    static boolean looksLikeSnowflake(String s) {
+        return s != null && s.matches("[0-9]{17,20}");
+    }
+
+    /**
+     * Google: the verified email (strong). Discord: the immutable user id first (strong), then
+     * the username (weak). A username that is itself a snowflake is never looked up as a
+     * username: that handle can only be an id-keyed invite, and a person must not be able to
+     * borrow someone else's by renaming themselves to the number.
+     */
+    private Mono<Found> findInvite(OAuthProvider p, OAuthIdentityClient.Identity who) {
+        if (p == OAuthProvider.GOOGLE) {
+            String email = who.email();
+            return email == null || email.isBlank() ? Mono.just(NO_INVITE)
+                    : adminBff.invite(p.id(), email).map(inv -> new Found(inv, true));
+        }
+        Mono<Found> byId = adminBff.invite(p.id(), who.id()).map(inv -> new Found(inv, true));
+        String name = who.username();
+        if (name == null || name.isBlank() || looksLikeSnowflake(name)) {
+            return byId;
+        }
+        return byId.flatMap(f -> f.invite().invited() ? Mono.just(f)
+                : adminBff.invite(p.id(), name).map(inv -> new Found(inv, false)));
     }
 
     /**
@@ -216,8 +249,18 @@ public class OAuthController {
      * whoever has the matching provider name).
      */
     private Mono<ResponseEntity<Void>> account(OAuthProvider p, OAuthIdentityClient.Identity who,
-                                               AdminBffInternalClient.Invite inv, String host) {
+                                               Found found, String host) {
+        AdminBffInternalClient.Invite inv = found.invite();
         boolean named = inv.username() != null && !inv.username().isBlank();
+        if (named && !found.strong()) {
+            // An invite that names a specific account is only honoured when it is tied to the
+            // person by an immutable key. A username-keyed one could be claimed by whoever
+            // holds (or later takes) that Discord name: refuse it and say why in the log.
+            log.warn("[oauth] the {} invite for account '{}' is keyed by a username, not the "
+                    + "immutable id: refused (re-issue it under the provider id)", p.id(),
+                    inv.username());
+            return Mono.just(fail("not_invited", true));
+        }
         String username = named ? inv.username() : usernameFor(p, who);
         if (username.isEmpty()) {
             return Mono.just(fail("taken", true));

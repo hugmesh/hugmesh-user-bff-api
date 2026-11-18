@@ -53,6 +53,10 @@ class OAuthControllerTest {
         casdoorUsers = mock(CasdoorUserClient.class);
         identity = mock(OAuthIdentityClient.class);
         codec = new OAuthStateCodec(new BffCustodyCipher(OAuthPiecesTest.KEY), Clock.systemUTC());
+        // The Discord leg asks for an invite keyed by the immutable id FIRST: by default the
+        // test people ("777") have none, and the username-keyed tests fall through to it.
+        when(adminBff.invite("discord", "777"))
+                .thenReturn(Mono.just(new AdminBffInternalClient.Invite(false, "")));
     }
 
     WebTestClient client(boolean enabled, String domains) {
@@ -243,7 +247,7 @@ class OAuthControllerTest {
     }
 
     @Test
-    void anInvitedDiscordPersonIsCheckedByUsernameAndLinkedById() {
+    void anInvitedDiscordPersonByUsernameGetsAnAccountLinkedById() {
         WebTestClient c = live();
         Started up = unlinked(c, "discord");
         when(identity.identify(eq(OAuthProvider.DISCORD), any(), eq("second"), anyString()))
@@ -382,6 +386,68 @@ class OAuthControllerTest {
         verify(casdoorUsers, never()).linkExistingUser(anyString(), anyString(), anyString());
         verify(casdoorUsers, never()).addLinkedUser(anyString(), anyString(), anyString(),
                 anyString(), anyString());
+    }
+
+    // ── Discord: an invite keyed by the immutable id is strong, one keyed by a username is
+    //    weak (hugmesh-generator#1123). A username can be changed, released and taken. ──────
+    Started discordPerson(WebTestClient c, String id, String username) {
+        Started up = unlinked(c, "discord");
+        when(identity.identify(any(), any(), anyString(), anyString()))
+                .thenReturn(Mono.just(new OAuthIdentityClient.Identity(id, "", username)));
+        return up;
+    }
+
+    @Test
+    void anInviteKeyedByTheDiscordIdIsPreferredAndMayLinkItsNamedAccount() {
+        WebTestClient c = live();
+        Started up = discordPerson(c, "777", "bob.two");
+        when(adminBff.invite("discord", "777"))
+                .thenReturn(Mono.just(new AdminBffInternalClient.Invite(true, "bob")));
+        when(casdoorUsers.linkOf("bob", "discord")).thenReturn(Mono.just(Optional.of("")));
+        when(casdoorUsers.linkExistingUser("bob", "discord", "777")).thenReturn(Mono.empty());
+        assertThat(location(callback(c, "discord", up, "second")))
+                .startsWith(OAuthProvider.DISCORD.authorizeUrl());
+        verify(casdoorUsers).linkExistingUser("bob", "discord", "777");
+        // the id answered, so the changeable username is never consulted
+        verify(adminBff, never()).invite("discord", "bob.two");
+    }
+
+    @Test
+    void aUsernameKeyedInviteThatNamesAnAccountIsRefusedNotLinkedOrCreated() {
+        WebTestClient c = live();
+        Started up = discordPerson(c, "777", "bob.two");
+        when(adminBff.invite("discord", "bob.two"))
+                .thenReturn(Mono.just(new AdminBffInternalClient.Invite(true, "bob")));
+        assertThat(location(callback(c, "discord", up, "second"))).isEqualTo("/login?oauth=not_invited");
+        verify(casdoorUsers, never()).linkExistingUser(anyString(), anyString(), anyString());
+        verify(casdoorUsers, never()).addLinkedUser(anyString(), anyString(), anyString(),
+                anyString(), anyString());
+        verify(casdoorUsers, never()).linkOf(anyString(), anyString());
+    }
+
+    @Test
+    void aUsernameThatLooksLikeADiscordIdIsNeverLookedUpAsAUsername() {
+        WebTestClient c = live();
+        String lookalike = "123456789012345678";
+        Started up = discordPerson(c, "777", lookalike);
+        when(adminBff.invite("discord", lookalike))
+                .thenReturn(Mono.just(new AdminBffInternalClient.Invite(true, "")));
+        assertThat(location(callback(c, "discord", up, "second"))).isEqualTo("/login?oauth=not_invited");
+        verify(adminBff, never()).invite("discord", lookalike);
+        verify(casdoorUsers, never()).addLinkedUser(anyString(), anyString(), anyString(),
+                anyString(), anyString());
+    }
+
+    @Test
+    void aSnowflakeIsSeventeenToTwentyDigits() {
+        assertThat(OAuthController.looksLikeSnowflake("12345678901234567")).isTrue();      // 17
+        assertThat(OAuthController.looksLikeSnowflake("12345678901234567890")).isTrue();   // 20
+        assertThat(OAuthController.looksLikeSnowflake("1234567890123456")).isFalse();      // 16
+        assertThat(OAuthController.looksLikeSnowflake("123456789012345678901")).isFalse(); // 21
+        assertThat(OAuthController.looksLikeSnowflake("1234567890123456a")).isFalse();
+        assertThat(OAuthController.looksLikeSnowflake("bob.two")).isFalse();
+        assertThat(OAuthController.looksLikeSnowflake("")).isFalse();
+        assertThat(OAuthController.looksLikeSnowflake(null)).isFalse();
     }
 
     @Test
