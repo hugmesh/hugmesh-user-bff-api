@@ -247,6 +247,26 @@ app:
       organization: "${APP_BFF_OIDC_ORGANIZATION:${casdoor.organization:hugmesh}}"
       scope: "${APP_BFF_OIDC_SCOPE:openid profile email}"
     custody-key: "${APP_BFF_CUSTODY_KEY:}"
+    # ── GOOGLE/DISCORD SIGN-IN (hugmesh-generator#1107) — SHIPS DARK ──────────────
+    # OAuthController: sign-in through Casdoor's google/discord providers, and an
+    # invite-gated sign-up (admin-bff's allowlist) for a person with no account yet.
+    # enabled=false offers no provider anywhere. Going live ALSO needs oidc.enabled, the
+    # custody key above (it seals the bff_oauth state cookie), casdoor.account.enabled
+    # (the invite leg creates the Casdoor account), and per provider the client id and
+    # secret of the SAME OAuth client the Casdoor provider uses (Vault/ESO, never git).
+    # domain-methods is written by provisioning from the Studio's per-domain
+    # signin_methods: "mesh.example=password,google;shop.example=password". A host that
+    # matches no listed domain offers nothing.
+    oauth:
+      enabled: "${APP_BFF_OAUTH_ENABLED:false}"
+      state-ttl: "${APP_BFF_OAUTH_STATE_TTL:PT10M}"
+      domain-methods: "${APP_BFF_OAUTH_DOMAIN_METHODS:}"
+      google:
+        client-id: "${APP_BFF_OAUTH_GOOGLE_CLIENT_ID:}"
+        client-secret: "${APP_BFF_OAUTH_GOOGLE_CLIENT_SECRET:}"
+      discord:
+        client-id: "${APP_BFF_OAUTH_DISCORD_CLIENT_ID:}"
+        client-secret: "${APP_BFF_OAUTH_DISCORD_CLIENT_SECRET:}"
   # The opaque bff_ session cookie (auth-core SessionCookieService). LIVE BY DEFAULT:
   # enabled=true ⇒ /bff/login (and the OIDC callback) emit the HttpOnly Set-Cookie so
   # browsers hold the session in a cookie instead of JS-readable storage. The session

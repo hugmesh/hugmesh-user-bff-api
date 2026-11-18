@@ -15,6 +15,9 @@
     "name" : "Password reset",
     "description" : "Anonymous forgot-password: request a mailed code, then redeem it. Ships dark behind casdoor.password-reset.enabled."
   }, {
+    "name" : "OAuth sign-in",
+    "description" : "Google/Discord sign-in and invite-gated sign-up through Casdoor. Ships dark behind app.bff.oauth.enabled."
+  }, {
     "name" : "Notifications (TEST-SEED, self only)",
     "description" : "TEST/SEED-ONLY. Ships dark behind app.test-seed.enabled (default false). Creates a real in-app notification for the CALLER ONLY via the same delivery service the production ROLE_SERVICE internal-deliver path uses — never a parallel write."
   }, {
@@ -2319,6 +2322,89 @@
         "responses" : {
           "200" : {
             "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/oauth/{provider}/start" : {
+      "get" : {
+        "tags" : [ "OAuth sign-in" ],
+        "summary" : "Start a Google/Discord sign-in: seal the state cookie, redirect to the provider.",
+        "operationId" : "start",
+        "parameters" : [ {
+          "name" : "provider",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/oauth/{provider}/callback" : {
+      "get" : {
+        "tags" : [ "OAuth sign-in" ],
+        "summary" : "The provider's redirect back: sign in through Casdoor, or run the invite leg.",
+        "operationId" : "callback",
+        "parameters" : [ {
+          "name" : "provider",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "code",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "state",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "error",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/bff/oauth/providers" : {
+      "get" : {
+        "tags" : [ "OAuth sign-in" ],
+        "summary" : "The sign-in providers this host's domain offers (empty while dark).",
+        "operationId" : "providers",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "object"
+                  }
+                }
+              }
+            }
           }
         }
       }

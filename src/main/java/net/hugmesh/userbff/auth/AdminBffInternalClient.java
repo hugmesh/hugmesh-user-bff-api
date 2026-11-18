@@ -462,6 +462,35 @@ public class AdminBffInternalClient {
                 .defaultIfEmpty(Boolean.FALSE);
     }
 
+    /**
+     * One invite as the OAuth sign-up leg reads it (hugmesh-generator#1107): whether the
+     * handle is invited, and the Casdoor username the invite was written for, when admin-bff
+     * says (an invite provisioned from the Studio's user row names its user). The username is
+     * read when present and empty otherwise: admin-bff's allowlist answers
+     * {@code {"invited": bool}} today, and the OAuth leg then derives a name itself.
+     */
+    public record Invite(boolean invited, String username) {}
+
+    /** {@link #allowlistCheck}, keeping the optional {@code username} of the answer. */
+    public Mono<Invite> invite(String provider, String handle) {
+        if (http == null) {
+            return stub("invite");
+        }
+        return http.get().uri("/bff/internal/allowlist/{provider}/{handle}", provider, handle)
+                .retrieve()
+                .bodyToMono(INVITE_RESPONSE_TYPE)
+                .map(body -> {
+                    Object invited = body == null ? null : body.get("invited");
+                    Object username = body == null ? null : body.get("username");
+                    return new Invite(Boolean.TRUE.equals(invited),
+                            username == null ? "" : username.toString().trim());
+                })
+                .defaultIfEmpty(new Invite(false, ""));
+    }
+
+    private static final org.springframework.core.ParameterizedTypeReference<Map<String, Object>>
+            INVITE_RESPONSE_TYPE = new org.springframework.core.ParameterizedTypeReference<>() {};
+
     /** The {@code {"invited": bool}} body shape of admin-bff's allowlist read. */
     private static final org.springframework.core.ParameterizedTypeReference<Map<String, Boolean>>
             ALLOWLIST_RESPONSE_TYPE = new org.springframework.core.ParameterizedTypeReference<>() {};
