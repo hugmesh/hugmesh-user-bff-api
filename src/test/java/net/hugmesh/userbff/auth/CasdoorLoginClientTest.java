@@ -95,4 +95,52 @@ class CasdoorLoginClientTest {
                 dark.login("a", "b", "s", "c", "r", null, null).block())
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    // ── "unknown account" is read from Casdoor's wording, in ONE place, as a typed answer ──
+    /** Casdoor 3.80.0 controllers/auth.go, English: the refusal for a provider id nobody is linked to. */
+    static final String CASDOOR_380_UNKNOWN = "The account for provider: Google and username: a (A) "
+            + "does not exist and is not allowed to sign up as new account, please contact your IT support";
+
+    @Test
+    void theUnknownAccountRefusalIsTheWordingCasdoor380Uses() {
+        assertThat(CasdoorLoginClient.isUnknownAccount(CASDOOR_380_UNKNOWN)).isTrue();
+    }
+
+    @Test
+    void everyOtherRefusalIsNotAnUnknownAccount() {
+        for (String msg : new String[] {
+                "invalid username or password", "The user: hugmesh/ann does not exist",
+                "the user is forbidden to sign in, please contact the administrator",
+                "not allowed to sign up", "does not exist", "", null}) {
+            assertThat(CasdoorLoginClient.isUnknownAccount(msg)).as(String.valueOf(msg)).isFalse();
+        }
+    }
+
+    @Test
+    void theResultAnswersTheQuestionSoCallersNeverReadTheText() {
+        assertThat(CasdoorLoginResult.error(CASDOOR_380_UNKNOWN).unknownAccount()).isTrue();
+        assertThat(CasdoorLoginResult.error("login failed").unknownAccount()).isFalse();
+        assertThat(CasdoorLoginResult.code("c").unknownAccount()).isFalse();
+        assertThat(CasdoorLoginResult.mfaRequired(java.util.List.of("totp")).unknownAccount()).isFalse();
+    }
+
+    @Test
+    void aProviderLoginIsTypedUnknownAccountThroughTheWholeParse() {
+        CasdoorLoginResult r = clientReturning("{\"status\":\"error\",\"msg\":\""
+                + CASDOOR_380_UNKNOWN + "\",\"data\":null}", null)
+                .loginWithProvider("provider_google", "pcode", "app-org-x", "chal",
+                        "https://app/login/callback", "https://app/bff/oauth/google/callback")
+                .block();
+        assertThat(r.unknownAccount()).isTrue();
+    }
+
+    @Test
+    void aProviderLoginAsksCasdoorToAnswerInEnglishSoTheWordingMatches() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        clientReturning("{\"status\":\"ok\",\"data\":\"c\"}", captured)
+                .loginWithProvider("provider_google", "pcode", "app-org-x", "chal",
+                        "https://app/login/callback", "https://app/bff/oauth/google/callback")
+                .block();
+        assertThat(captured.get().headers().getFirst("Accept-Language")).isEqualTo("en");
+    }
 }

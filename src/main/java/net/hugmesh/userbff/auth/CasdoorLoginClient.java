@@ -71,7 +71,26 @@ public class CasdoorLoginClient {
         static CasdoorLoginResult error(String message) {
             return new CasdoorLoginResult(Kind.ERROR, null, List.of(), message);
         }
+
+        /**
+         * True when this is Casdoor's "no account is linked to this provider id" refusal: the
+         * cue for the invite leg. Decided HERE, at the Casdoor boundary, so callers branch on a
+         * typed answer and never read Casdoor's wording themselves.
+         */
+        public boolean unknownAccount() {
+            return kind == Kind.ERROR && isUnknownAccount(message);
+        }
     }
+
+    /**
+     * The language every call whose answer is READ BY TEXT asks Casdoor to answer in.
+     * Casdoor's {@code /api/login} reports a refused sign-in only as {@code status:"error"} plus
+     * a translated {@code msg}: it carries no code, so the one way to tell "unknown account"
+     * from any other refusal is its wording, and the wording follows {@code Accept-Language}.
+     * Pinning English makes the match deterministic instead of depending on whatever language
+     * the Casdoor default or a forwarded header happens to be.
+     */
+    static final String CASDOOR_LANGUAGE = "en";
 
     /** Null unless app.bff.oidc.enabled=true — when null every call is a fail-closed stub. */
     private final WebClient http;
@@ -182,6 +201,7 @@ public class CasdoorLoginClient {
                         .queryParam("code_challenge", codeChallenge)
                         .queryParam("code_challenge_method", "S256")
                         .build())
+                .header(org.springframework.http.HttpHeaders.ACCEPT_LANGUAGE, CASDOOR_LANGUAGE)
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
@@ -196,9 +216,20 @@ public class CasdoorLoginClient {
      * not allowed to sign up …"), the cue for the invite leg. Any other error is a failure.
      */
     public static boolean isUnknownAccount(String message) {
-        return message != null && message.contains("does not exist")
-                && message.contains("not allowed to sign up");
+        return message != null && message.contains(UNKNOWN_ACCOUNT_EXISTS)
+                && message.contains(UNKNOWN_ACCOUNT_SIGNUP);
     }
+
+    /**
+     * The two phrases of Casdoor 3.80.0's English refusal ({@code controllers/auth.go}: "The
+     * account for provider: %s and username: %s (%s) does not exist and is not allowed to sign
+     * up as new account, please contact your IT support"). BOTH must be present: "does not
+     * exist" alone also appears in unrelated refusals. Pinned by CasdoorLoginClientTest, which
+     * fails when a Casdoor upgrade rewords it; a reworded message degrades to the generic
+     * "failed", never to a sign-in.
+     */
+    static final String UNKNOWN_ACCOUNT_EXISTS = "does not exist";
+    static final String UNKNOWN_ACCOUNT_SIGNUP = "not allowed to sign up";
 
     /** Map Casdoor's {@code Response} envelope onto one of the three outcomes. */
     private static CasdoorLoginResult parse(Map<?, ?> resp) {
