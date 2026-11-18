@@ -256,6 +256,27 @@ whoever held that username could otherwise take the named account. Write such in
 Discord id. A username that is itself a 17-20 digit number is never looked up as a username, so
 nobody can borrow another person's id-keyed invite by renaming themselves to it.
 
+**Which domain an invite is checked against.** user-bff deliberately names NO domain on the invite
+read (`AdminBffInternalClientTest.theInviteReadsNeverNameADomain` pins it). admin-bff resolves a
+pre-login registration's domain only from inputs the caller cannot choose: its
+`app.tenancy.registration-domain` pin, else the deployment's only brand, else it fails closed and
+nothing is invited. The platform has no host-to-domain mapping, and a domain taken from the `Host`
+header or a request field would let a person ask for another brand's allowlist. So on a deployment
+whose admin-bff serves more than one brand, pin `app.tenancy.registration-domain` there (or run one
+admin-bff per brand, the intended model); without it Google/Discord sign-up is refused, never
+answered from the default brand's list. Domains that sign in through the superbrand (the local
+lanes' sample domains) share its tenant, so they need nothing.
+
+**Casdoor reports a refusal only as text.** `/api/login` and `/api/add-user` answer HTTP 200 with
+`{status:"error", msg}` and no code, so two refusals are told apart by their English wording, each
+in ONE place at the Casdoor boundary and handed up as a typed answer:
+`CasdoorLoginResult.unknownAccount()` ("does not exist" and "not allowed to sign up") and
+`CasdoorUserClient.AlreadyExistsException` ("already exists"). Both calls ask for
+`Accept-Language: en` so the wording does not depend on a default, and the Casdoor 3.80.0 strings are
+pinned in `CasdoorLoginClientTest` / `CasdoorUserClientTest`: a Casdoor upgrade that rewords them
+fails there. A reworded message degrades to the generic `failed` refusal, never to a sign-in or an
+account.
+
 ## The core invariant: owner-enforcement
 
 **Every endpoint operates ONLY on the caller's OWN data.** The owner is ALWAYS the

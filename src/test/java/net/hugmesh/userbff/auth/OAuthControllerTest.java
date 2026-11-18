@@ -291,9 +291,25 @@ class OAuthControllerTest {
         when(adminBff.invite("discord", "bob")).thenReturn(Mono.just(INVITED));
         when(casdoorUsers.linkOf("bob", "discord")).thenReturn(Mono.just(Optional.empty()));
         when(casdoorUsers.addLinkedUser(anyString(), anyString(), anyString(), anyString(), anyString()))
-                .thenReturn(Mono.error(new RuntimeException(
+                .thenReturn(Mono.error(new CasdoorUserClient.AlreadyExistsException(
                         "identity provider refused add-user: The user: hugmesh/bob already exists")));
         assertThat(location(callback(c, "discord", up, "second"))).isEqualTo("/login?oauth=taken");
+    }
+
+    @Test
+    void theControllerNeverReadsErrorTextToDecideTaken() {
+        // a plain failure that merely MENTIONS "exist" is a failure, not "taken": only the typed
+        // exception the Casdoor client raises (it alone reads Casdoor's wording) means taken
+        WebTestClient c = live();
+        Started up = unlinked(c, "discord");
+        when(identity.identify(any(), any(), anyString(), anyString()))
+                .thenReturn(Mono.just(new OAuthIdentityClient.Identity("777", "", "bob")));
+        when(adminBff.invite("discord", "bob")).thenReturn(Mono.just(INVITED));
+        when(casdoorUsers.linkOf("bob", "discord")).thenReturn(Mono.just(Optional.empty()));
+        when(casdoorUsers.addLinkedUser(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(Mono.error(new RuntimeException(
+                        "the user already exists, or does not exist: either way this is not typed")));
+        assertThat(location(callback(c, "discord", up, "second"))).isEqualTo("/login?oauth=failed");
     }
 
     @Test

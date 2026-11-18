@@ -604,4 +604,31 @@ class AdminBffInternalClientTest {
         StepVerifier.create(client.resolveSession("bff_x")).expectError().verify();
         StepVerifier.create(client.getAccountBySession("bff_x")).expectError().verify();
     }
+
+    /**
+     * The invite read must NOT name a domain. admin-bff resolves a PRE-LOGIN registration's domain
+     * only from server-trusted inputs (its pin, else the deployment's only brand, else it fails
+     * closed), and there is no host-to-domain mapping on the platform: a domain the caller of a
+     * public endpoint can influence (the Host header, a request field) would let a person ask for
+     * another brand's allowlist. Do not "fix" this by passing a host-derived domain.
+     */
+    @Test
+    void theInviteReadsNeverNameADomain() {
+        List<org.springframework.web.reactive.function.client.ClientRequest> seen = new ArrayList<>();
+        ExchangeFunction fn = request -> {
+            seen.add(request);
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json").body("{\"invited\":true}").build());
+        };
+        AdminBffInternalClient c = new AdminBffInternalClient(
+                WebClient.builder().baseUrl("http://admin-bff.test").exchangeFunction(fn).build());
+        c.invite("google", "ann@example.org").block();
+        c.invite("discord", "123456789012345678").block();
+        c.invite("discord", "bob.two").block();
+        c.allowlistCheck("google", "ann@example.org").block();
+        assertThat(seen).hasSize(4).allSatisfy(r -> {
+            assertThat(r.url().getPath()).startsWith("/bff/internal/allowlist/");
+            assertThat(r.url().getQuery()).as("no ?domain= on %s", r.url()).isNull();
+        });
+    }
 }

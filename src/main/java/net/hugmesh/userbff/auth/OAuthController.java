@@ -175,7 +175,7 @@ public class OAuthController {
                     // own session, which this server-side call does not hold: send the person
                     // to the password form, which runs MFA, instead of a half-signed-in state.
                     case MFA_REQUIRED -> Mono.just(fail("mfa", true));
-                    case ERROR -> Mono.just(CasdoorLoginClient.isUnknownAccount(result.message())
+                    case ERROR -> Mono.just(result.unknownAccount()
                             ? toProvider(p, OAuthStateCodec.Phase.SIGNUP, host)
                             : fail("failed", true));
                 });
@@ -285,7 +285,7 @@ public class OAuthController {
                 .map(ok -> ok ? toProvider(p, OAuthStateCodec.Phase.SIGNIN, host)
                         : fail("taken", true))
                 .onErrorResume(e -> Mono.just(fail(
-                        String.valueOf(e.getMessage()).contains("exist") ? "taken" : "failed",
+                        e instanceof CasdoorUserClient.AlreadyExistsException ? "taken" : "failed",
                         true)));
     }
 

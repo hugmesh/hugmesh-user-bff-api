@@ -172,10 +172,11 @@ public class CasdoorUserClient {
         user.put(linkField, providerId);
         return http.post()
                 .uri("/api/add-user")
+                .header(org.springframework.http.HttpHeaders.ACCEPT_LANGUAGE, CASDOOR_LANGUAGE)
                 .bodyValue(user)
                 .retrieve()
                 .bodyToMono(Map.class)
-                .flatMap(r -> requireOk("add-user", username, r))
+                .flatMap(r -> requireOk("add-user", username, r, true))
                 .then();
     }
 
@@ -246,6 +247,16 @@ public class CasdoorUserClient {
      * reports success but nothing changed" defect this method exists to prevent.
      */
     private static Mono<Map<?, ?>> requireOk(String op, String subject, Map<?, ?> response) {
+        return requireOk(op, subject, response, false);
+    }
+
+    /**
+     * {@link #requireOk(String, String, Map)}; with {@code classifyExists} a refusal that says the
+     * user already exists becomes the typed {@link AlreadyExistsException}. Casdoor gives a
+     * refusal only as {@code msg} text, so this is the one place its wording is read for that.
+     */
+    private static Mono<Map<?, ?>> requireOk(String op, String subject, Map<?, ?> response,
+                                             boolean classifyExists) {
         if (response != null && "ok".equals(response.get("status"))) {
             return Mono.just(response);
         }
@@ -253,6 +264,31 @@ public class CasdoorUserClient {
         String detail = (msg == null || String.valueOf(msg).isBlank())
                 ? "no error message from the IdP" : String.valueOf(msg);
         log.warn("[casdoor-user] {} for {} REFUSED by Casdoor: {}", op, subject, detail);
+        if (classifyExists && isAlreadyExists(detail)) {
+            return Mono.error(new AlreadyExistsException(
+                    "identity provider refused " + op + ": " + detail));
+        }
         return Mono.error(ApiException.badRequest("identity provider refused " + op + ": " + detail));
+    }
+
+    /**
+     * Casdoor 3.80.0's English add-user refusal for a taken name or email: "The user: %s already
+     * exists" ({@code controllers/user.go}). Pinned by CasdoorUserClientTest; a reworded message
+     * degrades to a generic failure, never to a created account.
+     */
+    static final String ALREADY_EXISTS = "already exists";
+
+    static boolean isAlreadyExists(String detail) {
+        return detail != null && detail.toLowerCase(java.util.Locale.ROOT).contains(ALREADY_EXISTS);
+    }
+
+    /** The language the add-user call asks Casdoor to answer in, so {@link #isAlreadyExists} matches. */
+    static final String CASDOOR_LANGUAGE = "en";
+
+    /** Casdoor refused to create a user because that name (or email) is already taken. */
+    public static final class AlreadyExistsException extends RuntimeException {
+        public AlreadyExistsException(String message) {
+            super(message);
+        }
     }
 }

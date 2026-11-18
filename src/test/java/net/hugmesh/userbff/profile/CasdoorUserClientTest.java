@@ -159,4 +159,53 @@ class CasdoorUserClientTest {
         stub.changePassword("alice", "old", "new").block();
         stub.changeEmail("alice", "new@x.com").block();
     }
+
+    // ── add-user: "already exists" is a TYPED answer, read from Casdoor's wording in one place ──
+    /** Casdoor 3.80.0 controllers/user.go, English. */
+    static final String CASDOOR_380_EXISTS = "The user: hugmesh/bob already exists";
+
+    @Test
+    void addUserRefusedAsAlreadyExistingIsTheTypedException() {
+        Recorder rec = new Recorder();
+        rec.responseJson = "{\"status\":\"error\",\"msg\":\"" + CASDOOR_380_EXISTS + "\"}";
+        assertThatThrownBy(() -> live(rec).addLinkedUser("bob", "", "", "discord", "777").block())
+                .isInstanceOf(CasdoorUserClient.AlreadyExistsException.class)
+                .hasMessageContaining(CASDOOR_380_EXISTS);
+    }
+
+    @Test
+    void addUserRefusedForAnyOtherReasonIsNotTheTypedException() {
+        for (String msg : new String[] {"The user: hugmesh/bob does not exist", "invalid name",
+                "no error message from the IdP"}) {
+            Recorder rec = new Recorder();
+            rec.responseJson = "{\"status\":\"error\",\"msg\":\"" + msg + "\"}";
+            assertThatThrownBy(() -> live(rec).addLinkedUser("bob", "", "", "discord", "777").block())
+                    .as(msg).isInstanceOf(ApiException.class)
+                    .isNotInstanceOf(CasdoorUserClient.AlreadyExistsException.class);
+        }
+    }
+
+    @Test
+    void otherRefusalsStayPlainApiExceptionsEvenWhenTheyMentionExisting() {
+        // only add-user opts in: a refused password change keeps its ApiException contract
+        Recorder rec = new Recorder();
+        rec.responseJson = "{\"status\":\"error\",\"msg\":\"" + CASDOOR_380_EXISTS + "\"}";
+        assertThatThrownBy(() -> live(rec).changePassword("bob", "old", "new").block())
+                .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void addUserAsksCasdoorToAnswerInEnglishSoTheWordingMatches() {
+        Recorder rec = new Recorder();
+        live(rec).addLinkedUser("bob", "", "", "discord", "777").block();
+        assertThat(rec.requests.get(0).headers().getFirst("Accept-Language")).isEqualTo("en");
+    }
+
+    @Test
+    void theExistsWordingIsPinned() {
+        assertThat(CasdoorUserClient.isAlreadyExists(CASDOOR_380_EXISTS)).isTrue();
+        assertThat(CasdoorUserClient.isAlreadyExists("THE USER: X ALREADY EXISTS")).isTrue();
+        assertThat(CasdoorUserClient.isAlreadyExists("does not exist")).isFalse();
+        assertThat(CasdoorUserClient.isAlreadyExists(null)).isFalse();
+    }
 }
