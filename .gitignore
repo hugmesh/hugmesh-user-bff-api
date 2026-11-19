@@ -1,3 +1,6 @@
 target/
 *.class
 .env
+
+# the DAST harness `make pentest-dast` fetches when none is next to this repo
+.pentest-harness/
