@@ -96,11 +96,7 @@
     <dependency>
       <groupId>net.hugmesh</groupId>
       <artifactId>hugmesh-auth-core</artifactId>
-      <!-- 2.6.0-beta.1 is the first auth-core coordinate of the beta scheme (2026-10-21),
-           replacing the 2.5.1 pin. 2.6.0 adds the bff_ session bridge on top of 2.5.1.
-           Before that, 2.4.2 -> 2.5.1 was source- and binary-compatible (deprecated
-           overloads kept; hugmesh-auth-core RELEASING.md section 4). -->
-      <version>2.7.0-beta.1</version>
+      <!-- version: hugmesh-parent manages it (hugmesh-auth-core.version) -->
     </dependency>
 
     <!-- ============================================================================
