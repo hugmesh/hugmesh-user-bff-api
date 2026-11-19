@@ -14,6 +14,12 @@ SCA_FAIL_CVSS ?= 9
 JDK_IMAGE     ?= eclipse-temurin:25-jdk-noble
 # Where to find the shared DAST harness. Override if you vendor/clone it elsewhere.
 PENTEST_HARNESS_DIR ?= ../hugmesh-generator/tests/pentest
+# Where the harness is FETCHED from when PENTEST_HARNESS_DIR has none (#34: fetch at job
+# time, the same mechanism as the generator's shared .pentest-dast-base CI job). Keep the
+# ref equal to the `ref:` of the generator include in .gitlab-ci.yml.
+PENTEST_HARNESS_REPO ?= https://github.com/hugmesh/hugmesh-generator.git
+PENTEST_HARNESS_REF  ?= main
+PENTEST_HARNESS_CLONE ?= .pentest-harness
 
 .PHONY: pentest pentest-sca pentest-dast
 
@@ -50,13 +56,19 @@ pentest-dast:
 		echo "[pentest-dast] DAST_TARGET_URL not set — skipping live DAST (non-fatal)."; \
 		echo "[pentest-dast] To run the full harness against a live test env:"; \
 		echo "    DAST_TARGET_URL=http://gateway.test-env:8080 make pentest-dast"; \
-	elif [ -x "$(PENTEST_HARNESS_DIR)/run-pentest.sh" ]; then \
+	elif [ -f "$(PENTEST_HARNESS_DIR)/run-pentest.sh" ]; then \
 		echo "[pentest-dast] delegating to $(PENTEST_HARNESS_DIR)/run-pentest.sh"; \
 		bash "$(PENTEST_HARNESS_DIR)/run-pentest.sh" --env compose --scan baseline --pipeline main ; \
 	else \
-		echo "[pentest-dast] harness not found at $(PENTEST_HARNESS_DIR)/run-pentest.sh"; \
-		echo "[pentest-dast] clone it, e.g.:"; \
-		echo "    git clone https://github.com/hugmesh/hugmesh-generator /tmp/sg"; \
-		echo "    PENTEST_HARNESS_DIR=/tmp/sg/tests/pentest make pentest-dast"; \
-		echo "[pentest-dast] skipping (non-fatal)."; \
+		h="$(PENTEST_HARNESS_CLONE)"; \
+		echo "[pentest-dast] no harness at $(PENTEST_HARNESS_DIR)/run-pentest.sh: fetching $(PENTEST_HARNESS_REPO)@$(PENTEST_HARNESS_REF) into $$h"; \
+		rm -rf "$$h"; \
+		if GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 --branch "$(PENTEST_HARNESS_REF)" "$(PENTEST_HARNESS_REPO)" "$$h" \
+		   && [ -f "$$h/tests/pentest/run-pentest.sh" ]; then \
+			echo "[pentest-dast] harness at $(PENTEST_HARNESS_REF) ($$(git -C "$$h" rev-parse --short HEAD))"; \
+			bash "$$h/tests/pentest/run-pentest.sh" --env compose --scan baseline --pipeline main ; \
+		else \
+			echo "[pentest-dast] could not fetch the harness (offline?); skipping (non-fatal)."; \
+			echo "[pentest-dast] or point at a checkout: PENTEST_HARNESS_DIR=<generator>/tests/pentest make pentest-dast"; \
+		fi; \
 	fi
