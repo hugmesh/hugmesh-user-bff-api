@@ -288,6 +288,36 @@ public class AdminBffInternalClient {
                 .map(CapabilityView::active);
     }
 
+    /** One mesh user as admin-bff's member directory returns it (no e-mail, by construction). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record MeshUserView(String username, String matrixLocalpart, String domain) {
+    }
+
+    private static final org.springframework.core.ParameterizedTypeReference<List<MeshUserView>> MESH_USERS_TYPE =
+            new org.springframework.core.ParameterizedTypeReference<>() {};
+
+    /**
+     * The member directory read ({@code GET /bff/internal/directory/search}): registered accounts whose
+     * name matches {@code q}, within {@code domain} (the caller's own, from their validated JWT), or every
+     * domain when {@code superadmin}. admin-bff applies the scope, the cap and the minimum length; this
+     * only carries them. Same fail-closed stub semantics as every call here: surface dark, this errors.
+     */
+    public Mono<List<MeshUserView>> searchMeshUsers(String domain, boolean superadmin, String q, int limit) {
+        if (http == null) {
+            return stub("searchMeshUsers");
+        }
+        return http.get()
+                .uri(b -> b.path("/bff/internal/directory/search")
+                        .queryParam("q", q)
+                        .queryParam("limit", limit)
+                        .queryParam("domain", domain == null ? "" : domain)
+                        .queryParam("superadmin", superadmin)
+                        .build())
+                .retrieve()
+                .bodyToMono(MESH_USERS_TYPE)
+                .defaultIfEmpty(List.of());
+    }
+
     /** Fetch the account view by id (e.g. after resolving a session). */
     public Mono<AccountView> getAccount(String accountId) {
         if (http == null) {
